@@ -1,0 +1,24 @@
+name: Skill Validator
+
+on:
+  pull_request:
+    paths:
+      - ".agents/skills/**"
+      - ".github/workflows/skill-validator.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skill-validator
+        run: |
+          go install github.com/agent-ecosystem/skill-validator/cmd/skill-validator@v1.5.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Validate skills
+        run: |
+          skill-validator check --strict --emit-annotations --allow-dirs=agents .agents/skills/
+          skill-validator check --strict --allow-dirs=agents -o markdown .agents/skills/ >> "$GITHUB_STEP_SUMMARY"
