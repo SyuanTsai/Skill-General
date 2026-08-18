@@ -1,4 +1,4 @@
-name: Skill Validator
+name: Skill Quality Gate
 
 on:
   push:
@@ -15,20 +15,21 @@ permissions:
   contents: read
 
 jobs:
-  validate-skills:
+  skill-validator:
+    name: skill-validator
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.5'
+          go-version: stable
           cache: false
 
-      - name: Install skill-validator
-        run: go install github.com/agent-ecosystem/skill-validator/cmd/skill-validator@v1.6.0
+      - name: Install latest skill-validator
+        run: go install github.com/agent-ecosystem/skill-validator/cmd/skill-validator@latest
 
-      - name: Show skill-validator version
+      - name: Show resolved skill-validator version
         run: |
           VALIDATOR="$(go env GOPATH)/bin/skill-validator"
           "$VALIDATOR" --version
@@ -38,8 +39,50 @@ jobs:
           VALIDATOR="$(go env GOPATH)/bin/skill-validator"
           "$VALIDATOR" check --strict --allow-dirs=agents --emit-annotations .agents/skills/
 
-      - name: Write validation report
+      - name: Write skill-validator report
         if: always()
         run: |
           VALIDATOR="$(go env GOPATH)/bin/skill-validator"
           "$VALIDATOR" check --strict --allow-dirs=agents -o markdown .agents/skills/ >> "$GITHUB_STEP_SUMMARY" || true
+
+  skill-tools:
+    name: skill-tools
+    runs-on: ubuntu-latest
+    env:
+      CI: 'true'
+      NO_COLOR: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: false
+
+      - name: Show resolved skill-tools version
+        run: npx --yes skill-tools@latest --version
+
+      - name: Run skill-tools quality gate
+        shell: bash
+        run: |
+          set -o pipefail
+          npx --yes skill-tools@latest check .agents/skills/ \
+            --format text \
+            --fail-on warning \
+            --min-score 70 | tee skill-tools-report.txt
+
+      - name: Write skill-tools report
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## skill-tools'
+            echo
+            echo '```text'
+            if [[ -f skill-tools-report.txt ]]; then
+              cat skill-tools-report.txt
+            else
+              echo 'skill-tools did not produce a report.'
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
