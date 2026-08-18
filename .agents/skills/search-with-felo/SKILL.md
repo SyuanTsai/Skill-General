@@ -1,6 +1,6 @@
 ---
 name: search-with-felo
-description: Search current public external information through the FELO CLI and return only a compact cited result. Use for time-sensitive, multi-source, or multilingual public research, or when the authoritative source location is unknown. Do not use for repository content, code, diffs, logs, internal documents, customer data, private context, or tasks that can be answered from local evidence or one known official page.
+description: Search current public information through the FELO CLI and return a compact cited result. Use when fresh multi-source or multilingual public research is needed and local evidence or a known authoritative page is insufficient; never send private or repository context.
 ---
 
 # Search With FELO
