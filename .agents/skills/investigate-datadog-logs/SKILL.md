@@ -1,6 +1,6 @@
 ---
 name: investigate-datadog-logs
-description: Investigate error logs and APM telemetry through a configured Datadog purpose-built connector. Use for Logs Explorer URLs, trace or investigation widget URLs, raw or aggregated log questions, span or trace analysis, and incidents that require Datadog telemetry. Do not use solely to manage incident records, dashboards, or notebooks.
+description: Investigate error logs and APM telemetry through a configured Datadog purpose-built connector. Use for Logs Explorer URLs, trace or investigation widget URLs, raw or aggregated log questions, span or trace analysis, and incidents that require Datadog telemetry. Do not use solely for incident-record administration, dashboard editing, or notebook maintenance.
 ---
 
 # Investigate Datadog Logs
@@ -49,6 +49,19 @@ A Datadog URL does not by itself require web UI operation and does not switch th
 - Use trace retrieval when a valid trace ID is known. Start with a summarized service-entry view for a large trace, then expand only the spans needed for evidence.
 
 When correlating logs and traces, retain the same semantic time and identifiers but translate filters using each data source's guide; do not mechanically reuse unsupported field syntax. Run independent connector queries in parallel after the scope is established when that reduces incident latency.
+
+## Example
+
+```text
+User request:
+"Using this Logs Explorer URL, find the top error patterns during its encoded time range and correlate one sample with its trace."
+
+Expected workflow:
+1. Preserve the URL query, indexes, timezone, and time range.
+2. Load the logs and DDSQL guides, then run pattern or grouped analysis.
+3. Retrieve one representative event and its related trace using translated trace filters.
+4. Report observed evidence, inference, uncertainty, and the exact effective scope.
+```
 
 ## Fallback and Report
 
