@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+          check-latest: true
           cache: false
 
       - name: Install latest skill-validator
@@ -57,15 +58,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
+          check-latest: true
+
+      - name: Install latest skill-tools
+        run: npm install --global --no-audit --no-fund skill-tools@latest
 
       - name: Show resolved skill-tools version
-        run: npx --yes skill-tools@latest --version
+        run: skill-tools --version
 
       - name: Run skill-tools quality gate
         shell: bash
         run: |
           set -o pipefail
-          npx --yes skill-tools@latest check .agents/skills/ \
+          skill-tools check .agents/skills/ \
             --format text \
             --fail-on warning \
             --min-score 70 | tee skill-tools-report.txt
