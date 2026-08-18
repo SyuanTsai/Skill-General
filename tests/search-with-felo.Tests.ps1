@@ -31,15 +31,15 @@ Searching...
         $asOf = [DateTimeOffset]::Parse('2026-08-10T12:00:00+08:00')
         $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf $asOf
         $json = $result | ConvertTo-Json -Depth 5 -Compress
-        ($result.PSObject.Properties.Name -join ',') | Should Be 'status,asOf,summary,sources,truncated'
-        $result.status | Should Be 'ok'
-        $result.asOf | Should Be '2026-08-10T12:00:00.0000000+08:00'
-        $result.summary | Should Be 'A compact public answer.'
-        @($result.sources).Count | Should Be 5
-        $result.sources[0].title | Should Be 'One'
-        $result.sources[0].url | Should Be 'https://example.com/one'
-        $result.truncated | Should Be $true
-        $json | Should Not Match 'request-private|answer-private|message-private|query_analysis|snippet|expanded query'
+        ($result.PSObject.Properties.Name -join ',') | Should -Be 'status,asOf,summary,sources,truncated'
+        $result.status | Should -Be 'ok'
+        $result.asOf | Should -Be '2026-08-10T12:00:00.0000000+08:00'
+        $result.summary | Should -Be 'A compact public answer.'
+        @($result.sources).Count | Should -Be 5
+        $result.sources[0].title | Should -Be 'One'
+        $result.sources[0].url | Should -Be 'https://example.com/one'
+        $result.truncated | Should -Be $true
+        $json | Should -Not -Match 'request-private|answer-private|message-private|query_analysis|snippet|expanded query'
     }
 
     It 'T020_truncates_summary_by_Unicode_text_elements' {
@@ -53,29 +53,29 @@ Searching...
         } | ConvertTo-Json -Depth 5
         $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::UtcNow)
         $textElementCount = [System.Globalization.StringInfo]::ParseCombiningCharacters($result.summary).Count
-        $textElementCount | Should Be 800
-        $result.summary.EndsWith("👩‍💻") | Should Be $true
-        $result.summary | Should Not Match 'tail'
-        $result.truncated | Should Be $true
+        $textElementCount | Should -Be 800
+        $result.summary.EndsWith("👩‍💻") | Should -Be $true
+        $result.summary | Should -Not -Match 'tail'
+        $result.truncated | Should -Be $true
     }
 
     It 'T030_returns_a_safe_error_for_invalid_output' {
         $rawResponse = 'Searching failed with private diagnostic details.'
         $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::Parse('2026-08-10T12:00:00Z'))
         $json = $result | ConvertTo-Json -Compress
-        ($result.PSObject.Properties.Name -join ',') | Should Be 'status,asOf,error'
-        $result.status | Should Be 'error'
-        $result.error | Should Be 'invalid-response'
-        $json | Should Not Match 'private diagnostic'
+        ($result.PSObject.Properties.Name -join ',') | Should -Be 'status,asOf,error'
+        $result.status | Should -Be 'error'
+        $result.error | Should -Be 'invalid-response'
+        $json | Should -Not -Match 'private diagnostic'
     }
 
     It 'T035_returns_a_safe_error_when_the_response_schema_changes' {
         $rawResponse = '{"unexpected":"private-schema-value"}'
         $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::Parse('2026-08-10T12:00:00Z'))
         $json = $result | ConvertTo-Json -Compress
-        $result.status | Should Be 'error'
-        $result.error | Should Be 'invalid-response'
-        $json | Should Not Match 'private-schema-value'
+        $result.status | Should -Be 'error'
+        $result.error | Should -Be 'invalid-response'
+        $json | Should -Not -Match 'private-schema-value'
     }
 
     It 'T040_returns_a_safe_error_when_no_sources_are_usable' {
@@ -90,8 +90,8 @@ Searching...
             }
         } | ConvertTo-Json -Depth 5
         $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::UtcNow)
-        $result.status | Should Be 'error'
-        $result.error | Should Be 'no-sources'
+        $result.status | Should -Be 'error'
+        $result.error | Should -Be 'no-sources'
     }
 
     It 'T050_captures_child_process_stdout_and_stderr_separately' {
@@ -105,10 +105,10 @@ exit 0
             -FilePath (Get-Command pwsh -ErrorAction Stop).Source `
             -ArgumentList @('-NoProfile', '-File', $fakeScript) `
             -TimeoutSeconds 5
-        $result.ExitCode | Should Be 0
-        $result.TimedOut | Should Be $false
-        $result.StandardOutput.Trim() | Should Be '{"status":200}'
-        $result.StandardError.Trim() | Should Be 'private stderr diagnostic'
+        $result.ExitCode | Should -Be 0
+        $result.TimedOut | Should -Be $false
+        $result.StandardOutput.Trim() | Should -Be '{"status":200}'
+        $result.StandardError.Trim() | Should -Be 'private stderr diagnostic'
     }
 
     It 'UnitT55_decodes_child_process_stdout_and_stderr_as_UTF8' {
@@ -130,16 +130,16 @@ $stderrBytes = [System.Text.Encoding]::UTF8.GetBytes('診斷訊息')
         finally {
             [Console]::OutputEncoding = $originalOutputEncoding
         }
-        $result.StandardOutput | Should Be '繁體中文摘要'
-        $result.StandardError | Should Be '診斷訊息'
+        $result.StandardOutput | Should -Be '繁體中文摘要'
+        $result.StandardError | Should -Be '診斷訊息'
     }
 
     It 'T060_adds_the_compact_answer_instruction_to_the_query' {
         $query = 'Compare current public transport options.'
         $result = New-FeloSearchQuery -Query $query -SummaryCharacterLimit 800
-        $result | Should Match ([regex]::Escape($query))
-        $result | Should Match 'same language'
-        $result | Should Match '800'
+        $result | Should -Match ([regex]::Escape($query))
+        $result | Should -Match 'same language'
+        $result | Should -Match '800'
     }
 
     It 'UnitT65_returns_retried_false_when_the_first_request_succeeds' {
@@ -157,11 +157,11 @@ $stderrBytes = [System.Text.Encoding]::UTF8.GetBytes('診斷訊息')
             }
             Mock Start-Sleep {}
             $result = Invoke-FeloSearch -Query 'Public query'
-            Assert-MockCalled Invoke-FeloChildProcess -Times 1 -Exactly -Scope It
-            Assert-MockCalled Start-Sleep -Times 0 -Exactly -Scope It
-            ($result.PSObject.Properties.Name -join ',') | Should Be 'status,asOf,summary,sources,truncated,retried'
-            $result.status | Should Be 'ok'
-            $result.retried | Should Be $false
+            Should -Invoke Invoke-FeloChildProcess -Times 1 -Exactly -Scope It
+            Should -Invoke Start-Sleep -Times 0 -Exactly -Scope It
+            ($result.PSObject.Properties.Name -join ',') | Should -Be 'status,asOf,summary,sources,truncated,retried'
+            $result.status | Should -Be 'ok'
+            $result.retried | Should -Be $false
         }
     }
 
@@ -190,13 +190,13 @@ $stderrBytes = [System.Text.Encoding]::UTF8.GetBytes('診斷訊息')
             }
             Mock Start-Sleep {}
             $result = Invoke-FeloSearch -Query 'Public query'
-            Assert-MockCalled Invoke-FeloChildProcess -Times 2 -Exactly -Scope It
-            Assert-MockCalled Start-Sleep -Times 1 -Exactly -Scope It -ParameterFilter {
+            Should -Invoke Invoke-FeloChildProcess -Times 2 -Exactly -Scope It
+            Should -Invoke Start-Sleep -Times 1 -Exactly -Scope It -ParameterFilter {
                 $Milliseconds -ge 1000 -and $Milliseconds -le 2000
             }
-            $result.status | Should Be 'ok'
-            $result.summary | Should Be 'Recovered'
-            $result.retried | Should Be $true
+            $result.status | Should -Be 'ok'
+            $result.summary | Should -Be 'Recovered'
+            $result.retried | Should -Be $true
         }
     }
 
@@ -215,12 +215,12 @@ $stderrBytes = [System.Text.Encoding]::UTF8.GetBytes('診斷訊息')
             }
             Mock Start-Sleep {}
             $result = Invoke-FeloSearch -Query 'Public query'
-            Assert-MockCalled Invoke-FeloChildProcess -Times 2 -Exactly -Scope It
-            Assert-MockCalled Start-Sleep -Times 1 -Exactly -Scope It
-            ($result.PSObject.Properties.Name -join ',') | Should Be 'status,asOf,error,retried'
-            $result.status | Should Be 'error'
-            $result.error | Should Be 'request-failed'
-            $result.retried | Should Be $true
+            Should -Invoke Invoke-FeloChildProcess -Times 2 -Exactly -Scope It
+            Should -Invoke Start-Sleep -Times 1 -Exactly -Scope It
+            ($result.PSObject.Properties.Name -join ',') | Should -Be 'status,asOf,error,retried'
+            $result.status | Should -Be 'error'
+            $result.error | Should -Be 'request-failed'
+            $result.retried | Should -Be $true
         }
     }
 
@@ -239,11 +239,11 @@ $stderrBytes = [System.Text.Encoding]::UTF8.GetBytes('診斷訊息')
             }
             Mock Start-Sleep {}
             $result = Invoke-FeloSearch -Query 'Public query'
-            Assert-MockCalled Invoke-FeloChildProcess -Times 1 -Exactly -Scope It
-            Assert-MockCalled Start-Sleep -Times 0 -Exactly -Scope It
-            $result.status | Should Be 'error'
-            $result.error | Should Be 'authentication'
-            $result.retried | Should Be $false
+            Should -Invoke Invoke-FeloChildProcess -Times 1 -Exactly -Scope It
+            Should -Invoke Start-Sleep -Times 0 -Exactly -Scope It
+            $result.status | Should -Be 'error'
+            $result.error | Should -Be 'authentication'
+            $result.retried | Should -Be $false
         }
     }
 }
