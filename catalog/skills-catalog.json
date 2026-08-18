@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "catalogId": "skill-general",
+  "sources": [
+    {
+      "id": "general",
+      "repository": "https://github.com/SyuanTsai/Skill-General.git"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "core",
+      "description": "Core engineering planning and data-access verification workflows.",
+      "default": true,
+      "includes": [
+        "plan-production-change",
+        "verify-data-access-performance"
+      ],
+      "excludes": []
+    },
+    {
+      "id": "observability",
+      "description": "Telemetry and incident-investigation workflows.",
+      "default": false,
+      "includes": [
+        "investigate-datadog-logs"
+      ],
+      "excludes": []
+    },
+    {
+      "id": "external-research",
+      "description": "Current public external-research workflows.",
+      "default": false,
+      "includes": [
+        "search-with-felo"
+      ],
+      "excludes": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "plan-production-change",
+      "group": "core-engineering",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/plan-production-change"
+      },
+      "profiles": ["core"],
+      "compatibility": {
+        "platforms": ["any"],
+        "shells": [],
+        "requiredCapabilities": [],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
+        "aliases": []
+      }
+    },
+    {
+      "id": "verify-data-access-performance",
+      "group": "core-engineering",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/verify-data-access-performance"
+      },
+      "profiles": ["core"],
+      "compatibility": {
+        "platforms": ["any"],
+        "shells": [],
+        "requiredCapabilities": [],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
+        "aliases": []
+      }
+    },
+    {
+      "id": "investigate-datadog-logs",
+      "group": "observability",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/investigate-datadog-logs"
+      },
+      "profiles": ["observability"],
+      "compatibility": {
+        "platforms": ["any"],
+        "shells": [],
+        "requiredCapabilities": [
+          {
+            "kind": "connector",
+            "id": "datadog",
+            "state": "configured"
+          }
+        ],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
+        "aliases": []
+      }
+    },
+    {
+      "id": "search-with-felo",
+      "group": "external-research",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/search-with-felo"
+      },
+      "profiles": ["external-research"],
+      "compatibility": {
+        "platforms": ["windows"],
+        "shells": ["pwsh>=7"],
+        "requiredCapabilities": [
+          {
+            "kind": "command",
+            "id": "felo-ai",
+            "state": "authenticated"
+          }
+        ],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
+        "aliases": []
+      }
+    }
+  ]
+}
