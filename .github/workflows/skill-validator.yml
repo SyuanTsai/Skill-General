@@ -15,7 +15,7 @@ jobs:
 
       - name: Install skill-validator
         run: |
-          go install github.com/agent-ecosystem/skill-validator/cmd/skill-validator@v1.5.2
+          go install github.com/agent-ecosystem/skill-validator/cmd/skill-validator@v1.5.6
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Validate skills
