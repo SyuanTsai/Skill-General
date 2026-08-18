@@ -18,3 +18,16 @@ description: Diagnose and verify data-access performance improvements with query
 8. Do not use elapsed milliseconds as a hard CI threshold. In CI, assert query count, query shape, and result correctness.
 9. Mark manual benchmarks skipped by default so normal test runs do not execute them.
 10. Report in the user's language the commands, dataset or sample sizes, measurements, query counts, conclusion, and remaining uncertainty.
+
+## Example
+
+```text
+User request:
+"Verify that this EF Core change removes the N+1 behavior."
+
+Expected workflow:
+1. Seed the same dataset before resetting the SQL command counter.
+2. Measure at least two result sizes across repeated samples.
+3. Record correctness, timing, and query counts for each size.
+4. Confirm query count remains fixed or within an explicit bound without using milliseconds as a CI threshold.
+```
