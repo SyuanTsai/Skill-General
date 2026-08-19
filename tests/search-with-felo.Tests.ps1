@@ -94,6 +94,50 @@ Searching...
         $result.error | Should -Be 'no-sources'
     }
 
+    It 'T045_rejects_credentialed_or_nonpublic_source_URLs' {
+        $rawResponse = [ordered]@{
+            status = 200
+            data = [ordered]@{
+                answer = 'Public answer'
+                resources = @(
+                    [ordered]@{ title = 'User info'; link = 'https://user:secret@example.com/private' },
+                    [ordered]@{ title = 'Loopback'; link = 'http://127.0.0.1/admin' },
+                    [ordered]@{ title = 'IPv6 loopback'; link = 'http://[::1]/admin' },
+                    [ordered]@{ title = 'Link local'; link = 'http://169.254.169.254/latest/meta-data' },
+                    [ordered]@{ title = 'Private network'; link = 'http://10.0.0.1/admin' },
+                    [ordered]@{ title = 'Single-label host'; link = 'http://intranet/admin' },
+                    [ordered]@{ title = 'Sensitive query'; link = 'https://example.com/private?access_token=secret' },
+                    [ordered]@{ title = 'Public source'; link = 'https://example.com/public' }
+                )
+            }
+        } | ConvertTo-Json -Depth 5
+
+        $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::UtcNow)
+        $result.status | Should -Be 'ok'
+        @($result.sources).Count | Should -Be 1
+        $result.sources[0].title | Should -Be 'Public source'
+        $result.sources[0].url | Should -Be 'https://example.com/public'
+        ($result | ConvertTo-Json -Depth 5 -Compress) |
+            Should -Not -Match 'secret|127\.0\.0\.1|::1|169\.254\.169\.254|10\.0\.0\.1|intranet'
+    }
+
+    It 'T047_limits_source_titles_and_reports_truncation' {
+        $rawResponse = [ordered]@{
+            status = 200
+            data = [ordered]@{
+                answer = 'Public answer'
+                resources = @(
+                    [ordered]@{ title = ('x' * 250); link = 'https://example.com/public' }
+                )
+            }
+        } | ConvertTo-Json -Depth 5
+
+        $result = ConvertTo-FeloCompactResult -RawOutput $rawResponse -AsOf ([DateTimeOffset]::UtcNow)
+        $result.status | Should -Be 'ok'
+        $result.sources[0].title.Length | Should -Be 200
+        $result.truncated | Should -Be $true
+    }
+
     It 'T050_captures_child_process_stdout_and_stderr_separately' {
         $fakeScript = Join-Path $TestDrive 'fake-felo.ps1'
         Set-Content -LiteralPath $fakeScript -Encoding UTF8 -Value @'

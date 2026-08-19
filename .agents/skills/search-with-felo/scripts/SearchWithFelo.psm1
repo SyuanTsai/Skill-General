@@ -40,10 +40,53 @@ function ConvertTo-FeloTruncatedText {
     }
 }
 
+function Test-FeloPublicIpAddress {
+    param([Parameter(Mandatory = $true)][Net.IPAddress] $Address)
+
+    if ($Address.IsIPv4MappedToIPv6) {
+        $Address = $Address.MapToIPv4()
+    }
+
+    if ([Net.IPAddress]::IsLoopback($Address)) {
+        return $false
+    }
+
+    $bytes = $Address.GetAddressBytes()
+    if ($Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+        if ($bytes[0] -eq 0 -or
+            $bytes[0] -eq 10 -or
+            ($bytes[0] -eq 100 -and ($bytes[1] -band 0xC0) -eq 64) -or
+            ($bytes[0] -eq 169 -and $bytes[1] -eq 254) -or
+            ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+            ($bytes[0] -eq 192 -and $bytes[1] -eq 168) -or
+            ($bytes[0] -eq 192 -and $bytes[1] -eq 0 -and $bytes[2] -in @(0, 2)) -or
+            ($bytes[0] -eq 198 -and $bytes[1] -in @(18, 19)) -or
+            ($bytes[0] -eq 198 -and $bytes[1] -eq 51 -and $bytes[2] -eq 100) -or
+            ($bytes[0] -eq 203 -and $bytes[1] -eq 0 -and $bytes[2] -eq 113) -or
+            $bytes[0] -ge 224) {
+            return $false
+        }
+
+        return $true
+    }
+
+    if ($Address.Equals([Net.IPAddress]::IPv6Any) -or
+        $Address.Equals([Net.IPAddress]::IPv6None) -or
+        $Address.IsIPv6LinkLocal -or
+        $Address.IsIPv6Multicast -or
+        $Address.IsIPv6SiteLocal -or
+        ($bytes[0] -band 0xFE) -eq 0xFC -or
+        ($bytes[0] -eq 0x20 -and $bytes[1] -eq 0x01 -and $bytes[2] -eq 0x0D -and $bytes[3] -eq 0xB8)) {
+        return $false
+    }
+
+    return $true
+}
+
 function ConvertTo-FeloNormalizedUrl {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Url)
 
-    if ([string]::IsNullOrWhiteSpace($Url)) {
+    if ([string]::IsNullOrWhiteSpace($Url) -or $Url.Length -gt 4096) {
         return $null
     }
 
@@ -56,9 +99,29 @@ function ConvertTo-FeloNormalizedUrl {
         return $null
     }
 
+    if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or
+        $uri.Query -match '(?i)(?:^\?|&)(?:access[_-]?token|api[_-]?key|auth(?:orization)?|credential|signature|sig|x-amz-(?:credential|signature|security-token))=') {
+        return $null
+    }
+
+    $host = $uri.DnsSafeHost.TrimEnd('.').ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($host) -or
+        $host -eq 'localhost' -or
+        $host.EndsWith('.localhost', [StringComparison]::Ordinal) -or
+        $host.EndsWith('.local', [StringComparison]::Ordinal) -or
+        $host.EndsWith('.internal', [StringComparison]::Ordinal) -or
+        ($uri.HostNameType -eq [UriHostNameType]::Dns -and -not $host.Contains('.'))) {
+        return $null
+    }
+
+    $ipAddress = $null
+    if ([Net.IPAddress]::TryParse($host, [ref] $ipAddress) -and -not (Test-FeloPublicIpAddress -Address $ipAddress)) {
+        return $null
+    }
+
     $builder = [UriBuilder]::new($uri)
     $builder.Fragment = ''
-    $builder.Host = $builder.Host.ToLowerInvariant()
+    $builder.Host = $host
     if (($builder.Scheme -eq [Uri]::UriSchemeHttp -and $builder.Port -eq 80) -or
         ($builder.Scheme -eq [Uri]::UriSchemeHttps -and $builder.Port -eq 443)) {
         $builder.Port = -1
@@ -109,7 +172,10 @@ function ConvertTo-FeloCompactResult {
         [int] $SummaryCharacterLimit = 800,
 
         [ValidateRange(1, 100)]
-        [int] $SourceLimit = 5
+        [int] $SourceLimit = 5,
+
+        [ValidateRange(1, 1000)]
+        [int] $SourceTitleCharacterLimit = 200
     )
 
     $response = ConvertFrom-FeloJsonOutput -RawOutput $RawOutput
@@ -141,6 +207,7 @@ function ConvertTo-FeloCompactResult {
 
     $sources = [System.Collections.Generic.List[object]]::new()
     $seenUrls = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $sourceTitlesWereTruncated = $false
     $resourcesProperty = $data.PSObject.Properties['resources']
     $resources = if ($null -eq $resourcesProperty) { @() } else { @($resourcesProperty.Value) }
     foreach ($resource in $resources) {
@@ -158,8 +225,10 @@ function ConvertTo-FeloCompactResult {
         }
 
         if ($seenUrls.Add($normalizedUrl)) {
+            $titleResult = ConvertTo-FeloTruncatedText -Text $title.Trim() -MaximumTextElements $SourceTitleCharacterLimit
+            $sourceTitlesWereTruncated = $sourceTitlesWereTruncated -or $titleResult.Truncated
             $sources.Add([pscustomobject][ordered]@{
-                title = $title.Trim()
+                title = $titleResult.Text
                 url = $normalizedUrl
             })
         }
@@ -178,7 +247,7 @@ function ConvertTo-FeloCompactResult {
         asOf = $AsOf.ToString('o')
         summary = $summaryResult.Text
         sources = $limitedSources
-        truncated = [bool] ($summaryResult.Truncated -or $sourcesWereTruncated)
+        truncated = [bool] ($summaryResult.Truncated -or $sourcesWereTruncated -or $sourceTitlesWereTruncated)
     }
 }
 

@@ -1,6 +1,6 @@
 ---
 name: investigate-datadog-logs
-description: Analyze and search error events, APM traces, and telemetry through a configured observability connector. Use when the user needs to find, review, or check Logs Explorer URLs, trace URLs, grouped event trends, span details, or incident telemetry.
+description: Investigate Datadog error logs, APM traces, and incident telemetry through a configured Datadog connector. Use when the user provides a Datadog Logs Explorer, trace, or widget URL, or asks to search, aggregate, correlate, or review Datadog logs, spans, traces, patterns, and grouped trends.
 ---
 
 # Investigate Datadog Logs

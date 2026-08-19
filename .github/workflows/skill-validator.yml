@@ -73,7 +73,7 @@ jobs:
           skill-tools check .agents/skills/ \
             --format text \
             --fail-on warning \
-            --min-score 70 | tee skill-tools-report.txt
+            --min-score 91 | tee skill-tools-report.txt
 
       - name: Write skill-tools report
         if: always()

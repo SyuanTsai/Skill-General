@@ -41,7 +41,7 @@ Successful output contains only:
 }
 ```
 
-The wrapper limits `summary` to 800 Unicode text elements, normalizes and deduplicates HTTP(S) URLs, returns at most five sources, and sets `truncated` when either limit removes content. `retried` reports whether the wrapper made its one permitted retry. The wrapper does not cache results.
+The wrapper limits `summary` to 800 Unicode text elements and each source title to 200, accepts only credential-free public HTTP(S) URLs, normalizes and deduplicates those URLs, returns at most five sources, and sets `truncated` when a text or source-count limit removes content. `retried` reports whether the wrapper made its one permitted retry. The wrapper does not cache results.
 
 Failure output contains only `status`, `asOf`, a safe `error` classification such as `cli-unavailable`, `authentication`, `quota-unavailable`, `timeout`, `request-failed`, `invalid-response`, or `no-sources`, and `retried`. Never request or reveal a credential while diagnosing an error.
 
