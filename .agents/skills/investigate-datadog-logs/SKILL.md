@@ -1,6 +1,6 @@
 ---
 name: investigate-datadog-logs
-description: Investigate error logs and APM telemetry through a configured Datadog purpose-built connector. Use for Logs Explorer URLs, trace or investigation widget URLs, raw or aggregated log questions, span or trace analysis, and incidents that require Datadog telemetry. Do not use solely for incident-record administration, dashboard editing, or notebook maintenance.
+description: Analyze and search error events, APM traces, and telemetry through a configured observability connector. Use when the user needs to find, review, or check Logs Explorer URLs, trace URLs, grouped event trends, span details, or incident telemetry.
 ---
 
 # Investigate Datadog Logs
@@ -62,6 +62,24 @@ Expected workflow:
 3. Retrieve one representative event and its related trace using translated trace filters.
 4. Report observed evidence, inference, uncertainty, and the exact effective scope.
 ```
+
+Example evidence summary:
+
+```text
+Scope: 2026-08-19 01:00–02:00 UTC
+Pattern: timeout contacting dependency X
+Observed: 42 matching events across 3 hosts
+Trace sample: request latency dominated by dependency span
+Inference: dependency latency is the leading candidate, not yet proven root cause
+```
+
+## Error Handling
+
+- If a connector query times out or returns excessive volume, narrow only the time range or grouping necessary to make the request tractable and disclose the changed scope.
+- If a required field is unknown, discover it from raw events or spans before using it in grouped analysis; do not invent attribute names.
+- If a URL contains opaque state the connector cannot resolve, use a Browser only when an authorized session can expose the required state and preserve the original query scope.
+- If the connector is unavailable or unauthorized, state that limitation before using an approved fallback.
+- If neither the connector nor an authorized fallback can access the requested telemetry, report the missing capability or access instead of inventing results.
 
 ## Fallback and Report
 
