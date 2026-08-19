@@ -1,7 +1,9 @@
-$script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
-$script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Test-SkillGeneral.ps1'
-
 Describe 'Skill-General repository contract' {
+    BeforeAll {
+        $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
+        $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Test-SkillGeneral.ps1'
+    }
+
     BeforeEach {
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
