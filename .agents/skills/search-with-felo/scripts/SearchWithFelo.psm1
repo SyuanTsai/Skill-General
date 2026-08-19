@@ -191,7 +191,7 @@ function Invoke-FeloChildProcess {
         [Parameter(Mandatory = $true)]
         [string[]] $ArgumentList,
 
-        [ValidateRange(1, 600)]
+        [ValidateRange(1, 605)]
         [int] $TimeoutSeconds = 60
     )
 

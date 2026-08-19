@@ -111,6 +111,17 @@ exit 0
         $result.StandardError.Trim() | Should -Be 'private stderr diagnostic'
     }
 
+    It 'T055_accepts_the_public_maximum_plus_child_process_buffer' {
+        $fakeScript = Join-Path $TestDrive 'fake-felo-timeout-boundary.ps1'
+        Set-Content -LiteralPath $fakeScript -Encoding UTF8 -Value 'exit 0'
+        $result = Invoke-FeloChildProcess `
+            -FilePath (Get-Command pwsh -ErrorAction Stop).Source `
+            -ArgumentList @('-NoProfile', '-File', $fakeScript) `
+            -TimeoutSeconds 605
+        $result.ExitCode | Should -Be 0
+        $result.TimedOut | Should -Be $false
+    }
+
     It 'UnitT55_decodes_child_process_stdout_and_stderr_as_UTF8' {
         $fakeScript = Join-Path $TestDrive 'fake-felo-utf8.ps1'
         Set-Content -LiteralPath $fakeScript -Encoding UTF8 -Value @'
