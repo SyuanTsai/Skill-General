@@ -1,6 +1,6 @@
 ---
 name: plan-production-change
-description: Create or update evidence-based implementation plans for production-code changes, with detail proportionate to scope, risk, and uncertainty, including validation and TDD sequencing. Use when asked to plan a feature, fix, refactor, migration, or other production-code change, or when repository guidance requires a plan before implementation.
+description: Create or update evidence-based implementation strategies with detail proportionate to scope, risk, and uncertainty. Use when the user asks to design a feature, fix, refactor, migration, or other code modification that needs validation, TDD sequencing, rollout, or rollback guidance.
 ---
 
 # Plan a Production Change
@@ -67,5 +67,12 @@ Full format:
 - Risk and mitigation:
 - Unresolved or blocking item:
 ```
+
+## Error Handling
+
+- If repository evidence is incomplete, identify the missing file, symbol, rule, or decision and keep the affected step explicitly unresolved instead of inventing implementation detail.
+- If applicable testing or domain guidance conflicts, surface the conflict and identify which rule must be resolved before implementation.
+- If a migration, security boundary, public contract, or availability risk lacks a credible rollback or recovery path, mark the plan blocked until that path is defined.
+- If an assumption would materially alter scope or architecture, ask for the missing decision before presenting it as an implementation commitment.
 
 Omit optional operational entries that do not apply. For changes affecting persisted data, access control, public contracts, or production availability, explicitly cover compatibility or migration, recovery, and post-change verification.
