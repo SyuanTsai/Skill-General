@@ -1,0 +1,26 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate General repository contract
+        shell: pwsh
+        run: ./scripts/Test-SkillGeneral.ps1
+
+      - name: Run repository tests
+        shell: pwsh
+        run: |
+          Install-Module Pester -RequiredVersion 5.9.0 -Force -Scope CurrentUser
+          Import-Module Pester -RequiredVersion 5.9.0 -Force
+          Invoke-Pester ./tests -CI
