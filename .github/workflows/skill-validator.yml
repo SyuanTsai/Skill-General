@@ -63,8 +63,10 @@ jobs:
       - name: Install latest skill-tools
         run: npm install --global --no-audit --no-fund skill-tools@latest
 
-      - name: Show resolved skill-tools version
-        run: skill-tools --version
+      - name: Show resolved skill-tools package and CLI versions
+        run: |
+          npm list --global --depth=0 skill-tools
+          skill-tools --version
 
       - name: Run skill-tools quality gate
         shell: bash

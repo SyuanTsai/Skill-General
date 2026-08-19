@@ -99,8 +99,28 @@ function ConvertTo-FeloNormalizedUrl {
         return $null
     }
 
-    if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or
-        $uri.Query -match '(?i)(?:^\?|&)(?:access[_-]?token|api[_-]?key|auth(?:orization)?|credential|signature|sig|x-amz-(?:credential|signature|security-token))=') {
+    $sensitiveQueryNamePattern = '(?i)^(?:access[_-]?token|api[_-]?key|auth(?:orization)?|credential|signature|sig|token|password|passcode|secret|client[_-]?secret|private[_-]?key|session(?:id)?|jwt|code|x-amz-(?:credential|signature|security-token))(?:\[\])?$'
+    $hasSensitiveQuery = $false
+    foreach ($queryPart in $uri.Query.TrimStart('?') -split '[&;]') {
+        if ([string]::IsNullOrEmpty($queryPart)) {
+            continue
+        }
+
+        $encodedName = ($queryPart -split '=', 2)[0]
+        try {
+            $queryName = [Uri]::UnescapeDataString($encodedName)
+        }
+        catch {
+            return $null
+        }
+
+        if ($queryName -match $sensitiveQueryNamePattern) {
+            $hasSensitiveQuery = $true
+            break
+        }
+    }
+
+    if (-not [string]::IsNullOrEmpty($uri.UserInfo) -or $hasSensitiveQuery) {
         return $null
     }
 

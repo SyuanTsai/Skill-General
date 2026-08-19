@@ -107,6 +107,9 @@ Searching...
                     [ordered]@{ title = 'Private network'; link = 'http://10.0.0.1/admin' },
                     [ordered]@{ title = 'Single-label host'; link = 'http://intranet/admin' },
                     [ordered]@{ title = 'Sensitive query'; link = 'https://example.com/private?access_token=secret' },
+                    [ordered]@{ title = 'Generic token query'; link = 'https://example.com/private?token=secret' },
+                    [ordered]@{ title = 'Encoded secret query'; link = 'https://example.com/private?client%5Fsecret=secret' },
+                    [ordered]@{ title = 'Password query'; link = 'https://example.com/private?password=secret' },
                     [ordered]@{ title = 'Public source'; link = 'https://example.com/public' }
                 )
             }

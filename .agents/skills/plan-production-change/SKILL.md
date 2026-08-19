@@ -1,6 +1,6 @@
 ---
 name: plan-production-change
-description: Create or update evidence-based implementation strategies with detail proportionate to scope, risk, and uncertainty. Use when the user asks to design a feature, fix, refactor, migration, or other code modification that needs validation, TDD sequencing, rollout, or rollback guidance.
+description: Create or update evidence-based production-code implementation plans with detail proportionate to risk and uncertainty. Use when the user asks to plan a feature, fix, refactor, migration, or other code change, or when repository guidance requires TDD sequencing, rollout, or rollback.
 ---
 
 # Plan a Production Change
