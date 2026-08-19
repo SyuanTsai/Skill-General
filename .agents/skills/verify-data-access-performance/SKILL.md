@@ -1,6 +1,6 @@
 ---
 name: verify-data-access-performance
-description: Diagnose and verify data-access performance improvements with query-shape analysis, repeated measurements, query counts, and N+1 checks. Use for database performance work, query optimization, benchmarks, or suspected N+1 behavior.
+description: Analyze and test database query efficiency with repeated measurements, query counts, and N+1 checks. Use when the user needs to check, review, or fix slow queries, ORM loading behavior, benchmarks, or round-trip growth.
 ---
 
 # Verify Data-Access Performance
@@ -31,3 +31,19 @@ Expected workflow:
 3. Record correctness, timing, and query counts for each size.
 4. Confirm query count remains fixed or within an explicit bound without using milliseconds as a CI threshold.
 ```
+
+Example measurement report:
+
+```text
+Rows: 10   Samples: 5   Queries: 2   Avg: 18 ms
+Rows: 100  Samples: 5   Queries: 2   Avg: 31 ms
+Conclusion: query count remains bounded; no N+1 growth observed.
+```
+
+## Error Handling
+
+- If measurements are noisy or inconsistent, increase the sample count and report the variance instead of declaring an improvement from a single run.
+- If the query counter includes seeding or setup statements, reset it after Arrange and repeat the measurement before drawing a conclusion.
+- If query counts grow with result size, treat the N+1 condition as unresolved even when elapsed time appears acceptable.
+- If the repository lacks a reliable database test harness, separate what can be validated automatically from what requires a manual benchmark and state the remaining uncertainty.
+- If a proposed optimization changes returned data, ordering, tracking semantics, or another functional contract, stop treating it as a performance-only modification and verify correctness first.
