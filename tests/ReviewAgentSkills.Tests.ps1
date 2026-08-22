@@ -78,4 +78,15 @@ Describe 'Review Agent Skills package contract' {
         $metadata | Should -Match '\$review-agent-skills'
         $metadata | Should -Not -Match 'allow_implicit_invocation: false'
     }
+
+    # Scenario: A reviewer needs to understand expected output or encounters unavailable evidence.
+    # Purpose: Keep concrete usage and failure handling visible in the concise Skill entrypoint.
+    It 'UnitT60_ProvidesConcreteUsageAndErrorHandling' {
+        $skillText = Get-Content -LiteralPath (Join-Path $skillRoot 'SKILL.md') -Raw
+
+        $skillText | Should -Match '(?m)^## Example\s*$'
+        $skillText | Should -Match '(?m)^## Error handling\s*$'
+        $skillText | Should -Match 'residual risk'
+        $skillText | Should -Match 'stop and ask'
+    }
 }

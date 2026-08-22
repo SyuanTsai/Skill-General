@@ -14,3 +14,11 @@ Review the requested Skill package against its repository instructions, current 
 5. Report actionable findings first. Include severity, file and line, evidence, impact, and the smallest safe correction. If there are no findings, say so explicitly and state residual validation limits.
 
 Do not broaden the Skill's responsibility to solve adjacent problems. Do not weaken confirmation, credential, destructive-action, or data-integrity safeguards to make a check pass.
+
+## Example
+
+For `Review the changed payment-safety Skill`, compare the changed package with its baseline, run its validators, inspect the semantic dimensions, and return findings such as `High — Missing confirmation before an external write — .agents/skills/payment-safety/SKILL.md:24` before the validation summary.
+
+## Error handling
+
+If the baseline, referenced resource, required validator, or relevant external system is unavailable, continue only with the evidence that remains reliable. Label the missing verification and its impact as a residual risk; stop and ask for the missing input when proceeding would require guessing or crossing a safety boundary.
