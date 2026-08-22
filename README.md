@@ -4,7 +4,7 @@ General-purpose Agent Skills source repository.
 
 Stable source ID: `general`
 
-This repository owns reusable engineering, observability, and public-research Skills that are versioned independently from AI Instructions.
+This repository owns reusable engineering, observability, public-research, and Agent Skill quality-review workflows that are versioned independently from AI Instructions.
 
 ## Repository layout
 
@@ -32,8 +32,9 @@ The physical Skill source layout is always `.agents/skills/<skill-id>/**`. Profi
 | `verify-data-access-performance` | `core` | Any platform |
 | `investigate-datadog-logs` | `observability` | Configured Datadog connector |
 | `search-with-felo` | `external-research` | Windows, PowerShell 7+, authenticated `felo-ai` CLI |
+| `review-agent-skills` | `skill-quality` | Any platform |
 
-The `core` profile is the default profile and contains both core engineering Skills.
+The `core` profile is the default profile and contains both core engineering Skills. The `skill-quality` profile is opt-in.
 
 ## Validate
 
@@ -43,10 +44,10 @@ Run repository structure and catalog validation:
 pwsh -NoProfile -File ./scripts/Test-SkillGeneral.ps1
 ```
 
-Run FELO regression tests when Pester is available:
+Run regression tests when Pester is available:
 
 ```powershell
-Invoke-Pester ./tests/search-with-felo.Tests.ps1
+Invoke-Pester ./tests -CI
 ```
 
 Also run:

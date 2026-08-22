@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Agent Skills"
+  short_description: "Review Agent Skill quality and safety"
+  default_prompt: "Use $review-agent-skills to review this Agent Skill package."

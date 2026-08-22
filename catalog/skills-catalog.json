@@ -35,6 +35,15 @@
         "search-with-felo"
       ],
       "excludes": []
+    },
+    {
+      "id": "skill-quality",
+      "description": "Agent Skill review and quality-assurance workflows.",
+      "default": false,
+      "includes": [
+        "review-agent-skills"
+      ],
+      "excludes": []
     }
   ],
   "skills": [
@@ -122,6 +131,26 @@
             "state": "authenticated"
           }
         ],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
+        "aliases": []
+      }
+    },
+    {
+      "id": "review-agent-skills",
+      "group": "skill-quality",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/review-agent-skills"
+      },
+      "profiles": ["skill-quality"],
+      "compatibility": {
+        "platforms": ["any"],
+        "shells": [],
+        "requiredCapabilities": [],
         "anyOfCapabilities": []
       },
       "dependencies": [],
