@@ -86,6 +86,7 @@ Describe 'Review Agent Skills package contract' {
 
         $skillText | Should -Match '(?m)^## Example\s*$'
         $skillText | Should -Match '(?m)^## Error handling\s*$'
+        $skillText | Should -Match '(?s)```text.*File:.*Evidence:.*Impact:.*Correction:.*```'
         $skillText | Should -Match 'residual risk'
         $skillText | Should -Match 'stop and ask'
     }

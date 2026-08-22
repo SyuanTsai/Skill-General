@@ -17,7 +17,15 @@ Do not broaden the Skill's responsibility to solve adjacent problems. Do not wea
 
 ## Example
 
-For `Review the changed payment-safety Skill`, compare the changed package with its baseline, run its validators, inspect the semantic dimensions, and return findings such as `High — Missing confirmation before an external write — .agents/skills/payment-safety/SKILL.md:24` before the validation summary.
+For `Review the changed payment-safety Skill`, compare the changed package with its baseline, run its validators, inspect the semantic dimensions, and place a finding like this before the validation summary:
+
+```text
+High — Missing confirmation before an external write
+File: .agents/skills/payment-safety/SKILL.md:24
+Evidence: The publish step executes immediately after preview.
+Impact: A normal review request can mutate the remote system without approval.
+Correction: Require explicit confirmation after preview and before publish.
+```
 
 ## Error handling
 
