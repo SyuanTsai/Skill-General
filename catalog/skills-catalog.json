@@ -31,9 +31,7 @@
       "id": "external-research",
       "description": "Current public external-research workflows.",
       "default": false,
-      "includes": [
-        "search-with-felo"
-      ],
+      "includes": [],
       "excludes": []
     },
     {
@@ -120,7 +118,7 @@
         "sourceId": "general",
         "path": ".agents/skills/search-with-felo"
       },
-      "profiles": ["external-research"],
+      "profiles": [],
       "compatibility": {
         "platforms": ["windows"],
         "shells": ["pwsh>=7"],
@@ -135,7 +133,7 @@
       },
       "dependencies": [],
       "lifecycle": {
-        "status": "active",
+        "status": "removed",
         "aliases": []
       }
     },
