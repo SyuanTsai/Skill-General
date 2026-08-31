@@ -31,10 +31,9 @@ The physical Skill source layout is always `.agents/skills/<skill-id>/**`. Profi
 | `plan-production-change` | `core` | Any platform |
 | `verify-data-access-performance` | `core` | Any platform |
 | `investigate-datadog-logs` | `observability` | Configured Datadog connector |
-| `search-with-felo` | `external-research` | Windows, PowerShell 7+, authenticated `felo-ai` CLI |
 | `review-agent-skills` | `skill-quality` | Any platform |
 
-The `core` profile is the default profile and contains both core engineering Skills. The `skill-quality` profile is opt-in.
+The `core` profile is the default profile and contains both core engineering Skills. The `skill-quality` profile is opt-in. Retired stable IDs remain as catalog tombstones without source implementation or profile membership.
 
 ## Validate
 

@@ -47,12 +47,33 @@ if (@($skillIds | Sort-Object -Unique).Count -ne $skillIds.Count) {
     throw 'Duplicate skill id detected in catalog.'
 }
 
+$activeSkills = @($skills | Where-Object { [string]$_.lifecycle.status -ceq 'active' })
+$removedSkills = @($skills | Where-Object { [string]$_.lifecycle.status -ceq 'removed' })
+$unsupportedLifecycleSkills = @(
+    $skills | Where-Object { [string]$_.lifecycle.status -cnotin @('active', 'removed') }
+)
+if ($unsupportedLifecycleSkills.Count -gt 0) {
+    throw "Unsupported Skill lifecycle status for '$($unsupportedLifecycleSkills[0].id)'."
+}
+
+foreach ($removedSkill in $removedSkills) {
+    if (@($removedSkill.profiles).Count -ne 0) {
+        throw "Removed Skill '$($removedSkill.id)' must not belong to a profile."
+    }
+    if (@($removedSkill.lifecycle.aliases).Count -ne 0) {
+        throw "Removed Skill '$($removedSkill.id)' must not expose aliases."
+    }
+    if (@($removedSkill.lifecycle.PSObject.Properties.Name | Where-Object { $_ -ceq 'replacementId' }).Count -ne 0) {
+        throw "Removed Skill '$($removedSkill.id)' must not define replacementId."
+    }
+}
+
 $actualSkillIds = @(
     Get-ChildItem -LiteralPath $skillsRoot -Directory |
         Select-Object -ExpandProperty Name |
         Sort-Object -CaseSensitive
 )
-$declaredSkillIds = @($skillIds | Sort-Object -CaseSensitive)
+$declaredSkillIds = @($activeSkills | ForEach-Object { [string]$_.id } | Sort-Object -CaseSensitive)
 if (($actualSkillIds -join "`n") -cne ($declaredSkillIds -join "`n")) {
     throw 'Catalog Skill inventory does not match .agents/skills directories.'
 }
@@ -71,6 +92,10 @@ foreach ($skill in $skills) {
     $skillRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot ($relativePath -replace '/', [IO.Path]::DirectorySeparatorChar)))
     if (-not $skillRoot.StartsWith($skillsRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsafe Skill path '$relativePath'."
+    }
+
+    if ([string]$skill.lifecycle.status -ceq 'removed') {
+        continue
     }
 
     $skillFile = Join-Path $skillRoot 'SKILL.md'
@@ -121,7 +146,7 @@ foreach ($profile in $profiles) {
     }
 
     foreach ($referencedSkillId in @($includes + $excludes)) {
-        if ($referencedSkillId -cnotin $skillIds) {
+        if ($referencedSkillId -cnotin @($activeSkills | ForEach-Object { [string]$_.id })) {
             throw "Profile '$($profile.id)' references unknown Skill '$referencedSkillId'."
         }
     }
@@ -144,7 +169,7 @@ foreach ($profile in $profiles) {
 
 foreach ($skill in $skills) {
     $declaredProfiles = @($skill.profiles | ForEach-Object { [string]$_ })
-    if ($declaredProfiles.Count -eq 0) {
+    if ([string]$skill.lifecycle.status -ceq 'active' -and $declaredProfiles.Count -eq 0) {
         throw "Skill '$($skill.id)' must belong to at least one profile."
     }
     if (@($declaredProfiles | Sort-Object -Unique).Count -ne $declaredProfiles.Count) {
@@ -157,4 +182,4 @@ foreach ($skill in $skills) {
     }
 }
 
-Write-Host "Skill-General validation passed: $($skillIds.Count) skills, $($profileIds.Count) profiles."
+Write-Host "Skill-General validation passed: $($activeSkills.Count) active skills, $($removedSkills.Count) removed tombstones, $($profileIds.Count) profiles."
