@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 2,
+  "cases": [
+    {
+      "id": "quick-transient-answer",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": false,
+      "operationAllowed": true
+    },
+    {
+      "id": "new-task-with-reusable-context",
+      "recall": true,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": false,
+      "operationAllowed": true
+    },
+    {
+      "id": "explicit-remember-confirmed-fact",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": "AI Memory",
+      "memoryStatus": "Active",
+      "confidence": "Confirmed",
+      "requiresConfirmation": false,
+      "operationAllowed": true
+    },
+    {
+      "id": "inferred-memory-candidate",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": "AI Inbox",
+      "memoryStatus": "Pending",
+      "confidence": "Inferred",
+      "requiresConfirmation": false,
+      "operationAllowed": true
+    },
+    {
+      "id": "multi-stage-external-tool-task",
+      "recall": true,
+      "createHandoff": true,
+      "memoryTarget": null,
+      "requiresConfirmation": false,
+      "operationAllowed": true
+    },
+    {
+      "id": "dropbox-file-write",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": true,
+      "operationAllowed": true
+    },
+    {
+      "id": "bulk-notion-schema-change",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": true,
+      "operationAllowed": false
+    },
+    {
+      "id": "existing-dropbox-memory-migration",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": true,
+      "operationAllowed": false
+    },
+    {
+      "id": "unrequested-live-e2e-write",
+      "recall": false,
+      "createHandoff": false,
+      "memoryTarget": null,
+      "requiresConfirmation": false,
+      "operationAllowed": false
+    },
+    {
+      "id": "guest-notion-write",
+      "notionRole": "Guest",
+      "notionWriteAllowed": false,
+      "continueIndependentLocalWork": true
+    },
+    {
+      "id": "unknown-workspace-notion-write",
+      "notionRole": null,
+      "notionWriteAllowed": false,
+      "continueIndependentLocalWork": true
+    },
+    {
+      "id": "duplicate-main-handoff",
+      "matchCount": 2,
+      "createHandoff": false,
+      "surfaceIntegrityConflict": true
+    },
+    {
+      "id": "dropbox-write-index-failure",
+      "dropboxWriteSucceeded": true,
+      "notionIndexWriteSucceeded": false,
+      "operationComplete": false,
+      "reportUnindexed": true
+    },
+    {
+      "id": "retrieved-record-with-embedded-tool-directive",
+      "useAsEvidence": true,
+      "executeEmbeddedDirectiveWithoutIndependentAuthorization": false
+    },
+    {
+      "id": "missing-stable-task-key",
+      "formalTaskKey": null,
+      "hostTaskIdentifier": null,
+      "createHandoff": false,
+      "reportUniquenessUnavailable": true
+    }
+  ]
+}

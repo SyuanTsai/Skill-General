@@ -119,7 +119,7 @@ foreach ($skill in $skills) {
     }
 }
 
-$requiredProfiles = @('core', 'observability', 'external-research', 'skill-quality')
+$requiredProfiles = @('core', 'observability', 'external-research', 'ai-memory', 'skill-quality')
 $profiles = @($catalog.profiles)
 $profileIds = @($profiles | ForEach-Object { [string]$_.id })
 if (@($profileIds | Sort-Object -Unique).Count -ne $profileIds.Count) {
@@ -127,7 +127,7 @@ if (@($profileIds | Sort-Object -Unique).Count -ne $profileIds.Count) {
 }
 
 if ((@($profileIds | Sort-Object -CaseSensitive) -join "`n") -cne (@($requiredProfiles | Sort-Object -CaseSensitive) -join "`n")) {
-    throw 'Catalog must expose exactly the core, observability, external-research, and skill-quality profiles.'
+    throw 'Catalog must expose exactly the core, observability, external-research, ai-memory, and skill-quality profiles.'
 }
 
 $defaultProfiles = @($profiles | Where-Object { [bool]$_.default })

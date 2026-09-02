@@ -35,6 +35,15 @@
       "excludes": []
     },
     {
+      "id": "ai-memory",
+      "description": "Durable Notion memory and interruption-safe task Handoff workflows.",
+      "default": false,
+      "includes": [
+        "manage-notion-ai-memory"
+      ],
+      "excludes": []
+    },
+    {
       "id": "skill-quality",
       "description": "Agent Skill review and quality-assurance workflows.",
       "default": false,
@@ -134,6 +143,32 @@
       "dependencies": [],
       "lifecycle": {
         "status": "removed",
+        "aliases": []
+      }
+    },
+    {
+      "id": "manage-notion-ai-memory",
+      "group": "knowledge-management",
+      "source": {
+        "sourceId": "general",
+        "path": ".agents/skills/manage-notion-ai-memory"
+      },
+      "profiles": ["ai-memory"],
+      "compatibility": {
+        "platforms": ["any"],
+        "shells": [],
+        "requiredCapabilities": [
+          {
+            "kind": "connector",
+            "id": "notion",
+            "state": "configured"
+          }
+        ],
+        "anyOfCapabilities": []
+      },
+      "dependencies": [],
+      "lifecycle": {
+        "status": "active",
         "aliases": []
       }
     },

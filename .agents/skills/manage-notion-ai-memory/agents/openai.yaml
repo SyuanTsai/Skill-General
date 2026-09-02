@@ -1,0 +1,13 @@
+interface:
+  display_name: "Manage Notion AI Memory"
+  short_description: "Recall, capture, and hand off durable Notion context"
+  default_prompt: "Use $manage-notion-ai-memory to recall durable context and keep this task interruption-safe."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "notion"
+      description: "Dedicated Notion workspace access for durable memory and Handoff records"
+
+policy:
+  allow_implicit_invocation: true
