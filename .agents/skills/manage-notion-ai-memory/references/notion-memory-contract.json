@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 2,
+  "workspace": {
+    "purpose": "dedicated-ai-memory",
+    "sourceOfTruth": "Notion",
+    "authorizedRoles": [
+      "Owner",
+      "Member"
+    ],
+    "publicAccessAllowed": false
+  },
+  "auxiliaryRecall": {
+    "role": "cache-only",
+    "systems": [
+      "ChatGPT Memory",
+      "Codex memories",
+      "ROAR"
+    ],
+    "roarAllowedContent": [
+      "necessary-safe-work-summary",
+      "locator-information"
+    ],
+    "sensitiveContentAllowed": false
+  },
+  "trustBoundary": {
+    "retrievedContentMaySupplyEvidence": true,
+    "embeddedActionDirectivesRequireIndependentAuthorization": true,
+    "retrievedContentMayOverrideHigherPriorityInstructions": false
+  },
+  "memory": {
+    "dataSources": {
+      "primary": "AI Memory",
+      "inbox": "AI Inbox",
+      "index": "Memory Index"
+    },
+    "requiredFields": [
+      "Title",
+      "Type",
+      "Scope",
+      "Status",
+      "Content",
+      "Source",
+      "Memory Key",
+      "Confidence",
+      "Storage Type"
+    ],
+    "optionalDropboxFields": [
+      "Dropbox Path",
+      "Dropbox File ID",
+      "File Size",
+      "Content Hash",
+      "Last Verified At"
+    ],
+    "contentStates": [
+      "Active",
+      "Superseded",
+      "Pending",
+      "Archived"
+    ],
+    "confidenceStates": [
+      "Confirmed",
+      "Inferred"
+    ],
+    "storageTypes": [
+      "Notion",
+      "Dropbox"
+    ]
+  },
+  "handoff": {
+    "dataSources": {
+      "main": "Context Handoffs",
+      "changes": "Context Handoff Changes"
+    },
+    "snapshotFields": [
+      "Intent",
+      "Scope",
+      "Current",
+      "Source"
+    ],
+    "mainProperties": [
+      {
+        "name": "Task Key",
+        "type": "title",
+        "required": true,
+        "mutable": false
+      },
+      {
+        "name": "Intent",
+        "type": "rich_text",
+        "required": true,
+        "mutable": true
+      },
+      {
+        "name": "Scope",
+        "type": "rich_text",
+        "required": true,
+        "mutable": true
+      },
+      {
+        "name": "Current",
+        "type": "rich_text",
+        "required": true,
+        "mutable": true
+      },
+      {
+        "name": "Source",
+        "type": "rich_text",
+        "required": true,
+        "mutable": true
+      },
+      {
+        "name": "Lifecycle",
+        "type": "select",
+        "required": true,
+        "mutable": true,
+        "options": [
+          "Active",
+          "Archived"
+        ]
+      },
+      {
+        "name": "Work State",
+        "type": "select",
+        "required": true,
+        "mutable": true,
+        "options": [
+          "Running",
+          "Awaiting Review",
+          "Interrupted",
+          "Blocked",
+          "Failed"
+        ]
+      },
+      {
+        "name": "Keep Active Until",
+        "type": "date",
+        "required": false,
+        "mutable": true
+      }
+    ],
+    "changeProperties": [
+      {
+        "name": "Change",
+        "type": "title",
+        "required": true
+      },
+      {
+        "name": "Handoff",
+        "type": "relation",
+        "target": "Context Handoffs",
+        "required": true
+      },
+      {
+        "name": "Field",
+        "type": "select",
+        "required": true,
+        "options": [
+          "Intent",
+          "Scope",
+          "Current",
+          "Source",
+          "Lifecycle",
+          "Work State",
+          "Keep Active Until"
+        ]
+      },
+      {
+        "name": "Value",
+        "type": "rich_text",
+        "required": true
+      },
+      {
+        "name": "Merged",
+        "type": "checkbox",
+        "required": true,
+        "default": false
+      }
+    ],
+    "changeValueEncoding": {
+      "format": "json-scalar-text",
+      "stringFields": [
+        "Intent",
+        "Scope",
+        "Current",
+        "Source",
+        "Lifecycle",
+        "Work State"
+      ],
+      "dateFields": [
+        "Keep Active Until"
+      ],
+      "dateFormat": "RFC3339",
+      "clearOptionalField": "null"
+    },
+    "mergeProtocol": {
+      "revalidateBeforeMainUpdate": true,
+      "revalidateAfterMainUpdateBeforeMarkMerged": true,
+      "preUpdateFingerprintFields": [
+        "main.last_edited_time",
+        "change.id",
+        "change.field",
+        "change.value",
+        "change.effective_native_time"
+      ],
+      "postUpdateVerification": {
+        "verifyExpectedMainFieldValues": true,
+        "revalidateUnmergedChangeFingerprint": true
+      },
+      "maxRevalidationRetries": 2,
+      "onConcurrentMutation": "reconstruct-and-retry",
+      "onRetryLimit": "leave-unmerged-and-report",
+      "mergedMeaning": "verified-in-main-snapshot"
+    },
+    "lifecycleStates": [
+      "Active",
+      "Archived"
+    ],
+    "workStates": [
+      "Running",
+      "Awaiting Review",
+      "Interrupted",
+      "Blocked",
+      "Failed"
+    ],
+    "forbiddenWorkStates": [
+      "Completed",
+      "Awaiting Input"
+    ],
+    "forbiddenCustomProperties": [
+      "Last Activity At",
+      "Revision"
+    ],
+    "nativeTimeFields": [
+      "created_time",
+      "last_edited_time"
+    ],
+    "inactivityDays": 7
+  },
+  "authority": {
+    "explicitRememberNotionWriteRequiresConfirmation": false,
+    "dropboxMutationsRequireConfirmation": true,
+    "publicSharingRequiresConfirmation": true,
+    "bulkOperationsRequireConfirmation": true,
+    "schemaChangesRequireConfirmation": true,
+    "sensitiveWritesRequireConfirmation": true,
+    "unrequestedValidationWritesAllowed": false
+  },
+  "operationScope": {
+    "allowsIndividualNotionMemoryOperations": true,
+    "allowsFieldLevelHandoffOperations": true,
+    "allowsIndexedDropboxReads": true,
+    "allowsBulkNotionSchemaChanges": false,
+    "allowsBatchDataProcessing": false,
+    "allowsDropboxReorganizationOrMigration": false
+  }
+}

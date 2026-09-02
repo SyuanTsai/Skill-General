@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 2,
+  "mergeCases": [
+    {
+      "id": "apply-different-fields-and-latest-same-field",
+      "main": {
+        "created_time": "2026-09-01T01:00:00Z",
+        "last_edited_time": "2026-09-01T01:05:00Z",
+        "fields": {
+          "Intent": "Prepare the Skill",
+          "Scope": "Skill package only",
+          "Current": "Baseline verified",
+          "Source": "Jira ATL-42",
+          "Lifecycle": "Active",
+          "Work State": "Running",
+          "Keep Active Until": "2026-09-20T00:00:00Z"
+        }
+      },
+      "changes": [
+        {
+          "id": "change-01",
+          "field": "Current",
+          "value": "\"Contract tests are red\"",
+          "merged": false,
+          "created_time": "2026-09-01T01:10:00Z",
+          "last_edited_time": "2026-09-01T01:10:00Z"
+        },
+        {
+          "id": "change-02",
+          "field": "Source",
+          "value": "\"Jira ATL-42; origin/main 90f897b\"",
+          "merged": false,
+          "created_time": "2026-09-01T01:11:00Z",
+          "last_edited_time": "2026-09-01T01:11:00Z"
+        },
+        {
+          "id": "change-03",
+          "field": "Current",
+          "value": "\"Skill implementation is ready\"",
+          "merged": false,
+          "created_time": "2026-09-01T01:12:00Z",
+          "last_edited_time": "2026-09-01T01:13:00Z"
+        },
+        {
+          "id": "change-04",
+          "field": "Scope",
+          "value": "\"This merged value must not be replayed\"",
+          "merged": true,
+          "created_time": "2026-09-01T01:14:00Z",
+          "last_edited_time": "2026-09-01T01:15:00Z"
+        },
+        {
+          "id": "change-05",
+          "field": "Keep Active Until",
+          "value": "null",
+          "merged": false,
+          "created_time": "2026-09-01T01:16:00Z",
+          "last_edited_time": "2026-09-01T01:16:00Z"
+        }
+      ],
+      "expected": {
+        "fields": {
+          "Intent": "Prepare the Skill",
+          "Scope": "Skill package only",
+          "Current": "Skill implementation is ready",
+          "Source": "Jira ATL-42; origin/main 90f897b",
+          "Lifecycle": "Active",
+          "Work State": "Running",
+          "Keep Active Until": null
+        },
+        "appliedChangeIds": [
+          "change-01",
+          "change-02",
+          "change-03",
+          "change-05"
+        ],
+        "collisionFields": [],
+        "invalidChangeIds": [],
+        "lastActivity": "2026-09-01T01:16:00Z"
+      }
+    },
+    {
+      "id": "reactivate-before-replaying-pending-change",
+      "main": {
+        "created_time": "2026-08-20T03:00:00Z",
+        "last_edited_time": "2026-08-28T03:00:00Z",
+        "fields": {
+          "Intent": "Resume a paused task",
+          "Scope": "Original scope",
+          "Current": "Waiting for the next session",
+          "Source": "Notion handoff",
+          "Lifecycle": "Archived",
+          "Work State": "Interrupted"
+        }
+      },
+      "changes": [
+        {
+          "id": "change-09",
+          "field": "Lifecycle",
+          "value": "\"Active\"",
+          "merged": false,
+          "created_time": "2026-08-29T02:59:00Z",
+          "last_edited_time": "2026-08-29T02:59:00Z"
+        },
+        {
+          "id": "change-10",
+          "field": "Current",
+          "value": "\"Resume from the verified checkpoint\"",
+          "merged": false,
+          "created_time": "2026-08-29T03:00:00Z",
+          "last_edited_time": "2026-08-29T03:00:00Z"
+        }
+      ],
+      "expected": {
+        "fields": {
+          "Intent": "Resume a paused task",
+          "Scope": "Original scope",
+          "Current": "Resume from the verified checkpoint",
+          "Source": "Notion handoff",
+          "Lifecycle": "Active",
+          "Work State": "Interrupted"
+        },
+        "appliedChangeIds": [
+          "change-09",
+          "change-10"
+        ],
+        "collisionFields": [],
+        "invalidChangeIds": [],
+        "lastActivity": "2026-08-29T03:00:00Z"
+      }
+    },
+    {
+      "id": "preserve-an-exact-native-time-collision",
+      "main": {
+        "created_time": "2026-09-01T04:00:00Z",
+        "last_edited_time": "2026-09-01T04:01:00Z",
+        "fields": {
+          "Intent": "Keep concurrent changes auditable",
+          "Scope": "Collision case",
+          "Current": "Original checkpoint",
+          "Source": "Two concurrent agents",
+          "Lifecycle": "Active",
+          "Work State": "Running"
+        }
+      },
+      "changes": [
+        {
+          "id": "change-20",
+          "field": "Current",
+          "value": "\"Checkpoint from agent A\"",
+          "merged": false,
+          "created_time": "2026-09-01T04:02:00Z",
+          "last_edited_time": "2026-09-01T04:03:00Z"
+        },
+        {
+          "id": "change-21",
+          "field": "Current",
+          "value": "\"Checkpoint from agent B\"",
+          "merged": false,
+          "created_time": "2026-09-01T04:02:30Z",
+          "last_edited_time": "2026-09-01T04:03:00Z"
+        }
+      ],
+      "expected": {
+        "fields": {
+          "Intent": "Keep concurrent changes auditable",
+          "Scope": "Collision case",
+          "Current": "Original checkpoint",
+          "Source": "Two concurrent agents",
+          "Lifecycle": "Active",
+          "Work State": "Running"
+        },
+        "appliedChangeIds": [],
+        "collisionFields": [
+          "Current"
+        ],
+        "invalidChangeIds": [],
+        "lastActivity": "2026-09-01T04:03:00Z"
+      }
+    },
+    {
+      "id": "preserve-invalid-and-type-mismatched-values",
+      "main": {
+        "created_time": "2026-09-01T05:00:00Z",
+        "last_edited_time": "2026-09-01T05:01:00Z",
+        "fields": {
+          "Intent": "Validate pending changes",
+          "Scope": "Safety fixture",
+          "Current": "Original checkpoint",
+          "Source": "Deterministic test fixture",
+          "Lifecycle": "Active",
+          "Work State": "Running"
+        }
+      },
+      "changes": [
+        {
+          "id": "change-30",
+          "field": "Current",
+          "value": "not-json",
+          "merged": false,
+          "created_time": "2026-09-01T05:02:00Z",
+          "last_edited_time": "2026-09-01T05:02:00Z"
+        },
+        {
+          "id": "change-31",
+          "field": "Work State",
+          "value": "\"Completed\"",
+          "merged": false,
+          "created_time": "2026-09-01T05:03:00Z",
+          "last_edited_time": "2026-09-01T05:03:00Z"
+        },
+        {
+          "id": "change-32",
+          "field": "Intent",
+          "value": "\"Keep the valid update\"",
+          "merged": false,
+          "created_time": "2026-09-01T05:04:00Z",
+          "last_edited_time": "2026-09-01T05:04:00Z"
+        },
+        {
+          "id": "change-33",
+          "field": "Keep Active Until",
+          "value": "\"2026-09-20\"",
+          "merged": false,
+          "created_time": "2026-09-01T05:05:00Z",
+          "last_edited_time": "2026-09-01T05:05:00Z"
+        }
+      ],
+      "expected": {
+        "fields": {
+          "Intent": "Keep the valid update",
+          "Scope": "Safety fixture",
+          "Current": "Original checkpoint",
+          "Source": "Deterministic test fixture",
+          "Lifecycle": "Active",
+          "Work State": "Running"
+        },
+        "appliedChangeIds": [
+          "change-32"
+        ],
+        "collisionFields": [],
+        "invalidChangeIds": [
+          "change-30",
+          "change-31",
+          "change-33"
+        ],
+        "lastActivity": "2026-09-01T05:05:00Z"
+      }
+    }
+  ],
+  "revalidationCases": [
+    {
+      "id": "continue-when-snapshot-is-stable",
+      "retryCount": 0,
+      "baseline": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": [
+          {
+            "id": "change-40",
+            "field": "Current",
+            "value": "\"Ready to integrate\"",
+            "created_time": "2026-09-01T06:01:00Z",
+            "last_edited_time": "2026-09-01T06:01:00Z"
+          }
+        ]
+      },
+      "observed": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": [
+          {
+            "id": "change-40",
+            "field": "Current",
+            "value": "\"Ready to integrate\"",
+            "created_time": "2026-09-01T06:01:00Z",
+            "last_edited_time": "2026-09-01T06:01:00Z"
+          }
+        ]
+      },
+      "expectedAction": "continue"
+    },
+    {
+      "id": "retry-when-main-changed",
+      "retryCount": 0,
+      "baseline": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": []
+      },
+      "observed": {
+        "mainLastEditedTime": "2026-09-01T06:02:00Z",
+        "unmergedChanges": []
+      },
+      "expectedAction": "reconstruct-and-retry"
+    },
+    {
+      "id": "retry-when-pending-set-changed",
+      "retryCount": 1,
+      "baseline": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": []
+      },
+      "observed": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": [
+          {
+            "id": "change-41",
+            "field": "Source",
+            "value": "\"New concurrent source\"",
+            "created_time": "2026-09-01T06:03:00Z",
+            "last_edited_time": "2026-09-01T06:03:00Z"
+          }
+        ]
+      },
+      "expectedAction": "reconstruct-and-retry"
+    },
+    {
+      "id": "leave-unmerged-after-retry-limit",
+      "retryCount": 2,
+      "baseline": {
+        "mainLastEditedTime": "2026-09-01T06:00:00Z",
+        "unmergedChanges": []
+      },
+      "observed": {
+        "mainLastEditedTime": "2026-09-01T06:04:00Z",
+        "unmergedChanges": []
+      },
+      "expectedAction": "leave-unmerged-and-report"
+    }
+  ],
+  "postUpdateCases": [
+    {
+      "id": "acknowledge-only-after-stable-verification",
+      "retryCount": 0,
+      "expectedMainFields": {
+        "Current": "Integrated checkpoint"
+      },
+      "observedMainFields": {
+        "Current": "Integrated checkpoint"
+      },
+      "baselineUnmergedChanges": [
+        {
+          "id": "change-50",
+          "field": "Current",
+          "value": "\"Integrated checkpoint\"",
+          "created_time": "2026-09-01T07:00:00Z",
+          "last_edited_time": "2026-09-01T07:00:00Z"
+        }
+      ],
+      "observedUnmergedChanges": [
+        {
+          "id": "change-50",
+          "field": "Current",
+          "value": "\"Integrated checkpoint\"",
+          "created_time": "2026-09-01T07:00:00Z",
+          "last_edited_time": "2026-09-01T07:00:00Z"
+        }
+      ],
+      "expectedAction": "mark-verified-records-merged"
+    },
+    {
+      "id": "retry-when-main-value-does-not-match",
+      "retryCount": 0,
+      "expectedMainFields": {
+        "Current": "Integrated checkpoint"
+      },
+      "observedMainFields": {
+        "Current": "Concurrent overwrite"
+      },
+      "baselineUnmergedChanges": [],
+      "observedUnmergedChanges": [],
+      "expectedAction": "reconstruct-and-retry"
+    },
+    {
+      "id": "retry-when-change-arrives-during-update",
+      "retryCount": 1,
+      "expectedMainFields": {
+        "Current": "Integrated checkpoint"
+      },
+      "observedMainFields": {
+        "Current": "Integrated checkpoint"
+      },
+      "baselineUnmergedChanges": [],
+      "observedUnmergedChanges": [
+        {
+          "id": "change-51",
+          "field": "Source",
+          "value": "\"Concurrent source update\"",
+          "created_time": "2026-09-01T07:01:00Z",
+          "last_edited_time": "2026-09-01T07:01:00Z"
+        }
+      ],
+      "expectedAction": "reconstruct-and-retry"
+    }
+  ],
+  "archiveCases": [
+    {
+      "id": "archive-after-eight-inactive-days",
+      "now": "2026-09-10T00:00:00Z",
+      "lastActivity": "2026-09-01T23:59:59Z",
+      "keepActiveUntil": null,
+      "expectedLifecycle": "Archived"
+    },
+    {
+      "id": "keep-active-until-future-date",
+      "now": "2026-09-10T00:00:00Z",
+      "lastActivity": "2026-09-01T00:00:00Z",
+      "keepActiveUntil": "2026-09-12T00:00:00Z",
+      "expectedLifecycle": "Active"
+    },
+    {
+      "id": "remain-active-within-seven-days",
+      "now": "2026-09-07T23:59:59Z",
+      "lastActivity": "2026-09-01T00:00:00Z",
+      "keepActiveUntil": null,
+      "expectedLifecycle": "Active"
+    }
+  ]
+}
