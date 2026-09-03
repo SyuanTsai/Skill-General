@@ -27,6 +27,26 @@ Describe 'Canonical Standard v1 validation adapter' {
         $resolverIndex | Should -BeGreaterThan $fileHashIndex
     }
 
+    It 'rejects ambiguous JSON evidence and repository-local artifact destinations' {
+        $script:Validator | Should -Match 'Assert-NoDuplicateJsonProperties'
+        $script:Validator | Should -Match 'not valid unambiguous UTF-8 JSON'
+        $script:Validator | Should -Match 'Artifacts root must be outside the candidate repository'
+        $script:Validator | Should -Match "Assert-PathWithinRoot.*-Context 'Conformance output'"
+    }
+
+    It 'normalizes the event base to one distinct immutable ancestor' {
+        $script:Validator | Should -Match 'rev-parse --verify --end-of-options'
+        $script:Validator | Should -Match 'merge-base --is-ancestor'
+        $script:Validator | Should -Match 'Base commit must be a distinct ancestor'
+        $script:Validator | Should -Match 'baseCommit = \$resolvedBaseCommit'
+    }
+
+    It 'rejects reparse-backed resolved tool paths before execution' {
+        $script:Validator | Should -Match 'Assert-NoReparseAncestors'
+        $script:Validator | Should -Match 'Assert-NoReparseAncestors -Path \$path -Context "\$Context installed file"'
+        $script:Validator | Should -Match 'is backed by a reparse point'
+    }
+
     It 'freezes all four formal tools before the first Static Scan executes' {
         @($script:Adapter.security.suppressions).Count | Should -Be 0
         @($script:Adapter.security.exceptions).Count | Should -Be 0

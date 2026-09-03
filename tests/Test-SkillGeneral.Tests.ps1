@@ -36,6 +36,20 @@ Describe 'Skill-General repository contract' {
             Should -Throw '*inventory does not exactly match*'
     }
 
+    It 'rejects non-package content at the canonical source root' {
+        Set-Content -LiteralPath (Join-Path $fixtureRoot 'skills/ignored.ps1') -Value 'Write-Output unsafe'
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*non-package or reparse entry*'
+    }
+
+    It 'rejects coexistence with the legacy Skill source root' {
+        New-Item -ItemType Directory -Path (Join-Path $fixtureRoot '.agents/skills') -Force | Out-Null
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*Legacy .agents/skills source root*'
+    }
+
     It 'rejects an ambiguous or noncanonical source inventory shape' {
         $sourcePath = Join-Path $fixtureRoot 'catalog/source.json'
         $source = Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json
@@ -102,6 +116,16 @@ Describe 'Skill-General repository contract' {
             Should -Throw '*quoted mapping key*'
     }
 
+    It 'rejects an implicitly typed YAML description instead of accepting it as text' {
+        $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
+        $skill = Get-Content -LiteralPath $skillPath -Raw
+        $skill = $skill -replace '(?m)^description:.*$', 'description: true'
+        Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*must be a YAML string scalar*'
+    }
+
     It 'rejects an OpenAI metadata prompt bound to another Skill identity' {
         $metadataPath = Join-Path $fixtureRoot 'skills/plan-production-change/agents/openai.yaml'
         $metadata = Get-Content -LiteralPath $metadataPath -Raw
@@ -110,5 +134,33 @@ Describe 'Skill-General repository contract' {
 
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
             Should -Throw '*must reference exact token*'
+    }
+
+    It 'rejects a default prompt whose apparent Skill token has a suffix' {
+        $metadataPath = Join-Path $fixtureRoot 'skills/plan-production-change/agents/openai.yaml'
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw
+        $metadata = $metadata -replace '\$plan-production-change', '$plan-production-changeX'
+        Set-Content -LiteralPath $metadataPath -Value $metadata -Encoding utf8NoBOM -NoNewline
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*must reference exact token*'
+    }
+
+    It 'rejects undeclared OpenAI policy keys' {
+        $metadataPath = Join-Path $fixtureRoot 'skills/manage-notion-ai-memory/agents/openai.yaml'
+        Add-Content -LiteralPath $metadataPath -Value '  unsafe_override: true'
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*policy*allow_implicit_invocation*'
+    }
+
+    It 'validates the final dependency before a following policy section' {
+        $metadataPath = Join-Path $fixtureRoot 'skills/manage-notion-ai-memory/agents/openai.yaml'
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw
+        $metadata = $metadata -replace '(?m)^      value:.*\r?\n', ''
+        Set-Content -LiteralPath $metadataPath -Value $metadata -Encoding utf8NoBOM -NoNewline
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*dependency*non-empty value*'
     }
 }

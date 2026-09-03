@@ -15,14 +15,38 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Assert-NoDuplicateJsonProperties {
+    param([Parameter(Mandatory = $true)][System.Text.Json.JsonElement] $Element, [string] $Context = '$')
+    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $names.Add($property.Name)) { throw "$Context contains duplicate JSON property '$($property.Name)'." }
+            Assert-NoDuplicateJsonProperties -Element $property.Value -Context "$Context.$($property.Name)"
+        }
+    }
+    elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        $index = 0
+        foreach ($item in $Element.EnumerateArray()) {
+            Assert-NoDuplicateJsonProperties -Element $item -Context "$Context[$index]"
+            $index++
+        }
+    }
+}
+
 function Read-JsonFile {
     param(
         [Parameter(Mandatory = $true)][string] $Path,
         [Parameter(Mandatory = $true)][string] $Context
     )
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Context is missing: $Path" }
-    try { return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100 }
-    catch { throw "$Context is not valid JSON: $($_.Exception.Message)" }
+    try {
+        $text = [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false, $true))
+        $document = [System.Text.Json.JsonDocument]::Parse($text)
+        try { Assert-NoDuplicateJsonProperties -Element $document.RootElement -Context $Context }
+        finally { $document.Dispose() }
+        return $text | ConvertFrom-Json -Depth 100
+    }
+    catch { throw "$Context is not valid unambiguous UTF-8 JSON: $($_.Exception.Message)" }
 }
 
 function Assert-Sha256 {
@@ -48,6 +72,32 @@ function Test-PathEqual {
     param([string] $Left, [string] $Right)
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     return [IO.Path]::GetFullPath($Left).Equals([IO.Path]::GetFullPath($Right), $comparison)
+}
+
+function Test-PathWithinOrEqual {
+    param([string] $Path, [string] $Root)
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    return $fullPath.Equals($fullRoot, $comparison) -or
+        $fullPath.StartsWith($fullRoot + [IO.Path]::DirectorySeparatorChar, $comparison)
+}
+
+function Assert-NoReparseAncestors {
+    param([string] $Path, [string] $Context)
+    $currentPath = [IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+        $item = Get-Item -LiteralPath $currentPath -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Context is backed by a reparse point: $currentPath"
+        }
+        $parentPath = Split-Path -Parent $currentPath
+        if ([string]::IsNullOrWhiteSpace($parentPath) -or (Test-PathEqual -Left $parentPath -Right $currentPath)) { break }
+        $currentPath = $parentPath
+    }
 }
 
 function Resolve-ReportedFilePath {
@@ -233,6 +283,7 @@ function Assert-ReceiptFile {
     Assert-Sha256 -Value ([string]$hashValue.Value) -Context "$Context receipt file hash"
     $path = Assert-PathWithinRoot -Path ([string]$pathValue.Value) -Root $InstallRoot -Context $Context
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$Context installed file is missing: $path" }
+    Assert-NoReparseAncestors -Path $path -Context "$Context installed file"
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
     if ($actual -cne [string]$hashValue.Value) { throw "$Context installed file changed after resolution." }
     return $path
@@ -294,6 +345,20 @@ $dirty = @(& $gitPath -C $repoRoot status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
     throw 'Canonical validation requires a clean candidate commit; commit or remove every tracked/untracked change first.'
 }
+$resolvedBaseCommit = ''
+if (-not [string]::IsNullOrWhiteSpace($BaseCommit)) {
+    $baseRevision = "$BaseCommit^{commit}"
+    $baseOutput = @(& $gitPath -C $repoRoot rev-parse --verify --end-of-options $baseRevision 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $baseOutput.Count -ne 1 -or [string]$baseOutput[0] -cnotmatch '^[0-9a-f]{40}$') {
+        throw "Base commit '$BaseCommit' does not resolve to one immutable commit."
+    }
+    $resolvedBaseCommit = ([string]$baseOutput[0]).Trim()
+    & $gitPath -C $repoRoot merge-base --is-ancestor $resolvedBaseCommit $candidateCommit
+    if ($LASTEXITCODE -ne 0 -or $resolvedBaseCommit -ceq $candidateCommit) {
+        throw 'Base commit must be a distinct ancestor of the immutable candidate.'
+    }
+    $BaseCommit = $resolvedBaseCommit
+}
 
 $adapterPath = Join-Path $repoRoot 'config/standard-v1.json'
 $adapter = Read-JsonFile -Path $adapterPath -Context 'Standard v1 repository adapter'
@@ -309,16 +374,23 @@ if ($adapter.authority.archiveUrl -cne $expectedArchiveUrl) { throw 'Standard au
 Assert-Sha256 -Value $adapter.authority.archiveSha256 -Context 'Authority archive identity'
 
 $artifactsRootPath = [IO.Path]::GetFullPath($ArtifactsRoot)
+if (Test-PathWithinOrEqual -Path $artifactsRootPath -Root $repoRoot) {
+    throw 'Artifacts root must be outside the candidate repository.'
+}
 [void](New-Item -ItemType Directory -Path $artifactsRootPath -Force)
 $artifactsItem = Get-Item -LiteralPath $artifactsRootPath -Force
 if (-not $artifactsItem.PSIsContainer -or ($artifactsItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Artifacts root must be a regular non-reparse directory.'
 }
+Assert-NoReparseAncestors -Path $artifactsRootPath -Context 'Artifacts root'
 $runId = [guid]::NewGuid().ToString('N')
 # Keep the on-disk prefix short enough for Windows venv and wheel paths; evidence retains the full run ID.
 $runRoot = Join-Path $artifactsRootPath "sgv1-$($runId.Substring(0, 12))"
 $authorityExtractRoot = Join-Path $runRoot 'authority'
 $installRoot = Join-Path $runRoot 'tools'
+if (Test-Path -LiteralPath $runRoot) { throw 'Run-owned artifacts path unexpectedly already exists.' }
+[void](New-Item -ItemType Directory -Path $runRoot)
+Assert-NoReparseAncestors -Path $runRoot -Context 'Run-owned artifacts path'
 [void](New-Item -ItemType Directory -Path $authorityExtractRoot -Force)
 [void](New-Item -ItemType Directory -Path $installRoot -Force)
 
@@ -562,6 +634,7 @@ $summary = [pscustomobject][ordered]@{
     candidate = [ordered]@{
         repository = 'https://github.com/SyuanTsai/Skill-General.git'
         commit = $candidateCommit
+        baseCommit = $resolvedBaseCommit
     }
     tools = @($expectedSources.Keys | ForEach-Object {
         [pscustomobject][ordered]@{
@@ -587,9 +660,18 @@ $summary = [pscustomobject][ordered]@{
     result = 'passed'
 }
 $summaryJson = $summary | ConvertTo-Json -Depth 100
-$summaryPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) { Join-Path $runRoot 'conformance-report.json' } else { [IO.Path]::GetFullPath($OutputPath) }
+$summaryPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    Join-Path $runRoot 'conformance-report.json'
+}
+else {
+    Assert-PathWithinRoot -Path ([IO.Path]::GetFullPath($OutputPath)) -Root $artifactsRootPath -Context 'Conformance output'
+}
 $summaryDirectory = Split-Path -Parent $summaryPath
-if (-not [string]::IsNullOrWhiteSpace($summaryDirectory)) { [void](New-Item -ItemType Directory -Path $summaryDirectory -Force) }
+if (-not [string]::IsNullOrWhiteSpace($summaryDirectory)) {
+    [void](New-Item -ItemType Directory -Path $summaryDirectory -Force)
+    Assert-NoReparseAncestors -Path $summaryDirectory -Context 'Conformance output directory'
+}
+if (Test-Path -LiteralPath $summaryPath) { throw 'Conformance output path already exists; evidence must not overwrite prior content.' }
 [IO.File]::WriteAllText($summaryPath, $summaryJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 Write-Host "Skill-General Standard v1 canonical validation passed. Evidence: $summaryPath"
 $summaryJson

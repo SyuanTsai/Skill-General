@@ -98,6 +98,32 @@ function Get-UnicodeScalarCount {
     return $count
 }
 
+function ConvertFrom-RestrictedYamlString {
+    param(
+        [Parameter(Mandatory = $true)][string] $Value,
+        [Parameter(Mandatory = $true)][string] $Context
+    )
+
+    if ($Value -cmatch '^"(?:[^"\\]|\\.)*"$') {
+        try {
+            $decoded = $Value | ConvertFrom-Json
+            if ($decoded -isnot [string]) { throw 'not a string' }
+            return [string]$decoded
+        }
+        catch { throw "$Context contains an invalid double-quoted YAML string." }
+    }
+    if ($Value.StartsWith("'", [StringComparison]::Ordinal)) {
+        if ($Value -cnotmatch "^'(?:[^']|'')*'$" ) { throw "$Context contains an invalid single-quoted YAML string." }
+        return $Value.Substring(1, $Value.Length - 2).Replace("''", "'")
+    }
+    if ($Value -cmatch '^[\[\]{},&*!|>"%@`]' -or $Value -cmatch '^[?:-](?:\s|$)' -or
+        $Value -cmatch ':\s' -or $Value -cmatch '(?:^|\s)#' -or
+        $Value -cmatch '^(?i:~|null|true|false|yes|no|on|off|[-+]?(?:0|[1-9][0-9_]*)(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|\d{4}-\d{2}-\d{2}(?:[Tt ].*)?)$') {
+        throw "$Context must be a YAML string scalar, not a collection, tag, comment, or implicitly typed value."
+    }
+    return $Value
+}
+
 function ConvertTo-AsciiLowerInvariant {
     param([Parameter(Mandatory = $true)][string] $Value)
 
@@ -166,7 +192,8 @@ function Read-SkillFrontmatter {
             throw "SKILL.md for '$ExpectedSkillId' has unsupported or malformed frontmatter syntax: '$line'."
         }
         $key = [string]$Matches.key
-        if ($key -cnotin @('name', 'description') -or -not $values.TryAdd($key, ([string]$Matches.value).Trim())) {
+        $value = ConvertFrom-RestrictedYamlString -Value ([string]$Matches.value).Trim() -Context "SKILL.md $key for '$ExpectedSkillId'"
+        if ($key -cnotin @('name', 'description') -or -not $values.TryAdd($key, $value)) {
             throw "SKILL.md for '$ExpectedSkillId' has an unsupported or duplicate frontmatter key '$key'."
         }
     }
@@ -199,6 +226,7 @@ function Read-OpenAiMetadata {
     $policy = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     $section = ''
     $inTools = $false
+    $sawTools = $false
     $currentTool = $null
 
     foreach ($line in $text.Split("`n")) {
@@ -207,12 +235,15 @@ function Read-OpenAiMetadata {
             throw "agents/openai.yaml for '$ExpectedSkillId' contains a quoted mapping key."
         }
         if ($line -cmatch '^(?<section>[a-z_]+):$') {
+            if ($null -ne $currentTool) {
+                $tools.Add([pscustomobject]$currentTool)
+                $currentTool = $null
+            }
             $section = [string]$Matches.section
             if ($section -cnotin @('interface', 'dependencies', 'policy') -or -not $topSections.Add($section)) {
                 throw "agents/openai.yaml for '$ExpectedSkillId' has unsupported or duplicate section '$section'."
             }
             $inTools = $false
-            $currentTool = $null
             continue
         }
 
@@ -229,6 +260,7 @@ function Read-OpenAiMetadata {
         if ($section -ceq 'dependencies' -and $line -ceq '  tools:') {
             if ($inTools) { throw "agents/openai.yaml for '$ExpectedSkillId' has duplicate dependencies.tools." }
             $inTools = $true
+            $sawTools = $true
             continue
         }
         if ($section -ceq 'dependencies' -and $inTools -and $line -cmatch '^    - type: (?<json>"(?:[^"\\]|\\.)*")$') {
@@ -270,8 +302,15 @@ function Read-OpenAiMetadata {
         throw "agents/openai.yaml interface.short_description for '$ExpectedSkillId' must contain 25 to 64 Unicode scalar values."
     }
     $token = '$' + $ExpectedSkillId
-    if ($interface['default_prompt'] -cnotmatch ("(?<![a-z0-9-]){0}(?![a-z0-9-])" -f [regex]::Escape($token))) {
+    if ($interface['default_prompt'] -cnotmatch ("(?<![A-Za-z0-9-]){0}(?![A-Za-z0-9-])" -f [regex]::Escape($token))) {
         throw "agents/openai.yaml interface.default_prompt for '$ExpectedSkillId' must reference exact token '$token'."
+    }
+    if ($topSections.Contains('dependencies') -and (-not $sawTools -or $tools.Count -eq 0)) {
+        throw "agents/openai.yaml dependencies for '$ExpectedSkillId' must contain a non-empty tools list."
+    }
+    if ($topSections.Contains('policy') -and
+        ($policy.Count -ne 1 -or -not $policy.ContainsKey('allow_implicit_invocation'))) {
+        throw "agents/openai.yaml policy for '$ExpectedSkillId' must contain only allow_implicit_invocation."
     }
     foreach ($tool in $tools) {
         if ($tool.type -cne 'mcp' -or $null -eq $tool.PSObject.Properties['value'] -or [string]::IsNullOrWhiteSpace([string]$tool.value)) {
@@ -300,6 +339,10 @@ function Get-ContentInventory {
     )
 
     $skillRoot = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot "skills/$SkillId"))
+    $skillRootItem = Get-Item -LiteralPath $skillRoot -Force
+    if (-not $skillRootItem.PSIsContainer -or ($skillRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Skill '$SkillId' root must be a regular non-reparse directory."
+    }
     $items = @(Get-ChildItem -LiteralPath $skillRoot -Recurse -Force)
     foreach ($item in $items) {
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -410,6 +453,9 @@ if ($inventory.skills -isnot [array] -or @($inventory.skills).Count -eq 0) {
 if (Test-Path -LiteralPath (Join-Path $repoRoot 'catalog/skills-catalog.json')) {
     throw 'Legacy source-owned cross-source catalog must not coexist with catalog/source.json.'
 }
+if (Test-Path -LiteralPath (Join-Path $repoRoot '.agents/skills')) {
+    throw 'Legacy .agents/skills source root must not coexist with canonical skills/.'
+}
 
 $adapter = Read-StrictJson -Path (Join-Path $repoRoot 'config/standard-v1.json')
 Assert-ExactPropertySet -Value $adapter -Expected @('schemaVersion', 'standardVersion', 'authority', 'security', 'deviations') -Context 'config/standard-v1.json'
@@ -474,7 +520,17 @@ if (($skillIds -join "`n") -cne ($sortedSkillIds -join "`n")) {
 
 $skillsRoot = Join-Path $repoRoot 'skills'
 if (-not (Test-Path -LiteralPath $skillsRoot -PathType Container)) { throw 'Canonical skills/ source root is missing.' }
-[string[]]$actualSkillIds = @(Get-ChildItem -LiteralPath $skillsRoot -Directory | ForEach-Object { $_.Name })
+$skillsRootItem = Get-Item -LiteralPath $skillsRoot -Force
+if (($skillsRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Canonical skills/ source root must be a regular non-reparse directory.'
+}
+$skillsRootEntries = @(Get-ChildItem -LiteralPath $skillsRoot -Force)
+foreach ($entry in $skillsRootEntries) {
+    if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Canonical skills/ source root contains a non-package or reparse entry '$($entry.Name)'."
+    }
+}
+[string[]]$actualSkillIds = @($skillsRootEntries | ForEach-Object { $_.Name })
 [Array]::Sort($actualSkillIds, [StringComparer]::Ordinal)
 if (($actualSkillIds -join "`n") -cne ($skillIds -join "`n")) {
     throw 'catalog/source.json inventory does not exactly match skills/ directories.'
