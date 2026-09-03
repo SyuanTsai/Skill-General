@@ -2,7 +2,7 @@ Describe 'manage-notion-ai-memory Skill contract' {
     BeforeAll {
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
         $script:SkillId = 'manage-notion-ai-memory'
-        $script:SkillRoot = Join-Path $script:RepositoryRoot ".agents/skills/$($script:SkillId)"
+        $script:SkillRoot = Join-Path $script:RepositoryRoot "skills/$($script:SkillId)"
         $script:ContractPath = Join-Path $script:SkillRoot 'references/notion-memory-contract.json'
         $script:Contract = Get-Content -LiteralPath $script:ContractPath -Raw | ConvertFrom-Json -Depth 20
         $script:RoutingCases = Get-Content -LiteralPath (
@@ -212,29 +212,20 @@ Describe 'manage-notion-ai-memory Skill contract' {
         }
     }
 
-    # Scenario: The new Skill is installed from Skill-General as an opt-in Notion capability.
-    # Purpose: Keep source ownership, profile routing, and connector requirements self-consistent.
-    It 'InterT10_declares_the_Skill_catalog_profile_and_interface_metadata' {
-        $catalog = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'catalog/skills-catalog.json') -Raw |
+    # Scenario: The Skill is published from the canonical source inventory with its host dependency metadata.
+    # Purpose: Keep source ownership separate from centrally owned profile and compatibility policy.
+    It 'InterT10_declares_the_source_inventory_and_interface_metadata' {
+        $source = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'catalog/source.json') -Raw |
             ConvertFrom-Json -Depth 20
-        $skill = @($catalog.skills | Where-Object { $_.id -ceq $script:SkillId })
-        $profile = @($catalog.profiles | Where-Object { $_.id -ceq 'ai-memory' })
 
-        $skill.Count | Should -Be 1
-        $skill[0].group | Should -Be 'knowledge-management'
-        @($skill[0].profiles) | Should -Be @('ai-memory')
-        $skill[0].source.path | Should -Be ".agents/skills/$($script:SkillId)"
-        $skill[0].lifecycle.status | Should -Be 'active'
-        @($skill[0].compatibility.requiredCapabilities).Count | Should -Be 1
-        $skill[0].compatibility.requiredCapabilities[0].kind | Should -Be 'connector'
-        $skill[0].compatibility.requiredCapabilities[0].id | Should -Be 'notion'
-        $skill[0].compatibility.requiredCapabilities[0].state | Should -Be 'configured'
-        $profile.Count | Should -Be 1
-        $profile[0].default | Should -BeFalse
-        @($profile[0].includes) | Should -Be @($script:SkillId)
+        $source.sourceId | Should -Be 'general'
+        $source.skillsRoot | Should -Be 'skills'
+        @($source.skills) | Should -Contain $script:SkillId
+        Test-Path -LiteralPath (Join-Path $script:RepositoryRoot 'catalog/skills-catalog.json') | Should -BeFalse
 
         $openAiYaml = Get-Content -LiteralPath (Join-Path $script:SkillRoot 'agents/openai.yaml') -Raw
         $openAiYaml | Should -Match ([regex]::Escape("`$$($script:SkillId)"))
+        $openAiYaml | Should -Match '(?m)^\s*value:\s*"notion"\s*$'
         $openAiYaml | Should -Match '(?m)^\s*allow_implicit_invocation:\s*true\s*$'
     }
 

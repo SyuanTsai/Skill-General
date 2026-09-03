@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "sourceId": "general",
+  "repository": "https://github.com/SyuanTsai/Skill-General.git",
+  "skillsRoot": "skills",
+  "skills": [
+    "investigate-datadog-logs",
+    "manage-notion-ai-memory",
+    "plan-production-change",
+    "review-agent-skills",
+    "verify-data-access-performance"
+  ]
+}

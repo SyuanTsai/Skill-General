@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "standardVersion": "v1",
+  "authority": {
+    "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
+    "commit": "a223bd7dc4b03e1b0bfe6d84128373f9334f81c8",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/a223bd7dc4b03e1b0bfe6d84128373f9334f81c8",
+    "archiveSha256": "385fe0dd395683715956419e2e582d75b3e78b86156371c6fac559bd87a66bad",
+    "files": [
+      {
+        "path": "docs/standards/skill-repository-standard.md",
+        "sha256": "c7af3d02851903ad4a21d857bcf27f5a000a68a89f93bbf2e18cf167d20ab4a2"
+      },
+      {
+        "path": "docs/standards/validation-toolchain.json",
+        "sha256": "d3ddbfec42d03a1bf478759f8eb610cd783063a7f780154ba2c1122ef4662ac4"
+      },
+      {
+        "path": "docs/standards/schemas/openai-agent-metadata.schema.json",
+        "sha256": "23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a"
+      },
+      {
+        "path": "docs/standards/schemas/source-inventory-v2.schema.json",
+        "sha256": "084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e"
+      },
+      {
+        "path": "scripts/Resolve-PythonWheelClosure.py",
+        "sha256": "f78fe10b5443e8e5cd4fb2b66a215f8f1c5cd7aee87a05715c6bece4be20e30c"
+      },
+      {
+        "path": "scripts/Resolve-StandardValidationTool.ps1",
+        "sha256": "92f12d2b2c5ac30b471004bf3b75edd59763b9075002901ff92ce39a77f44712"
+      }
+    ]
+  },
+  "security": {
+    "staticMode": "no-llm",
+    "blockSeverities": [
+      "critical",
+      "high",
+      "medium"
+    ],
+    "suppressions": [],
+    "exceptions": []
+  },
+  "deviations": "None"
+}

@@ -1,0 +1,65 @@
+Describe 'Canonical Standard v1 validation adapter' {
+    BeforeAll {
+        $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
+        $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Validate.ps1'
+        $script:Validator = Get-Content -LiteralPath $script:ValidatorPath -Raw
+        $script:Adapter = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw |
+            ConvertFrom-Json -Depth 20
+    }
+
+    It 'binds the immutable candidate before any external authority or tool acquisition' {
+        $candidateIndex = $script:Validator.IndexOf('status --porcelain=v1')
+        $authorityIndex = $script:Validator.IndexOf('Invoke-WebRequest -Uri $adapter.authority.archiveUrl')
+        $resolverIndex = $script:Validator.IndexOf('& $resolverPath -PolicyPath')
+
+        $candidateIndex | Should -BeGreaterThan -1
+        $authorityIndex | Should -BeGreaterThan $candidateIndex
+        $resolverIndex | Should -BeGreaterThan $authorityIndex
+    }
+
+    It 'verifies bundle and authority file identities before invoking the central resolver' {
+        $archiveHashIndex = $script:Validator.IndexOf('$archiveHash -cne')
+        $fileHashIndex = $script:Validator.IndexOf('$fileHash -cne')
+        $resolverIndex = $script:Validator.IndexOf('& $resolverPath -PolicyPath')
+
+        $archiveHashIndex | Should -BeGreaterThan -1
+        $fileHashIndex | Should -BeGreaterThan $archiveHashIndex
+        $resolverIndex | Should -BeGreaterThan $fileHashIndex
+    }
+
+    It 'freezes all four formal tools before the first Static Scan executes' {
+        @($script:Adapter.security.suppressions).Count | Should -Be 0
+        @($script:Adapter.security.exceptions).Count | Should -Be 0
+        $script:Validator | Should -Match "'skillspector' = 'NVIDIA/SkillSpector'"
+        $script:Validator | Should -Match "'skill-validator' = 'github.com/agent-ecosystem/skill-validator/cmd/skill-validator'"
+        $script:Validator | Should -Match "'skill-tools' = 'npm:skill-tools'"
+        $script:Validator | Should -Match "'pester' = 'PowerShellGallery:Pester'"
+
+        $freezeIndex = $script:Validator.IndexOf('foreach ($toolName in $expectedSources.Keys)')
+        $staticIndex = $script:Validator.IndexOf("'--no-llm'")
+        $staticIndex | Should -BeGreaterThan $freezeIndex
+    }
+
+    It 'discovers every formal package invocation from catalog source inventory' {
+        $script:Validator | Should -Match '\$skillIds\s*=\s*@\(\$integrityReport\.skills'
+        $script:Validator | Should -Match 'Assert-SkillSpectorReport'
+        $script:Validator | Should -Match 'ExpectedInventoryPaths'
+        $script:Validator | Should -Match 'foreach \(\$skillId in \$skillIds\)'
+        $script:Validator | Should -Match "validate', 'structure', '--allow-dirs=agents'"
+        $script:Validator | Should -Match ([regex]::Escape("'check', `$skillRoot, '--format', 'sarif'"))
+    }
+
+    It 'keeps reports in the run artifacts root and records review boundaries' {
+        $script:Validator | Should -Match ([regex]::Escape("Join-Path `$runRoot 'conformance-report.json'"))
+        $script:Validator | Should -Match "aiReview = 'required-before-release'"
+        $script:Validator | Should -Match "humanReleaseApproval = 'required-for-immutable-candidate'"
+        $script:Validator | Should -Match "deviations = 'None'"
+    }
+
+    It 'models semantic scan as a deterministic fail-closed conditional stage' {
+        $script:Validator | Should -Match 'Test-SecurityRelevantSkillChange'
+        $script:Validator | Should -Match '\$staticFindingCount -gt 0'
+        $script:Validator | Should -Match 'Triggered SkillSpector semantic scan did not complete'
+        $script:Validator | Should -Not -Match 'semantic.*continue|continue.*semantic'
+    }
+}
