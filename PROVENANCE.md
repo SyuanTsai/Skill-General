@@ -22,7 +22,7 @@ Datadog and Notion are present as integration interfaces, safe-use instructions,
 
 ## Public evidence boundary
 
-This public document records only the facts needed to explain repository provenance and the licensing boundary. Non-public audit evidence, account identifiers, device or billing records, authentication configuration, and private work-tracking references are intentionally not copied into this repository. Evidence that is unavailable or not suitable for publication is not inferred from repository metadata.
+This public document records only the facts needed to explain repository provenance and the licensing boundary. Additional audit material is intentionally kept outside this repository. Evidence that is unavailable or not suitable for publication is not inferred from repository metadata.
 
 ## Decision and limits
 
