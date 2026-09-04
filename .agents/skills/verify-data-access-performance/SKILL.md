@@ -2,6 +2,10 @@
 name: verify-data-access-performance
 description: Analyze and test database query efficiency with repeated measurements, query counts, and N+1 checks. Use when the user needs to check, review, or fix slow queries, ORM loading behavior, benchmarks, or round-trip growth.
 ---
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 
 # Verify Data-Access Performance
 
