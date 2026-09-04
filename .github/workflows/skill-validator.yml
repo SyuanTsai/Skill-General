@@ -7,10 +7,12 @@ on:
     paths:
       - '.agents/skills/**'
       - '.github/workflows/skill-validator.yml'
+      - 'PROVENANCE.md'
   pull_request:
     paths:
       - '.agents/skills/**'
       - '.github/workflows/skill-validator.yml'
+      - 'PROVENANCE.md'
   workflow_dispatch:
 
 permissions:
