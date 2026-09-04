@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 # Provenance and licensing boundary
 
 - Repository: [Skill-General](https://github.com/SyuanTsai/Skill-General)
-- Audited baseline: [\`01ac760cff3e0722849e0705c7af44cfe19835ba\`](https://github.com/SyuanTsai/Skill-General/tree/01ac760cff3e0722849e0705c7af44cfe19835ba)
+- Audited baseline: [`01ac760cff3e0722849e0705c7af44cfe19835ba`](https://github.com/SyuanTsai/Skill-General/tree/01ac760cff3e0722849e0705c7af44cfe19835ba)
 - Review date: 2026-09-04
 
 ## Confirmed current-tree facts
@@ -16,8 +16,8 @@ Datadog and Notion are present as integration interfaces, safe-use instructions,
 
 ## Source timeline
 
-- Baseline tree/blob inventory: [GitHub tree at \`01ac760cff3e0722849e0705c7af44cfe19835ba\`](https://github.com/SyuanTsai/Skill-General/tree/01ac760cff3e0722849e0705c7af44cfe19835ba).
-- Initial repository commit: [\`50979e01\`](https://github.com/SyuanTsai/Skill-General/commit/50979e01) on 2026-08-18, establishing the repository for the public Skill migration.
+- Baseline tree/blob inventory: [GitHub tree at `01ac760cff3e0722849e0705c7af44cfe19835ba`](https://github.com/SyuanTsai/Skill-General/tree/01ac760cff3e0722849e0705c7af44cfe19835ba).
+- Initial repository commit: [`50979e01`](https://github.com/SyuanTsai/Skill-General/commit/50979e01) on 2026-08-18, establishing the repository for the public Skill migration.
 - Public Git history was reviewed and preserved; no history rewriting was performed.
 
 ## Public evidence boundary
