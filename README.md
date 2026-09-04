@@ -1,3 +1,7 @@
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 # Skill-General
 
 General-purpose Agent Skills source repository.
@@ -5,6 +9,14 @@ General-purpose Agent Skills source repository.
 Stable source ID: `general`
 
 This repository owns reusable engineering, observability, public-research, and Agent Skill quality-review workflows that are versioned independently from AI Instructions.
+
+## License and contribution boundary
+
+The Apache-2.0 license in [LICENSE](LICENSE) applies to the repository-authored Skill instructions, agent metadata, references, fixtures, scripts, tests, catalog/version metadata, documentation, and workflow configuration in this repository. It does not grant rights to Datadog, Notion, GitHub, or other external services; their product materials, tenant data, credentials, prompts, user inputs, and generated outputs remain outside this repository's license boundary.
+
+Datadog and Notion appear here as integration interfaces and documentation/fixture contracts. This repository does not vendor their SDKs or other third-party source code. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [PROVENANCE.md](PROVENANCE.md) for the dependency and evidence record.
+
+Contributors must have the right to submit their contribution. Unless a separate written agreement says otherwise, an intentional contribution to the repository-authored scope is submitted under Apache-2.0; preserve existing notices and identify material that is not your own.
 
 ## Repository layout
 
@@ -76,4 +88,4 @@ Rollback is performed by restoring the previous known-good tag or full commit SH
 6. Update `catalog/skills-catalog.json` compatibility/profile metadata.
 7. Run repository validation, applicable tests, and `git diff --check` before release.
 
-Migration work is tracked by Jira `SYP-84` and the broader Skills Catalog initiative.
+Cross-repository project tracking and rollout decisions are maintained outside this public source and do not change the repository contract.

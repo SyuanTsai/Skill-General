@@ -1,3 +1,7 @@
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 # Forward Testing Agent Skills
 
 Use forward testing when a complex or high-risk workflow cannot be validated confidently from static inspection, when routing boundaries are uncertain, or when the Skill depends on agent interpretation rather than a deterministic script.
