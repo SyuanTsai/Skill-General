@@ -33,7 +33,7 @@ Evidence available to this audit:
 
 The effective audited global Git identity is a personal-domain identity and the Skill-General remote is the public HTTPS origin `https://github.com/SyuanTsai/Skill-General.git). The authenticated GitHub connector identity matched the repository owner during this operation. The SSH configuration was checked without reading private-key material: the existing GitLab and GitHub host entries each point to a different present private/public key pair, with distinct public-key fingerprints not reproduced here.
 
-A path-based Git `includeIf` separation rule was not present in the effective global configuration at audit time. A distinct company repository root, approved company Git identity, and company SSH host/key mapping were not available in this workspace, so complete private/company separation is not claimed. This is the remaining SYP-187 closure gap.
+A path-based Git `includeIf` separation rule was not present in the effective global configuration at audit time. A distinct company repository root, approved company Git identity, and company SSH host/key mapping were not available in this workspace, so complete private/company separation is not claimed. This is the remaining private/company Git isolation closure gap.
 
 ## Decision and limits
 
