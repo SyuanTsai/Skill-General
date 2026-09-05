@@ -130,6 +130,28 @@ Describe 'Skill-General repository contract' {
             Should -Throw '*must be a YAML string scalar*'
     }
 
+    It 'accepts the allowed optional license frontmatter field' {
+        $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
+        $skill = Get-Content -LiteralPath $skillPath -Raw
+        $lines = [Collections.Generic.List[string]]::new()
+        $lines.AddRange([string[]]($skill.Replace("`r`n", "`n").Split("`n")))
+        $descriptionIndex = 0
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index].StartsWith('description:', [StringComparison]::Ordinal)) {
+                $descriptionIndex = $index
+                break
+            }
+        }
+        $lines.Insert($descriptionIndex + 1, 'license: Apache-2.0')
+        $skill = $lines -join "`n"
+        Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
+        & $script:GitPath -C $fixtureRoot add -- skills/plan-production-change/SKILL.md
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the optional license fixture.' }
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Not -Throw
+    }
+
     It 'rejects an OpenAI metadata prompt bound to another Skill identity' {
         $metadataPath = Join-Path $fixtureRoot 'skills/plan-production-change/agents/openai.yaml'
         $metadata = Get-Content -LiteralPath $metadataPath -Raw
