@@ -192,12 +192,7 @@ function Assert-SkillSpectorReport {
     foreach ($name in @('ledger_exceptions', 'scope_exclusions', 'limitations')) {
         $items = Get-RequiredProperty -Object $completeness -Name $name -Context 'SkillSpector completeness'
         if ($items -isnot [array] -or @($items).Count -ne 0) {
-            $detail = if ($items -is [array]) {
-                $items | ConvertTo-Json -Depth 12 -Compress
-            }
-            else {
-                [string]$items
-            }
+            $detail = ConvertTo-Json -InputObject $items -Depth 12 -Compress
             throw "SkillSpector reported incomplete '$name' evidence for '$SkillId': $detail"
         }
     }
