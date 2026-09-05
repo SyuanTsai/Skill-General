@@ -65,7 +65,7 @@ function Get-RequiredProperty {
     if ($Object -isnot [pscustomobject] -or $null -eq $Object.PSObject.Properties[$Name]) {
         throw "$Context is missing required property '$Name'."
     }
-    return $Object.PSObject.Properties[$Name].Value
+    return ,$Object.PSObject.Properties[$Name].Value
 }
 
 function Get-ValidationSecurityAction {
