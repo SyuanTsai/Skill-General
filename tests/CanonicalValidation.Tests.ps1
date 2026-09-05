@@ -47,6 +47,14 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match 'is backed by a reparse point'
     }
 
+    It 'verifies host runtimes by absolute path and hash while keeping package files run-owned' {
+        $script:Validator | Should -Match 'function Assert-ExternalReceiptFile'
+        $script:Validator | Should -Match ([regex]::Escape("Assert-ExternalReceiptFile -Receipt `$receipts.'skill-tools' -PathProperty 'nodePath'"))
+        $script:Validator | Should -Match 'receipt path must be absolute'
+        $script:Validator | Should -Match 'runtime file changed after resolution'
+        $script:Validator | Should -Match ([regex]::Escape("Assert-ReceiptFile -Receipt `$receipts.'skill-tools' -PathProperty 'entryPointPath'"))
+    }
+
     It 'freezes all four formal tools and imports the central security gate before scanning' {
         @($script:Adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         $script:Validator | Should -Match '\.\s+\$authorityGatePath -DefineFunctionsOnly'

@@ -333,6 +333,31 @@ function Assert-ReceiptFile {
     return $path
 }
 
+function Assert-ExternalReceiptFile {
+    param(
+        [Parameter(Mandatory = $true)] $Receipt,
+        [Parameter(Mandatory = $true)][string] $PathProperty,
+        [Parameter(Mandatory = $true)][string] $HashProperty,
+        [Parameter(Mandatory = $true)][string] $Context
+    )
+    $pathValue = $Receipt.PSObject.Properties[$PathProperty]
+    $hashValue = $Receipt.PSObject.Properties[$HashProperty]
+    if ($null -eq $pathValue -or $pathValue.Value -isnot [string] -or
+        $null -eq $hashValue -or $hashValue.Value -isnot [string]) {
+        throw "$Context receipt does not provide $PathProperty/$HashProperty."
+    }
+    if (-not [IO.Path]::IsPathRooted([string]$pathValue.Value)) {
+        throw "$Context receipt path must be absolute."
+    }
+    Assert-Sha256 -Value ([string]$hashValue.Value) -Context "$Context receipt file hash"
+    $path = [IO.Path]::GetFullPath([string]$pathValue.Value)
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$Context runtime file is missing: $path" }
+    Assert-NoReparseAncestors -Path $path -Context "$Context runtime file"
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+    if ($actual -cne [string]$hashValue.Value) { throw "$Context runtime file changed after resolution." }
+    return $path
+}
+
 function Invoke-NativeChecked {
     param(
         [Parameter(Mandatory = $true)][string] $Command,
@@ -548,7 +573,7 @@ foreach ($toolName in $expectedSources.Keys) {
 
 $skillSpectorPath = Assert-ReceiptFile -Receipt $receipts.skillspector -PathProperty 'executablePath' -HashProperty 'executableSha256' -InstallRoot $installRoot -Context 'SkillSpector'
 $skillValidatorPath = Assert-ReceiptFile -Receipt $receipts.'skill-validator' -PathProperty 'executablePath' -HashProperty 'executableSha256' -InstallRoot $installRoot -Context 'skill-validator'
-$skillToolsNodePath = Assert-ReceiptFile -Receipt $receipts.'skill-tools' -PathProperty 'nodePath' -HashProperty 'nodeSha256' -InstallRoot $installRoot -Context 'skill-tools Node'
+$skillToolsNodePath = Assert-ExternalReceiptFile -Receipt $receipts.'skill-tools' -PathProperty 'nodePath' -HashProperty 'nodeSha256' -Context 'skill-tools Node'
 $skillToolsEntryPoint = Assert-ReceiptFile -Receipt $receipts.'skill-tools' -PathProperty 'entryPointPath' -HashProperty 'entryPointSha256' -InstallRoot $installRoot -Context 'skill-tools entry point'
 $pesterModulePath = Assert-ReceiptFile -Receipt $receipts.pester -PathProperty 'modulePath' -HashProperty 'executableSha256' -InstallRoot $installRoot -Context 'Pester module'
 
