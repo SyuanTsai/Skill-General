@@ -68,6 +68,50 @@ function Get-RequiredProperty {
     return $Object.PSObject.Properties[$Name].Value
 }
 
+function Get-ValidationSecurityAction {
+    param(
+        [Parameter(Mandatory = $true)] $Policy,
+        [Parameter(Mandatory = $true)][string] $Severity,
+        [Parameter(Mandatory = $true)][string] $Context
+    )
+    $matches = @($Policy.security.severity | Where-Object { $_.level -ceq $Severity })
+    if ($matches.Count -ne 1 -or $matches[0].action -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$matches[0].action)) {
+        throw "$Context has no unique central action for severity '$Severity'."
+    }
+    return [string]$matches[0].action
+}
+
+function ConvertTo-ValidationSecurityFinding {
+    param(
+        [Parameter(Mandatory = $true)] $Policy,
+        [Parameter(Mandatory = $true)][string] $ReportedSeverity,
+        [Parameter(Mandatory = $true)][string] $Stage,
+        [Parameter(Mandatory = $true)][string] $SkillId,
+        [Parameter(Mandatory = $true)] $Issue
+    )
+    $severityAliases = [ordered]@{
+        critical = 'critical'
+        high = 'high'
+        medium = 'medium'
+        low = 'low'
+        informational = 'informational'
+        info = 'informational'
+    }
+    $severityKey = $ReportedSeverity.ToLowerInvariant()
+    if (-not $severityAliases.Contains($severityKey)) {
+        throw "$Stage returned unsupported severity '$ReportedSeverity' for '$SkillId'."
+    }
+    $severity = [string]$severityAliases[$severityKey]
+    $action = Get-ValidationSecurityAction -Policy $Policy -Severity $severity -Context $Stage
+    [pscustomobject][ordered]@{
+        stage = $Stage
+        skillId = $SkillId
+        severity = $severity
+        action = $action
+        issue = $Issue
+    }
+}
+
 function Test-PathEqual {
     param([string] $Left, [string] $Right)
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
@@ -436,10 +480,18 @@ foreach ($entry in @($adapter.authority.files)) {
     $authorityFiles += [pscustomobject][ordered]@{ path = [string]$entry.path; sha256 = $fileHash }
 }
 $requiredAuthorityFiles = @(
+    'docs/standards/README.md',
+    'docs/standards/managed-skill-lifecycle.md',
+    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json',
     'docs/standards/skill-repository-standard.md',
+    'docs/standards/skill-repository-review-matrix.md',
+    'docs/standards/upstream-interoperability.md',
+    'docs/standards/validation-security-gate.json',
     'docs/standards/validation-toolchain.json',
+    'docs/standards/schemas/validation-security-gate-v1.schema.json',
     'docs/standards/schemas/source-inventory-v2.schema.json',
     'docs/standards/schemas/openai-agent-metadata.schema.json',
+    'scripts/Invoke-StandardAuthorityGate.ps1',
     'scripts/Resolve-StandardValidationTool.ps1',
     'scripts/Resolve-PythonWheelClosure.py'
 )
@@ -454,6 +506,12 @@ if ($standardText -cnotmatch '(?m)^# Agent Skill Repository Standard v1$' -or $s
 }
 $resolverPath = Join-Path $authorityRoot 'scripts/Resolve-StandardValidationTool.ps1'
 $policyPath = Join-Path $authorityRoot 'docs/standards/validation-toolchain.json'
+$authorityGatePath = Join-Path $authorityRoot 'scripts/Invoke-StandardAuthorityGate.ps1'
+$validationSecurityGatePath = Join-Path $authorityRoot 'docs/standards/validation-security-gate.json'
+. $authorityGatePath -DefineFunctionsOnly
+$validationSecurityGate = Assert-AuthorityValidationSecurityGate `
+    -Policy (Read-JsonFile -Path $validationSecurityGatePath -Context 'Validation/security gate policy')
+$validationSecurityGatePolicySha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $validationSecurityGatePath).Hash.ToLowerInvariant()
 
 $policyReceiptPath = Join-Path $runRoot 'policy.json'
 & $resolverPath -PolicyPath $policyPath -ValidatePolicyOnly -OutputPath $policyReceiptPath | Out-Host
@@ -494,16 +552,30 @@ $skillToolsNodePath = Assert-ReceiptFile -Receipt $receipts.'skill-tools' -PathP
 $skillToolsEntryPoint = Assert-ReceiptFile -Receipt $receipts.'skill-tools' -PathProperty 'entryPointPath' -HashProperty 'entryPointSha256' -InstallRoot $installRoot -Context 'skill-tools entry point'
 $pesterModulePath = Assert-ReceiptFile -Receipt $receipts.pester -PathProperty 'modulePath' -HashProperty 'executableSha256' -InstallRoot $installRoot -Context 'Pester module'
 
+$securityFindings = @()
+$securityBlockers = @()
+$securityHumanReview = @()
+$securityTracked = @()
 $staticReports = @()
 $staticFindingCount = 0
-$severityMap = [ordered]@{
-    critical = 'critical'
-    high = 'high'
-    medium = 'medium'
-    low = 'low'
-    informational = 'informational'
-    info = 'informational'
+$skillValidatorReports = @()
+$skillToolsReports = @()
+
+# Stage 3: Package Validation. This must complete before any SkillSpector scan.
+foreach ($skillId in $skillIds) {
+    $skillRoot = Join-Path $repoRoot "skills/$skillId"
+    $skillIntegrity = @($integrityReport.skills | Where-Object { $_.skillId -ceq $skillId })
+    if ($skillIntegrity.Count -ne 1) { throw "Candidate integrity evidence is ambiguous for '$skillId'." }
+    $expectedInventoryPaths = @($skillIntegrity[0].files | ForEach-Object { [string]$_.path })
+    $validatorOutput = Invoke-NativeChecked -Command $skillValidatorPath -Arguments @('-o', 'json', 'validate', 'structure', '--allow-dirs=agents', $skillRoot) -Context "skill-validator package validation for $skillId" -DiagnosticRoot $runRoot
+    $validatorReportPath = Join-Path $runRoot "skill-validator-$skillId.json"
+    [IO.File]::WriteAllText($validatorReportPath, $validatorOutput + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    $validatorReport = Read-JsonFile -Path $validatorReportPath -Context "skill-validator package validation report for $skillId"
+    Assert-SkillValidatorReport -Report $validatorReport -SkillRoot $skillRoot -ExpectedInventoryPaths $expectedInventoryPaths -SkillId $skillId
+    $skillValidatorReports += [pscustomobject][ordered]@{ skillId = $skillId; report = [IO.Path]::GetFileName($validatorReportPath) }
 }
+
+# Stage 4: SkillSpector Static.
 foreach ($skillId in $skillIds) {
     $skillRoot = Join-Path $repoRoot "skills/$skillId"
     $skillIntegrity = @($integrityReport.skills | Where-Object { $_.skillId -ceq $skillId })
@@ -518,17 +590,25 @@ foreach ($skillId in $skillIds) {
         if ($reportedSeverity -isnot [string] -or [string]::IsNullOrWhiteSpace($reportedSeverity)) {
             throw "SkillSpector returned an issue without severity for '$skillId'."
         }
-        $severityKey = $reportedSeverity.ToLowerInvariant()
-        if (-not $severityMap.Contains($severityKey)) { throw "SkillSpector returned unsupported severity '$reportedSeverity' for '$skillId'." }
-        $severity = $severityMap[$severityKey]
+        $finding = ConvertTo-ValidationSecurityFinding `
+            -Policy $validationSecurityGate `
+            -ReportedSeverity ([string]$reportedSeverity) `
+            -Stage 'skillspector-static' `
+            -SkillId $skillId `
+            -Issue $issue
+        $securityFindings += $finding
         $staticFindingCount++
-        if (@($adapter.security.blockSeverities) -ccontains $severity) {
-            throw "SkillSpector blocking $severity finding for '$skillId'; no suppression or exception is approved."
+        switch ([string]$finding.action) {
+            'BLOCK' { $securityBlockers += $finding }
+            'HUMAN_REVIEW_REQUIRED' { $securityHumanReview += $finding; $securityBlockers += $finding }
+            'RECORD_AND_TRACK' { $securityTracked += $finding }
+            default { throw "Central validation/security gate returned unsupported action '$($finding.action)'." }
         }
     }
     $staticReports += [pscustomobject][ordered]@{ skillId = $skillId; report = [IO.Path]::GetFileName($reportPath); findings = $issues.Count; files = $expectedInventoryPaths.Count }
 }
 
+# Stage 5: Repository Tests.
 $repositoryReportPath = Join-Path $runRoot 'repository-validation.json'
 $repositoryJson = & (Join-Path $repoRoot 'scripts/Test-SkillGeneral.ps1') -RepositoryRoot $repoRoot -OutputPath $repositoryReportPath | Select-Object -Last 1
 $repositoryReport = $repositoryJson | ConvertFrom-Json -Depth 100
@@ -553,22 +633,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Whitespace validation failed for the candidate event range.`n$($diffOutput -join [Environment]::NewLine)"
 }
 
-$skillValidatorReports = @()
-$skillToolsReports = @()
 foreach ($skillId in $skillIds) {
     $skillRoot = Join-Path $repoRoot "skills/$skillId"
     $expectedInventoryPaths = @(
         @($repositoryReport.skills | Where-Object { $_.skillId -ceq $skillId })[0].files |
             ForEach-Object { [string]$_.path }
     )
-    $validatorOutput = Invoke-NativeChecked -Command $skillValidatorPath -Arguments @('-o', 'json', 'validate', 'structure', '--allow-dirs=agents', $skillRoot) -Context "skill-validator for $skillId" -DiagnosticRoot $runRoot
-    $validatorReportPath = Join-Path $runRoot "skill-validator-$skillId.json"
-    [IO.File]::WriteAllText($validatorReportPath, $validatorOutput + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    $validatorReport = Read-JsonFile -Path $validatorReportPath -Context "skill-validator report for $skillId"
-    Assert-SkillValidatorReport -Report $validatorReport -SkillRoot $skillRoot -ExpectedInventoryPaths $expectedInventoryPaths -SkillId $skillId
-    $skillValidatorReports += [pscustomobject][ordered]@{ skillId = $skillId; report = [IO.Path]::GetFileName($validatorReportPath) }
-
-    $toolsOutput = Invoke-NativeChecked -Command $skillToolsNodePath -Arguments @($skillToolsEntryPoint, 'check', $skillRoot, '--format', 'sarif', '--fail-on', 'warning', '--min-score', '91') -Context "skill-tools for $skillId" -DiagnosticRoot $runRoot
+    $toolsOutput = Invoke-NativeChecked -Command $skillToolsNodePath -Arguments @($skillToolsEntryPoint, 'check', $skillRoot, '--format', 'sarif', '--fail-on', 'warning', '--min-score', '91') -Context "skill-tools repository test for $skillId" -DiagnosticRoot $runRoot
     $toolsReportPath = Join-Path $runRoot "skill-tools-$skillId.sarif.json"
     [IO.File]::WriteAllText($toolsReportPath, $toolsOutput + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     $toolsReport = Read-JsonFile -Path $toolsReportPath -Context "skill-tools report for $skillId"
@@ -611,10 +682,18 @@ if ($semanticTriggered) {
             if ($reportedSeverity -isnot [string] -or [string]::IsNullOrWhiteSpace($reportedSeverity)) {
                 throw "SkillSpector semantic scan returned an issue without severity for '$skillId'."
             }
-            $severityKey = $reportedSeverity.ToLowerInvariant()
-            if (-not $severityMap.Contains($severityKey)) { throw "SkillSpector semantic scan returned unsupported severity '$reportedSeverity' for '$skillId'." }
-            if (@($adapter.security.blockSeverities) -ccontains $severityMap[$severityKey]) {
-                throw "SkillSpector semantic scan returned blocking severity '$reportedSeverity' for '$skillId'."
+            $finding = ConvertTo-ValidationSecurityFinding `
+                -Policy $validationSecurityGate `
+                -ReportedSeverity ([string]$reportedSeverity) `
+                -Stage 'conditional-semantic-scan' `
+                -SkillId $skillId `
+                -Issue $issue
+            $securityFindings += $finding
+            switch ([string]$finding.action) {
+                'BLOCK' { $securityBlockers += $finding }
+                'HUMAN_REVIEW_REQUIRED' { $securityHumanReview += $finding; $securityBlockers += $finding }
+                'RECORD_AND_TRACK' { $securityTracked += $finding }
+                default { throw "Central validation/security gate returned unsupported action '$($finding.action)'." }
             }
         }
         $semanticReports += [pscustomobject][ordered]@{ skillId = $skillId; report = [IO.Path]::GetFileName($semanticPath); findings = $semanticIssues.Count }
@@ -631,6 +710,12 @@ $summary = [pscustomobject][ordered]@{
         archiveSha256 = $archiveHash
         files = $authorityFiles
     }
+    canonicalGate = [ordered]@{
+        policy = [string]$validationSecurityGate.policy
+        policyPath = 'docs/standards/validation-security-gate.json'
+        policySha256 = $validationSecurityGatePolicySha256
+        stageIds = @($validationSecurityGate.stages | ForEach-Object { [string]$_.id })
+    }
     candidate = [ordered]@{
         repository = 'https://github.com/SyuanTsai/Skill-General.git'
         commit = $candidateCommit
@@ -645,19 +730,31 @@ $summary = [pscustomobject][ordered]@{
         }
     })
     skills = @($repositoryReport.skills | ForEach-Object { [pscustomobject][ordered]@{ skillId = $_.skillId; contentSha256 = $_.contentSha256 } })
+    security = [ordered]@{
+        result = if (@($securityBlockers).Count -eq 0) { 'passed' } else { 'blocked' }
+        findings = $securityFindings
+        humanReviewRequired = $securityHumanReview
+        blockingFindings = $securityBlockers
+        trackedFindings = $securityTracked
+    }
     stages = [ordered]@{
+        controlledAcquisition = 'passed'
         integrityVerification = 'passed'
+        packageValidation = $skillValidatorReports
         skillspectorStatic = $staticReports
-        repositoryValidation = 'passed'
-        skillValidator = $skillValidatorReports
-        skillTools = $skillToolsReports
-        pester = [ordered]@{ result = 'passed'; total = [int]$pesterResult.TotalCount; passed = [int]$pesterResult.PassedCount; skipped = [int]$pesterResult.SkippedCount }
-        semantic = [ordered]@{ triggered = $semanticTriggered; reports = $semanticReports }
+        repositoryTests = [ordered]@{
+            repositoryValidation = 'passed'
+            skillTools = $skillToolsReports
+            pester = [ordered]@{ result = 'passed'; total = [int]$pesterResult.TotalCount; passed = [int]$pesterResult.PassedCount; skipped = [int]$pesterResult.SkippedCount }
+        }
+        conditionalSemanticScan = [ordered]@{ triggered = $semanticTriggered; reports = $semanticReports }
         aiReview = 'required-before-release'
-        humanReleaseApproval = 'required-for-immutable-candidate'
+        humanApproval = 'required-before-release'
+        publishOrInstall = 'blocked-until-approved-release'
+        postInstallVerification = 'required-after-install'
     }
     deviations = 'None'
-    result = 'passed'
+    result = if (@($securityBlockers).Count -eq 0) { 'passed' } else { 'blocked' }
 }
 $summaryJson = $summary | ConvertTo-Json -Depth 100
 $summaryPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -673,5 +770,13 @@ if (-not [string]::IsNullOrWhiteSpace($summaryDirectory)) {
 }
 if (Test-Path -LiteralPath $summaryPath) { throw 'Conformance output path already exists; evidence must not overwrite prior content.' }
 [IO.File]::WriteAllText($summaryPath, $summaryJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-Write-Host "Skill-General Standard v1 canonical validation passed. Evidence: $summaryPath"
+if (@($securityBlockers).Count -gt 0) {
+    Write-Host "Skill-General Standard v1 canonical validation blocked by the central security gate. Evidence: $summaryPath"
+}
+else {
+    Write-Host "Skill-General Standard v1 canonical validation passed. Evidence: $summaryPath"
+}
 $summaryJson
+if (@($securityBlockers).Count -gt 0) {
+    throw 'Canonical validation/security gate blocked the candidate; resolve central findings and obtain required Human Review before release or install.'
+}

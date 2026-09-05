@@ -45,32 +45,37 @@ Run the single local/CI entry point against a clean immutable candidate commit:
 pwsh -NoProfile -File ./scripts/Validate.ps1 -BaseCommit HEAD^
 ```
 
-The validator:
+The validator imports the verified central gate at `docs/standards/validation-security-gate.json` from the pinned authority snapshot. Local, pre-push, and CI execution use this same entry point and the same pass/block semantics. It:
 
-1. verifies the configured immutable Standard v1 authority archive, commit, bundle SHA-256, and authority file inventory before executing authority-derived code;
-2. resolves and freezes the complete latest-stable formal toolset through the verified central resolver;
-3. runs SkillSpector Static Scan against every source-inventory Skill;
-4. runs repository validation, `skill-validator`, and `skill-tools` against the exact same complete inventory;
-5. imports the resolved Pester module and runs conformance, repository, and domain regressions;
+1. performs Controlled Acquisition and binds one clean immutable candidate;
+2. performs Integrity Verification for the candidate, authority archive, and pinned authority files;
+3. performs Package Validation with `skill-validator` before any SkillSpector scan;
+4. runs SkillSpector Static against every source-inventory Skill;
+5. runs Repository Tests, `skill-tools`, Pester, conformance, and domain regressions against the same inventory;
 6. deterministically triggers fail-closed SkillSpector Semantic Scan for security-relevant Skill changes or static findings;
-7. emits machine-readable authority, candidate, tool, inventory, stage, deviation, and review-boundary evidence in a temporary artifacts directory.
+7. records the required AI Review and Human Approval boundaries before Publish / Install;
+8. records Post-install Verification as required evidence after an approved install;
+9. emits machine-readable authority, candidate, tool, inventory, security disposition, stage, deviation, and review-boundary evidence in a temporary artifacts directory.
+
+The canonical security disposition is also central: scanner failure, incomplete analysis, unparsable results, unknown severity, Critical, and High block; Medium requires Human Review and blocks release/install until disposition; Low and Informational findings are recorded and tracked.
 
 `scripts/Test-SkillGeneral.ps1` is a component diagnostic used by the canonical validator. It is not an alternative release gate.
 
 ## Development and release flow
 
-The repository follows the Standard v1 ordering:
+The repository follows the Standard v1 ordering defined by the central gate:
 
 ```text
-Controlled Candidate Acquisition
+Controlled Acquisition
 → Integrity Verification
-→ SkillSpector Static Security Scan
-→ Repository Validation
-→ Tests / Regression / Conformance
+→ Package Validation
+→ SkillSpector Static
+→ Repository Tests
 → Conditional SkillSpector Semantic Scan
 → AI Review
-→ Human Release Approval
-→ Publish Approved Immutable Release
+→ Human Approval
+→ Publish / Install
+→ Post-install Verification
 ```
 
 AI review cannot replace Human Release Approval. Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence.

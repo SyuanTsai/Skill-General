@@ -71,14 +71,16 @@ Describe 'Skill-General repository contract' {
             Should -Throw '*duplicate JSON property*'
     }
 
-    It 'rejects repository adapter security policy drift' {
+    It 'rejects a repository-local security policy fork' {
         $adapterPath = Join-Path $fixtureRoot 'config/standard-v1.json'
         $adapter = Get-Content -LiteralPath $adapterPath -Raw | ConvertFrom-Json
-        $adapter.security.suppressions = @('unreviewed')
+        $adapter | Add-Member -NotePropertyName security -NotePropertyValue ([pscustomobject]@{
+            blockSeverities = @('critical', 'high', 'medium')
+        })
         $adapter | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $adapterPath -Encoding utf8NoBOM
 
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw '*security policy is invalid*'
+            Should -Throw '*config/standard-v1.json has an invalid property set*'
     }
 
     It 'rejects unsorted source inventory entries' {

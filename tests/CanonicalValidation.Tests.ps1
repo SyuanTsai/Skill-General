@@ -47,17 +47,24 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match 'is backed by a reparse point'
     }
 
-    It 'freezes all four formal tools before the first Static Scan executes' {
-        @($script:Adapter.security.suppressions).Count | Should -Be 0
-        @($script:Adapter.security.exceptions).Count | Should -Be 0
+    It 'freezes all four formal tools and imports the central security gate before scanning' {
+        @($script:Adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
+        $script:Validator | Should -Match '\.\s+\$authorityGatePath -DefineFunctionsOnly'
+        $script:Validator | Should -Match 'Assert-AuthorityValidationSecurityGate'
+        $script:Validator | Should -Not -Match 'adapter\.security|blockSeverities|security\.(suppressions|exceptions)'
         $script:Validator | Should -Match "'skillspector' = 'NVIDIA/SkillSpector'"
         $script:Validator | Should -Match "'skill-validator' = 'github.com/agent-ecosystem/skill-validator/cmd/skill-validator'"
         $script:Validator | Should -Match "'skill-tools' = 'npm:skill-tools'"
         $script:Validator | Should -Match "'pester' = 'PowerShellGallery:Pester'"
 
         $freezeIndex = $script:Validator.IndexOf('foreach ($toolName in $expectedSources.Keys)')
+        $packageIndex = $script:Validator.IndexOf('skill-validator package validation for')
         $staticIndex = $script:Validator.IndexOf("'--no-llm'")
+        $repositoryIndex = $script:Validator.IndexOf('$repositoryReportPath')
         $staticIndex | Should -BeGreaterThan $freezeIndex
+        $packageIndex | Should -BeGreaterThan $freezeIndex
+        $staticIndex | Should -BeGreaterThan $packageIndex
+        $repositoryIndex | Should -BeGreaterThan $staticIndex
     }
 
     It 'discovers every formal package invocation from catalog source inventory' {
@@ -71,8 +78,11 @@ Describe 'Canonical Standard v1 validation adapter' {
 
     It 'keeps reports in the run artifacts root and records review boundaries' {
         $script:Validator | Should -Match ([regex]::Escape("Join-Path `$runRoot 'conformance-report.json'"))
+        $script:Validator | Should -Match 'canonicalGate = \[ordered\]@'
+        $script:Validator | Should -Match "policyPath = 'docs/standards/validation-security-gate.json'"
         $script:Validator | Should -Match "aiReview = 'required-before-release'"
-        $script:Validator | Should -Match "humanReleaseApproval = 'required-for-immutable-candidate'"
+        $script:Validator | Should -Match "humanApproval = 'required-before-release'"
+        $script:Validator | Should -Match "postInstallVerification = 'required-after-install'"
         $script:Validator | Should -Match "deviations = 'None'"
     }
 

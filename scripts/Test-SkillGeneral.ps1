@@ -458,9 +458,8 @@ if (Test-Path -LiteralPath (Join-Path $repoRoot '.agents/skills')) {
 }
 
 $adapter = Read-StrictJson -Path (Join-Path $repoRoot 'config/standard-v1.json')
-Assert-ExactPropertySet -Value $adapter -Expected @('schemaVersion', 'standardVersion', 'authority', 'security', 'deviations') -Context 'config/standard-v1.json'
+Assert-ExactPropertySet -Value $adapter -Expected @('schemaVersion', 'standardVersion', 'authority', 'deviations') -Context 'config/standard-v1.json'
 Assert-ExactPropertySet -Value $adapter.authority -Expected @('repository', 'commit', 'archiveUrl', 'archiveSha256', 'files') -Context 'config/standard-v1.json authority'
-Assert-ExactPropertySet -Value $adapter.security -Expected @('staticMode', 'blockSeverities', 'suppressions', 'exceptions') -Context 'config/standard-v1.json security'
 if (($adapter.schemaVersion -isnot [int] -and $adapter.schemaVersion -isnot [long]) -or [int64]$adapter.schemaVersion -ne 1 -or
     $adapter.standardVersion -isnot [string] -or $adapter.standardVersion -cne 'v1' -or
     $adapter.deviations -isnot [string] -or $adapter.deviations -cne 'None') {
@@ -474,10 +473,18 @@ if ($adapter.authority.repository -isnot [string] -or $adapter.authority.reposit
     throw 'config/standard-v1.json authority binding is invalid.'
 }
 $requiredAuthorityPaths = @(
+    'docs/standards/README.md',
+    'docs/standards/managed-skill-lifecycle.md',
+    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json',
     'docs/standards/schemas/openai-agent-metadata.schema.json',
     'docs/standards/schemas/source-inventory-v2.schema.json',
+    'docs/standards/schemas/validation-security-gate-v1.schema.json',
+    'docs/standards/skill-repository-review-matrix.md',
     'docs/standards/skill-repository-standard.md',
+    'docs/standards/upstream-interoperability.md',
+    'docs/standards/validation-security-gate.json',
     'docs/standards/validation-toolchain.json',
+    'scripts/Invoke-StandardAuthorityGate.ps1',
     'scripts/Resolve-PythonWheelClosure.py',
     'scripts/Resolve-StandardValidationTool.ps1'
 )
@@ -492,13 +499,6 @@ foreach ($file in @($adapter.authority.files)) {
         throw 'config/standard-v1.json authority file binding is invalid.'
     }
     $authorityPaths += [string]$file.path
-}
-if (@($adapter.security.blockSeverities).Count -ne 3 -or
-    (@($adapter.security.blockSeverities) -join "`n") -cne "critical`nhigh`nmedium" -or
-    $adapter.security.staticMode -isnot [string] -or $adapter.security.staticMode -cne 'no-llm' -or
-    $adapter.security.suppressions -isnot [array] -or @($adapter.security.suppressions).Count -ne 0 -or
-    $adapter.security.exceptions -isnot [array] -or @($adapter.security.exceptions).Count -ne 0) {
-    throw 'config/standard-v1.json security policy is invalid.'
 }
 
 $skillIds = @($inventory.skills | ForEach-Object {
