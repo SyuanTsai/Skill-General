@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "e5fe06bc500a2fb499d85e86dab423d02048e6d3",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/e5fe06bc500a2fb499d85e86dab423d02048e6d3",
-    "archiveSha256": "786000c3c1d0f30865aa3696811d03ba96f587eb4d7fcec1adec8bbaae1ff9f1",
+    "commit": "16c58ce2ae41450085000734c2ad32b319c69131",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/16c58ce2ae41450085000734c2ad32b319c69131",
+    "archiveSha256": "c54644820ddf6815614c0331c3ee4802cce3b93b0defc9685bfbe288b0be9f01",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "c339dffcadb945784372aecd3e44ba4cad18f419ee0fa7fd5db43b277d11b019"
+        "sha256": "7c9cedbae970b35a805faa1ff05c0f385e87de793d9e527d47fd3cb910608849"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -57,7 +57,7 @@
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
-        "sha256": "f78fe10b5443e8e5cd4fb2b66a215f8f1c5cd7aee87a05715c6bece4be20e30c"
+        "sha256": "1d62cc63a5e314de58d7b47eab2cc608e65cd55ec290d96fa60c09954ad50d76"
       },
       {
         "path": "scripts/Resolve-StandardValidationTool.ps1",
