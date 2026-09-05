@@ -264,8 +264,8 @@ function Assert-SkillToolsReport {
     $driverName = Get-RequiredProperty -Object $driver -Name 'name' -Context 'skill-tools SARIF driver'
     $rules = Get-RequiredProperty -Object $driver -Name 'rules' -Context 'skill-tools SARIF driver'
     $results = Get-RequiredProperty -Object $run -Name 'results' -Context 'skill-tools SARIF run'
-    if ($driverName -isnot [string] -or $driverName -cne 'skill-tools' -or $rules -isnot [array] -or @($rules).Count -le 0 -or
-        $results -isnot [array] -or @($results).Count -le 0) {
+    if ($driverName -isnot [string] -or $driverName -cne 'skill-tools' -or $rules -isnot [array] -or
+        $results -isnot [array]) {
         throw "skill-tools SARIF is incomplete for '$SkillId'."
     }
     $ruleById = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)

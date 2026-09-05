@@ -84,6 +84,20 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match ([regex]::Escape("'check', `$skillRoot, '--format', 'sarif'"))
     }
 
+    It 'accepts a clean skill-tools SARIF report with no findings' {
+        $start = $script:Validator.IndexOf('function Assert-SkillToolsReport')
+        $end = $script:Validator.IndexOf('function Assert-PathWithinRoot')
+        $start | Should -BeGreaterThan -1
+        $end | Should -BeGreaterThan $start
+        $skillToolsValidator = $script:Validator.Substring($start, $end - $start)
+        $skillToolsValidator | Should -Match '\$driverName -cne ''skill-tools'''
+        $skillToolsValidator | Should -Match '\$rules -isnot \[array\]'
+        $skillToolsValidator | Should -Match '\$results -isnot \[array\]'
+        $skillToolsValidator | Should -Not -Match '\$rules\)\.Count -le 0'
+        $skillToolsValidator | Should -Not -Match '\$results\)\.Count -le 0'
+        $skillToolsValidator | Should -Match 'skill-tools SARIF contains a malformed or error-level result'
+    }
+
     It 'keeps reports in the run artifacts root and records review boundaries' {
         $script:Validator | Should -Match ([regex]::Escape("Join-Path `$runRoot 'conformance-report.json'"))
         $script:Validator | Should -Match 'canonicalGate = \[ordered\]@'
