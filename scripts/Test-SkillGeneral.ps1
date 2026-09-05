@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
 #requires -Version 7.0
 
 [CmdletBinding()]
@@ -231,6 +233,8 @@ function Read-OpenAiMetadata {
 
     foreach ($line in $text.Split("`n")) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -cmatch '^# SPDX-FileCopyrightText: 2026 SyuanTsai$' -or
+            $line -cmatch '^# SPDX-License-Identifier: Apache-2\.0$') { continue }
         if ($line -cmatch '^\s*["'']') {
             throw "agents/openai.yaml for '$ExpectedSkillId' contains a quoted mapping key."
         }

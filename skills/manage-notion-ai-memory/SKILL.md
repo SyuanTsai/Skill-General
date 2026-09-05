@@ -2,6 +2,10 @@
 name: manage-notion-ai-memory
 description: Review, create, or update durable Notion memory and interruption-safe task Handoffs. Use when saved context, an explicit remember request, a reusable outcome, or a multi-stage or external-tool task risks context loss. Do not use for transient chat, bulk Notion changes, or Dropbox migration.
 ---
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 
 # Manage Notion AI Memory
 

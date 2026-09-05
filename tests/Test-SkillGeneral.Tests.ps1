@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
 Describe 'Skill-General repository contract' {
     BeforeAll {
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -154,6 +156,14 @@ Describe 'Skill-General repository contract' {
 
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
             Should -Throw '*policy*allow_implicit_invocation*'
+    }
+
+    It 'rejects comments outside the SPDX license header' {
+        $metadataPath = Join-Path $fixtureRoot 'skills/plan-production-change/agents/openai.yaml'
+        Add-Content -LiteralPath $metadataPath -Value '# unsupported comment'
+
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw '*unsupported or malformed syntax*'
     }
 
     It 'validates the final dependency before a following policy section' {

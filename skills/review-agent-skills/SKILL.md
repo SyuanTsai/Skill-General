@@ -2,6 +2,10 @@
 name: review-agent-skills
 description: Review Agent Skill packages for routing, instruction quality, resource organization, tool and safety boundaries, testability, and maintainability. Use for SKILL.md or Skill repository reviews; not ordinary application-code review.
 ---
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 
 # Review Agent Skills
 

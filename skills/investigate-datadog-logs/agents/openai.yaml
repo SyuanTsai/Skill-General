@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
 interface:
   display_name: "Investigate Datadog Logs"
   short_description: "Investigate Datadog logs and APM telemetry"

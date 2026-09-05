@@ -1,3 +1,7 @@
+<!--
+SPDX-FileCopyrightText: 2026 SyuanTsai
+SPDX-License-Identifier: Apache-2.0
+-->
 # Handoff operations
 
 Use a Handoff when work may lose context across time, tools, stages, environments, or conversations. About five minutes of elapsed work is a fallback for a missed risk signal, not the primary trigger.
