@@ -10,10 +10,10 @@ description: Investigate Datadog error logs and APM telemetry through a configur
 1. Use the configured Datadog connector before any general-purpose Browser tool.
 2. If the exact guide name is not already known from the current turn, list Datadog guides before loading one; do not guess its name.
 3. Load only the applicable connector guides:
-   - Logs, patterns, or field discovery: `datadog/logs`.
-   - Log counts, trends, or group-by analysis: `datadog/logs` and `datadog/ddsql` before calling the analysis tool.
-   - Raw spans or trace details: `datadog/traces`.
-   - Widget rendering or visualization: `datadog/visualizations`.
+   - Logs, patterns, or field discovery: the Datadog connector's `logs` guide.
+   - Log counts, trends, or group-by analysis: the Datadog connector's `logs` and `ddsql` guides before calling the analysis tool.
+   - Raw spans or trace details: the Datadog connector's `traces` guide.
+   - Widget rendering or visualization: the Datadog connector's `visualizations` guide.
    - An incident record used to establish telemetry scope: the connector's incident guide.
 4. If a guide recommends a capability that is not exposed, continue with the closest connector-supported path. Missing semantic log search alone is not a reason to use a Browser: build a concrete query only from supplied evidence, or request the minimum missing scope.
 
