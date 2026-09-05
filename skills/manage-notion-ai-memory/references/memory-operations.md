@@ -27,7 +27,7 @@ Capture only information likely to remain useful:
 - reusable knowledge; and
 - metadata for a directly related large source file.
 
-When the user explicitly asks to remember safe content, write it directly to `AI Memory` without asking again. Use:
+When the user explicitly asks to remember safe content, treat that request as the content confirmation and write it directly to `AI Memory`. Use:
 
 - `Status = Active`;
 - `Confidence = Confirmed`;
@@ -49,7 +49,7 @@ Do not present an inference as confirmed memory. Put potentially useful unconfir
 - `Status = Pending`;
 - `Confidence = Inferred`;
 - the evidence and source that support the inference; and
-- a clear statement of what remains unconfirmed.
+- an explicit statement of what remains unconfirmed.
 
 Do not use `Pending` as a Handoff lifecycle or work state. When missing information does not materially change the current task, continue with the smallest reasonable inference and keep the label. Ask the user only when the missing fact would change the result.
 

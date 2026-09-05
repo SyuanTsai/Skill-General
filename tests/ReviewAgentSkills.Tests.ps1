@@ -3,24 +3,19 @@
 Describe 'Review Agent Skills package contract' {
     BeforeAll {
         $repoRoot = Split-Path -Parent $PSScriptRoot
-        $skillRoot = Join-Path $repoRoot '.agents/skills/review-agent-skills'
-        $catalogPath = Join-Path $repoRoot 'catalog/skills-catalog.json'
+        $skillRoot = Join-Path $repoRoot 'skills/review-agent-skills'
+        $sourcePath = Join-Path $repoRoot 'catalog/source.json'
     }
 
-    # Scenario: A consumer opts into the Skill quality-review capability.
-    # Purpose: Keep the stable Skill ID, source path, and profile membership discoverable through the catalog.
-    It 'UnitT10_PublishesTheReviewerThroughAnOptInSkillQualityProfile' {
-        $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json -Depth 20
-        $skill = @($catalog.skills | Where-Object { $_.id -eq 'review-agent-skills' })
-        $profile = @($catalog.profiles | Where-Object { $_.id -eq 'skill-quality' })
+    # Scenario: A consumer resolves the Skill from the canonical source inventory.
+    # Purpose: Keep source ownership separate from centrally owned profile and compatibility policy.
+    It 'UnitT10_PublishesTheReviewerThroughTheCanonicalSourceInventory' {
+        $source = Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json -Depth 20
 
-        $skill.Count | Should -Be 1
-        $skill[0].source.sourceId | Should -Be 'general'
-        $skill[0].source.path | Should -Be '.agents/skills/review-agent-skills'
-        @($skill[0].profiles) | Should -Contain 'skill-quality'
-        $profile.Count | Should -Be 1
-        $profile[0].default | Should -Be $false
-        @($profile[0].includes) | Should -Contain 'review-agent-skills'
+        $source.sourceId | Should -Be 'general'
+        $source.skillsRoot | Should -Be 'skills'
+        @($source.skills) | Should -Contain 'review-agent-skills'
+        Test-Path -LiteralPath (Join-Path $repoRoot 'catalog/skills-catalog.json') | Should -BeFalse
     }
 
     # Scenario: The reviewer is selected for an Agent Skill review.

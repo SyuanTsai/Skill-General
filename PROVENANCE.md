@@ -6,11 +6,11 @@ SPDX-License-Identifier: Apache-2.0
 
 - Repository: [Skill-General](https://github.com/SyuanTsai/Skill-General)
 - Audited baseline: [`01ac760cff3e0722849e0705c7af44cfe19835ba`](https://github.com/SyuanTsai/Skill-General/tree/01ac760cff3e0722849e0705c7af44cfe19835ba)
-- Review date: 2026-09-04
+- Review date: 2026-09-05
 
 ## Confirmed current-tree facts
 
-The audited tree contains reusable Skills with agent metadata, references, fixtures, scripts, tests, catalog/version metadata, release documentation, and workflow configuration. A current-tree scan found no embedded credentials, tenant data, private operational configuration, or vendored third-party source code.
+The audited tree contains reusable Skills under the canonical `skills/` source root, agent metadata, references, fixtures, the schema-v2 source inventory, Standard v1 adapter and validator, tests, release documentation, and workflow configuration. A current-tree scan found no embedded credentials, tenant data, private operational configuration, or vendored third-party source code.
 
 Datadog and Notion are present as integration interfaces, safe-use instructions, references, catalog metadata, and test fixtures. They are not bundled SDKs or copied third-party implementations. The confirmed repository-authored current-tree scope is covered by Apache-2.0.
 

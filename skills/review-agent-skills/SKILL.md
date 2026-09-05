@@ -25,9 +25,9 @@ For `Review the changed payment-safety Skill`, compare the changed package with 
 
 ```text
 High — Missing confirmation before an external write
-File: .agents/skills/payment-safety/SKILL.md:24
+File: payment-safety Skill instruction, line 24
 Evidence: The publish step executes immediately after preview.
-Impact: A normal review request can mutate the remote system without approval.
+Impact: A normal review request can mutate the remote system before required human confirmation.
 Correction: Require explicit confirmation after preview and before publish.
 ```
 
