@@ -6,7 +6,7 @@ Use a Handoff when work may lose context across time, tools, stages, environment
 
 1. Derive a stable `Task Key`. Prefer a formal external key such as `jira:ATL-42`; otherwise use the host task or conversation identifier. Do not use a mutable title by itself. If neither stable identifier is available, do not invent a key or create a Handoff; report that uniqueness cannot be established and continue only work that does not depend on durable handoff state.
 2. Query `Context Handoffs` by exact `Task Key`.
-3. If none exists, create one main Handoff. The AI fills the four snapshot fields; never ask the user to fill the record.
+3. If none exists, create one main Handoff. The AI supplies the four snapshot fields; do not delegate field authorship to the user.
 4. If exactly one exists, reuse it. If its lifecycle is `Archived`, submit and integrate a `Lifecycle = Active` change before resuming.
 5. If more than one exists, do not create a third or silently delete or merge records. Preserve them and report the integrity conflict.
 
@@ -26,7 +26,7 @@ The main and change data-source schemas are defined exactly in `notion-memory-co
 
 - Give each independent scope or rule clause a stable local label. Keep changed clauses with content state `Superseded` and add the replacement as `Active`; these are content states, not Handoff lifecycle states.
 - Represent each `Current` workstream separately. Mark the focus, last verified checkpoint, and next safe action so a new session can resume without guessing.
-- In `Source`, distinguish formal authority from mutable working state. When the task is tracked in Jira, Jira is authoritative for its formal requirements, progress, and results; otherwise record the task's actual formal source. Include repository URL, Git commit or revision, worktree, and local/remote divergence when those facts can change the safe resume point.
+- In `Source`, distinguish formal authority from mutable working state. When the task is tracked in Jira, Jira is authoritative for its formal requirements, progress, and results; otherwise record the task's actual formal source. Include repository URL, Git commit or revision, worktree, and divergence between the local checkout and its remote when those facts can change the safe resume point.
 - A Git revision belongs inside `Source`; the prohibition on `Revision` applies to adding a custom Notion property or counter.
 - On every resume, re-read formal sources and revalidate mutable state instead of trusting a stale snapshot.
 
