@@ -78,5 +78,12 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
+
+        foreach ($context in @('repository-contract', 'skill-validator', 'skill-tools')) {
+            $pattern = "(?ms)^\s+{0}:\s+name:\s+{0}.*?needs:\s+- canonical-validation.*?{1}" -f `
+                [regex]::Escape($context),
+                [regex]::Escape("needs['canonical-validation'].result")
+            $workflow | Should -Match $pattern
+        }
     }
 }
