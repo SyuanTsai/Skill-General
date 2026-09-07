@@ -43,6 +43,14 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match 'baseCommit = \$resolvedBaseCommit'
     }
 
+    It 'scans the complete candidate tree when comparison base is absent' {
+        # Scenario: A push or manual run has no trusted event base.
+        # Purpose: Check every committed candidate path instead of only HEAD's parent.
+        $script:Validator | Should -Match 'emptyTreeObject = ''4b825dc642cb6eb9a060e54bf8d69288fbee4904'''
+        $script:Validator | Should -Match ([regex]::Escape("'diff'") + '.*' + [regex]::Escape("'--check'") + '.*' + [regex]::Escape('$emptyTreeObject') + '.*' + [regex]::Escape("'HEAD'"))
+        $script:Validator | Should -Not -Match 'diff-tree.*--root.*HEAD'
+    }
+
     It 'rejects reparse-backed resolved tool paths before execution' {
         $script:Validator | Should -Match 'Assert-NoReparseAncestors'
         $script:Validator | Should -Match 'Assert-NoReparseAncestors -Path \$path -Context "\$Context installed file"'
@@ -66,6 +74,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match "'skill-validator' = 'github.com/agent-ecosystem/skill-validator/cmd/skill-validator'"
         $script:Validator | Should -Match "'skill-tools' = 'npm:skill-tools'"
         $script:Validator | Should -Match "'pester' = 'PowerShellGallery:Pester'"
+        $script:Validator | Should -Match '\$resolverPath\s+-PolicyPath \$policyPath\s+-ToolName \$toolName\s+-Install\s+-InstallRoot \$installRoot\s+-ExpectedGoRuntimeVersion \$ExpectedGoRuntimeVersion'
 
         $freezeIndex = $script:Validator.IndexOf('foreach ($toolName in $expectedSources.Keys)')
         $packageIndex = $script:Validator.IndexOf('skill-validator package validation for')

@@ -11,6 +11,7 @@ param(
     ),
     [string] $AuthorityArchivePath,
     [string] $BaseCommit,
+    [string] $ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION,
     [string] $OutputPath
 )
 
@@ -561,7 +562,7 @@ $expectedSources = [ordered]@{
 $receipts = [ordered]@{}
 foreach ($toolName in $expectedSources.Keys) {
     $receiptPath = Join-Path $runRoot "receipt-$toolName.json"
-    & $resolverPath -PolicyPath $policyPath -ToolName $toolName -Install -InstallRoot $installRoot -OutputPath $receiptPath | Out-Host
+    & $resolverPath -PolicyPath $policyPath -ToolName $toolName -Install -InstallRoot $installRoot -ExpectedGoRuntimeVersion $ExpectedGoRuntimeVersion -OutputPath $receiptPath | Out-Host
     $receipt = Read-JsonFile -Path $receiptPath -Context "$toolName resolver receipt"
     if ($receipt.toolName -cne $toolName -or $receipt.source -cne $expectedSources[$toolName] -or
         $receipt.channel -cne 'latest-stable' -or $receipt.frozenForRun -ne $true -or
@@ -656,7 +657,11 @@ $diffArguments = if (-not [string]::IsNullOrWhiteSpace($BaseCommit)) {
     @('-C', $repoRoot, 'diff', '--check', "$BaseCommit...HEAD")
 }
 else {
-    @('-C', $repoRoot, 'diff-tree', '--check', '--root', '-r', 'HEAD')
+    # A missing event base must validate the complete committed candidate,
+    # not only the final commit. All supported GitHub repositories use the
+    # SHA-1 object format, whose canonical empty tree object is stable.
+    $emptyTreeObject = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+    @('-C', $repoRoot, 'diff', '--check', $emptyTreeObject, 'HEAD')
 }
 $diffOutput = @(& $gitPath @diffArguments 2>&1)
 if ($LASTEXITCODE -ne 0) {
