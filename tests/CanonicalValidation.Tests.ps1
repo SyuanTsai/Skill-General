@@ -66,6 +66,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match "'skill-validator' = 'github.com/agent-ecosystem/skill-validator/cmd/skill-validator'"
         $script:Validator | Should -Match "'skill-tools' = 'npm:skill-tools'"
         $script:Validator | Should -Match "'pester' = 'PowerShellGallery:Pester'"
+        $script:Validator | Should -Match '\$resolverPath\s+-PolicyPath \$policyPath\s+-ToolName \$toolName\s+-Install\s+-InstallRoot \$installRoot\s+-ExpectedGoRuntimeVersion \$ExpectedGoRuntimeVersion'
 
         $freezeIndex = $script:Validator.IndexOf('foreach ($toolName in $expectedSources.Keys)')
         $packageIndex = $script:Validator.IndexOf('skill-validator package validation for')
