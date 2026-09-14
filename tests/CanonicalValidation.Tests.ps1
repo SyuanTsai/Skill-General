@@ -75,6 +75,10 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match 'foreach \(\$result in \$results\)'
     }
 
+    It 'keeps repository Pester child output JSON-only' {
+        $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output None -PassThru 6>\$null'
+    }
+
     It 'uses the P02 central runner as the only stage and severity orchestrator' {
         $script:Validator | Should -Match 'Invoke-StandardValidation\.ps1'
         $script:Validator | Should -Match '-DevelopmentHarness'
