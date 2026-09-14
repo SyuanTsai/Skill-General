@@ -69,6 +69,12 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match 'Invoke-Resolver -PowerShellPath \$pwshPath'
     }
 
+    It 'expands collection-valued package reports before validating each result' {
+        $script:Validator | Should -Match 'return \$Object\.PSObject\.Properties\[\$Name\]\.Value'
+        $script:Validator | Should -Not -Match 'return ,\$Object\.PSObject\.Properties\[\$Name\]\.Value'
+        $script:Validator | Should -Match 'foreach \(\$result in \$results\)'
+    }
+
     It 'uses the P02 central runner as the only stage and severity orchestrator' {
         $script:Validator | Should -Match 'Invoke-StandardValidation\.ps1'
         $script:Validator | Should -Match '-DevelopmentHarness'

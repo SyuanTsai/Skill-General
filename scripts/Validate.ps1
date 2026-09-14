@@ -310,7 +310,7 @@ function Assert-FileIdentity {
 function Get-Property {
     param([Parameter(Mandatory = $true)] $Object, [Parameter(Mandatory = $true)][string] $Name, [Parameter(Mandatory = $true)][string] $Context)
     if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { throw "$Context is missing '$Name'." }
-    return ,$Object.PSObject.Properties[$Name].Value
+    return $Object.PSObject.Properties[$Name].Value
 }
 function Read-Json {
     param([Parameter(Mandatory = $true)][string] $Path, [Parameter(Mandatory = $true)][string] $Context)
