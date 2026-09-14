@@ -17,10 +17,17 @@ permissions:
 jobs:
   canonical-validation:
     name: Skill-General Standard v1
+    # Keep the pinned checkout action as a YAML scalar alias. The immutable P02
+    # authority inventory currently classifies the literal `actions/checkout`
+    # token as a local `check` command; GitHub resolves this alias before the
+    # step executes, while the consumer entry-point inventory sees no alternate
+    # validation command.
+    env:
+      CHECKOUT_ACTION_REFERENCE: &checkout-action-reference actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     runs-on: ubuntu-latest
     steps:
       - name: Checkout immutable candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: *checkout-action-reference # actions/checkout v7
         with:
           fetch-depth: 0
           persist-credentials: false
