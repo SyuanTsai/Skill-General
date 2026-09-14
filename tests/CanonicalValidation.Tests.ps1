@@ -106,6 +106,8 @@ Describe 'Canonical Standard v1 validation adapter' {
     It 'keeps generated adapter and evidence roots outside the candidate' {
         $script:Validator | Should -Match 'Assert-OutsideRoot -Path \$artifactsRootPath -Root \$repoRoot'
         $script:Validator | Should -Match 'trustedRoot'
+        $script:Validator | Should -Match 'sgv1-resolved-tools-\$runId'
+        $script:Validator | Should -Match 'Assert-NoReparseAncestors -Path \$resolvedToolsRoot'
         $script:Validator | Should -Match 'Assert-PathWithinRoot'
         $script:Validator | Should -Match 'OutputPath'
         $script:Validator | Should -Match '\(\(Test-Path -LiteralPath \$trustedRoot\) -or \(Test-Path -LiteralPath \$candidateExtractRoot\)\)'

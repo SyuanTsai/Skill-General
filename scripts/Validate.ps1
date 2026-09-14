@@ -663,11 +663,17 @@ try {
     if ((Test-Path -LiteralPath $trustedRoot) -or (Test-Path -LiteralPath $candidateExtractRoot)) { throw 'Run-owned temporary root unexpectedly exists.' }
     [void](New-Item -ItemType Directory -Path $trustedRoot -Force)
     [void](New-Item -ItemType Directory -Path $candidateExtractRoot -Force)
+    $resolvedToolsRoot = Join-Path ([IO.Path]::GetTempPath()) "sgv1-resolved-tools-$runId"
+    if (Test-Path -LiteralPath $resolvedToolsRoot) { throw 'Run-owned resolved-tools path unexpectedly exists.' }
+    [void](New-Item -ItemType Directory -Path $resolvedToolsRoot -Force)
     Assert-OutsideRoot -Path $trustedRoot -Root $repoRoot -Context 'Trusted tool root'
     Assert-OutsideRoot -Path $trustedRoot -Root $artifactsRootPath -Context 'Trusted tool root'
     Assert-OutsideRoot -Path $candidateExtractRoot -Root $artifactsRootPath -Context 'Candidate snapshot root'
+    Assert-OutsideRoot -Path $resolvedToolsRoot -Root $repoRoot -Context 'Resolved tools root'
+    Assert-OutsideRoot -Path $resolvedToolsRoot -Root $artifactsRootPath -Context 'Resolved tools root'
     Assert-NoReparseAncestors -Path $trustedRoot -Context 'Trusted tool root'
     Assert-NoReparseAncestors -Path $candidateExtractRoot -Context 'Candidate snapshot root'
+    Assert-NoReparseAncestors -Path $resolvedToolsRoot -Context 'Resolved tools root'
 
     $candidateArchivePath = Join-Path $runRoot 'candidate.zip'
     & $gitPath -C $repoRoot archive --format=zip "--prefix=candidate-$candidateCommit/" "--output=$candidateArchivePath" $candidateCommit
@@ -708,8 +714,6 @@ try {
     $centralRunnerPath = Join-Path $authorityRoot 'scripts/Invoke-StandardValidation.ps1'
     $upstreamAdapterPath = Join-Path $authorityRoot 'scripts/Validate-UpstreamAdapter.ps1'
     $upstreamPolicyPath = Join-Path $authorityRoot 'docs/standards/upstream-adapter.json'
-    $resolvedToolsRoot = Join-Path $trustedRoot 'resolved-tools'
-    [void](New-Item -ItemType Directory -Path $resolvedToolsRoot -Force)
     $policyReceiptPath = Join-Path $runRoot 'policy.json'
     Invoke-Resolver -PowerShellPath $pwshPath -ResolverPath $resolverPath -Arguments @('-PolicyPath', $policyPath, '-ValidatePolicyOnly', '-OutputPath', $policyReceiptPath)
     $policyReceipt = Read-JsonFile -Path $policyReceiptPath -Context 'Validation tool policy receipt'
