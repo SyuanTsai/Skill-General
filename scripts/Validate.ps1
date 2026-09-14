@@ -798,7 +798,7 @@ try {
         '-TrustedToolRoot', $trustedRoot,
         '-DevelopmentHarness'
     )
-    & $centralRunnerPath @centralRunnerArgs
+    & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs
     $centralExitCode = $LASTEXITCODE
     exit $centralExitCode
 }

@@ -72,6 +72,7 @@ Describe 'Canonical Standard v1 validation adapter' {
     It 'uses the P02 central runner as the only stage and severity orchestrator' {
         $script:Validator | Should -Match 'Invoke-StandardValidation\.ps1'
         $script:Validator | Should -Match '-DevelopmentHarness'
+        $script:Validator | Should -Match '& \$pwshPath -NoProfile -NonInteractive -File \$centralRunnerPath @centralRunnerArgs'
         $script:Validator | Should -Match 'standard-validation-adapter\.json'
         $script:Validator | Should -Match 'packageAdapter'
         $script:Validator | Should -Match 'skillValidator'
