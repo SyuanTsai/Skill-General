@@ -37,8 +37,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Match '^[0-9a-f]{40}$'
-        $adapter.authority.archiveSha256 | Should -Match '^[0-9a-f]{64}$'
+        $adapter.authority.commit | Should -Be 'a403abdf038a3346d775431a6908a71cc3d35a5b'
+        $adapter.authority.archiveSha256 | Should -Be '17154929fadfa63487263db1efcb78f4948195af9c11c25a66432eff3411b2d3'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -54,19 +54,22 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($adapter.authority.files.path) | Should -Contain 'scripts/Invoke-StandardAuthorityGate.ps1'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-StandardValidationTool.ps1'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-PythonWheelClosure.py'
+        @($adapter.authority.files.path) | Should -Contain 'scripts/Invoke-StandardValidation.ps1'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/standard-validation-contract-v1.json'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-validation-adapter-v1.schema.json'
         @($adapter.authority.files | Where-Object { $_.sha256 -notmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
-        $adapter.deviations | Should -Be 'None'
+        $adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
     }
 
     It 'exposes one canonical validator for local and CI execution' {
         Test-Path -LiteralPath $script:CanonicalValidatorPath -PathType Leaf | Should -BeTrue
         $validator = Get-Content -LiteralPath $script:CanonicalValidatorPath -Raw
-        $validator | Should -Match 'Test-SkillGeneral\.ps1'
-        $validator | Should -Match 'Resolve-StandardValidationTool\.ps1'
-        $validator | Should -Match 'skillspector'
-        $validator | Should -Match 'skill-validator'
-        $validator | Should -Match 'skill-tools'
-        $validator | Should -Match 'Invoke-Pester'
+        $validator | Should -Match 'Invoke-StandardValidation\.ps1'
+        $validator | Should -Match '-DevelopmentHarness'
+        $validator | Should -Match 'standard-validation-adapter\.json'
+        $validator | Should -Match 'repository-test-general'
+        $validator | Should -Match 'repository-test-pester'
+        $validator | Should -Not -Match 'deviations\s*='
     }
 
     It 'routes CI through the canonical validator without a second installer policy' {
@@ -85,5 +88,6 @@ Describe 'Skill-General Standard v1 reference implementation' {
                 [regex]::Escape("needs['canonical-validation'].result")
             $workflow | Should -Match $pattern
         }
+        $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'
     }
 }

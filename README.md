@@ -57,17 +57,17 @@ Run the single local/CI entry point against a clean immutable candidate commit:
 pwsh -NoProfile -File ./scripts/Validate.ps1 -BaseCommit HEAD^
 ```
 
-The validator imports the verified central gate at `docs/standards/validation-security-gate.json` from the pinned authority snapshot. Local, pre-push, and CI execution use this same entry point and the same pass/block semantics. It:
+`scripts/Validate.ps1` binds the exact P02 authority archive and frozen tool receipts, creates a declarative development-harness adapter, and invokes the central `scripts/Invoke-StandardValidation.ps1` runner from that authority snapshot. Local, pre-push, and CI execution use this same entry point and the same pass/block semantics. It:
 
 1. performs Controlled Acquisition and binds one clean immutable candidate;
 2. performs Integrity Verification for the candidate, authority archive, and pinned authority files;
-3. performs Package Validation with `skill-validator` before any SkillSpector scan;
-4. runs SkillSpector Static against every source-inventory Skill;
-5. runs Repository Tests, `skill-tools`, Pester, conformance, and domain regressions against the same inventory;
+3. performs the optional upstream package-adapter check, then runs both `skill-validator` and `skill-tools` for every active source-inventory Skill before any SkillSpector scan;
+4. runs SkillSpector Static once against every active Skill in the same read-only candidate snapshot;
+5. runs Repository Tests, `Test-SkillGeneral.ps1`, Pester, conformance, and domain regressions only after Static passes;
 6. deterministically triggers fail-closed SkillSpector Semantic Scan for security-relevant Skill changes or static findings;
 7. records the required AI Review and Human Approval boundaries before Publish / Install;
 8. records Post-install Verification as required evidence after an approved install;
-9. emits machine-readable authority, candidate, tool, inventory, security disposition, stage, deviation, and review-boundary evidence in a temporary artifacts directory.
+9. emits the central machine-readable authority, candidate, tool, inventory, security disposition, stage, and review-boundary evidence in a temporary artifacts directory. A development-harness PASS is validation evidence only; it is not release eligibility or Human Release Approval.
 
 The canonical security disposition is also central: scanner failure, incomplete analysis, unparsable results, unknown severity, Critical, and High block; Medium requires Human Review and blocks release/install until disposition; Low and Informational findings are recorded and tracked.
 
@@ -75,12 +75,13 @@ The canonical security disposition is also central: scanner failure, incomplete 
 
 ## Development and release flow
 
-The repository follows the Standard v1 ordering defined by the central gate:
+The repository follows the Standard v1 ordering defined by the central runner:
 
 ```text
 Controlled Acquisition
 → Integrity Verification
-→ Package Validation
+→ Package Adapter
+→ skill-validator + skill-tools for every active Skill
 → SkillSpector Static
 → Repository Tests
 → Conditional SkillSpector Semantic Scan

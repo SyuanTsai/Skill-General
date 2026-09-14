@@ -22,6 +22,15 @@ Describe 'Skill-General repository contract' {
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
     }
 
+    It 'accepts an immutable source snapshot without Git metadata' {
+        $snapshotRoot = Join-Path $TestDrive "snapshot-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $snapshotRoot | Out-Null
+        Copy-Item -LiteralPath (Join-Path $fixtureRoot 'catalog') -Destination $snapshotRoot -Recurse
+        Copy-Item -LiteralPath (Join-Path $fixtureRoot 'skills') -Destination $snapshotRoot -Recurse
+
+        { & $script:ValidatorPath -RepositoryRoot $snapshotRoot -ReadOnlySnapshot } | Should -Not -Throw
+    }
+
     It 'produces deterministic per-Skill content hashes' {
         $first = & $script:ValidatorPath -RepositoryRoot $fixtureRoot | Select-Object -Last 1 | ConvertFrom-Json
         $second = & $script:ValidatorPath -RepositoryRoot $fixtureRoot | Select-Object -Last 1 | ConvertFrom-Json
@@ -73,16 +82,11 @@ Describe 'Skill-General repository contract' {
             Should -Throw '*duplicate JSON property*'
     }
 
-    It 'rejects a repository-local security policy fork' {
-        $adapterPath = Join-Path $fixtureRoot 'config/standard-v1.json'
-        $adapter = Get-Content -LiteralPath $adapterPath -Raw | ConvertFrom-Json
-        $adapter | Add-Member -NotePropertyName security -NotePropertyValue ([pscustomobject]@{
-            blockSeverities = @('critical', 'high', 'medium')
-        })
-        $adapter | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $adapterPath -Encoding utf8NoBOM
-
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw '*config/standard-v1.json has an invalid property set*'
+    It 'keeps authority and security policy outside the domain inventory diagnostic' {
+        $validator = Get-Content -LiteralPath $script:ValidatorPath -Raw
+        $validator | Should -Not -Match 'standard-v1\.json'
+        $validator | Should -Not -Match 'deviations'
+        $validator | Should -Not -Match 'security\.blockSeverities|Get-ValidationSecurityAction'
     }
 
     It 'rejects unsorted source inventory entries' {

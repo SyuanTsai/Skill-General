@@ -5,7 +5,8 @@
 [CmdletBinding()]
 param(
     [string] $RepositoryRoot,
-    [string] $OutputPath
+    [string] $OutputPath,
+    [switch] $ReadOnlySnapshot
 )
 
 Set-StrictMode -Version Latest
@@ -339,7 +340,8 @@ function Read-OpenAiMetadata {
 function Get-ContentInventory {
     param(
         [Parameter(Mandatory = $true)][string] $RepositoryRoot,
-        [Parameter(Mandatory = $true)][string] $SkillId
+        [Parameter(Mandatory = $true)][string] $SkillId,
+        [switch] $ReadOnlySnapshot
     )
 
     $skillRoot = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot "skills/$SkillId"))
@@ -382,6 +384,24 @@ function Get-ContentInventory {
         $foldedPaths[$folded] = $relative
     }
     if ($pathToFile.Count -eq 0) { throw "Skill '$SkillId' has an empty package inventory." }
+
+    if ($ReadOnlySnapshot) {
+        [string[]]$sortedPaths = @($pathToFile.Keys)
+        [Array]::Sort($sortedPaths, [StringComparer]::Ordinal)
+        $files = @()
+        $canonical = [Text.StringBuilder]::new()
+        foreach ($path in $sortedPaths) {
+            $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $pathToFile[$path].FullName).Hash.ToLowerInvariant()
+            $files += [pscustomobject][ordered]@{ path = $path; sha256 = $sha256 }
+            [void]$canonical.Append($path).Append("`t").Append($sha256).Append("`n")
+        }
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try {
+            $contentSha256 = ([BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical.ToString()))) -replace '-', '').ToLowerInvariant()
+        }
+        finally { $hasher.Dispose() }
+        return [pscustomobject][ordered]@{ skillId = $SkillId; contentSha256 = $contentSha256; files = $files }
+    }
 
     $git = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $tracked = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
@@ -461,50 +481,6 @@ if (Test-Path -LiteralPath (Join-Path $repoRoot '.agents/skills')) {
     throw 'Legacy .agents/skills source root must not coexist with canonical skills/.'
 }
 
-$adapter = Read-StrictJson -Path (Join-Path $repoRoot 'config/standard-v1.json')
-Assert-ExactPropertySet -Value $adapter -Expected @('schemaVersion', 'standardVersion', 'authority', 'deviations') -Context 'config/standard-v1.json'
-Assert-ExactPropertySet -Value $adapter.authority -Expected @('repository', 'commit', 'archiveUrl', 'archiveSha256', 'files') -Context 'config/standard-v1.json authority'
-if (($adapter.schemaVersion -isnot [int] -and $adapter.schemaVersion -isnot [long]) -or [int64]$adapter.schemaVersion -ne 1 -or
-    $adapter.standardVersion -isnot [string] -or $adapter.standardVersion -cne 'v1' -or
-    $adapter.deviations -isnot [string] -or $adapter.deviations -cne 'None') {
-    throw 'config/standard-v1.json identity or deviation contract is invalid.'
-}
-if ($adapter.authority.repository -isnot [string] -or $adapter.authority.repository -cne 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git' -or
-    $adapter.authority.commit -isnot [string] -or $adapter.authority.commit -cnotmatch '^[0-9a-f]{40}$' -or
-    $adapter.authority.archiveUrl -isnot [string] -or
-    $adapter.authority.archiveUrl -cne "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($adapter.authority.commit)" -or
-    $adapter.authority.archiveSha256 -isnot [string] -or $adapter.authority.archiveSha256 -cnotmatch '^[0-9a-f]{64}$') {
-    throw 'config/standard-v1.json authority binding is invalid.'
-}
-$requiredAuthorityPaths = @(
-    'docs/standards/README.md',
-    'docs/standards/managed-skill-lifecycle.md',
-    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json',
-    'docs/standards/schemas/openai-agent-metadata.schema.json',
-    'docs/standards/schemas/source-inventory-v2.schema.json',
-    'docs/standards/schemas/validation-security-gate-v1.schema.json',
-    'docs/standards/skill-repository-review-matrix.md',
-    'docs/standards/skill-repository-standard.md',
-    'docs/standards/upstream-interoperability.md',
-    'docs/standards/validation-security-gate.json',
-    'docs/standards/validation-toolchain.json',
-    'scripts/Invoke-StandardAuthorityGate.ps1',
-    'scripts/Resolve-PythonWheelClosure.py',
-    'scripts/Resolve-StandardValidationTool.ps1'
-)
-if ($adapter.authority.files -isnot [array] -or @($adapter.authority.files).Count -ne $requiredAuthorityPaths.Count) {
-    throw 'config/standard-v1.json authority file inventory is incomplete.'
-}
-$authorityPaths = @()
-foreach ($file in @($adapter.authority.files)) {
-    Assert-ExactPropertySet -Value $file -Expected @('path', 'sha256') -Context 'config/standard-v1.json authority file'
-    if ($file.path -isnot [string] -or $requiredAuthorityPaths -cnotcontains $file.path -or $authorityPaths -ccontains $file.path -or
-        $file.sha256 -isnot [string] -or $file.sha256 -cnotmatch '^[0-9a-f]{64}$') {
-        throw 'config/standard-v1.json authority file binding is invalid.'
-    }
-    $authorityPaths += [string]$file.path
-}
-
 $skillIds = @($inventory.skills | ForEach-Object {
     if ($_ -isnot [string] -or [string]$_ -cnotmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$' -or
         (Get-UnicodeScalarCount -Value ([string]$_) -Context 'Skill ID') -gt 64) {
@@ -550,7 +526,7 @@ foreach ($skillId in $skillIds) {
     }
     [void](Read-SkillFrontmatter -Path $skillFile -ExpectedSkillId $skillId)
     [void](Read-OpenAiMetadata -Path $metadataFile -ExpectedSkillId $skillId)
-    $packages += Get-ContentInventory -RepositoryRoot $repoRoot -SkillId $skillId
+    $packages += Get-ContentInventory -RepositoryRoot $repoRoot -SkillId $skillId -ReadOnlySnapshot:$ReadOnlySnapshot
 }
 
 $result = [pscustomobject][ordered]@{
