@@ -78,6 +78,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'scripts/Validate\.ps1'
         $workflow | Should -Match 'persist-credentials:\s*false'
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
+        $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
