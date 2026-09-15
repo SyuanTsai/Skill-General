@@ -33,6 +33,9 @@ while read old new ref; do
   if [ -f "$GIT_DIR/deny-index" ]; then
     case "$ref" in refs/heads/handoff-v1/records/*/common) exit 1 ;; esac
   fi
+  if [ -f "$GIT_DIR/deny-records" ]; then
+    case "$ref" in refs/heads/handoff-v1/records/*) exit 1 ;; esac
+  fi
 done
 exit 0
 '@
@@ -296,5 +299,48 @@ exit 0
         $event.PreviousState | Should -Be 'Running'
         $event.NewState | Should -Be 'Awaiting Review'
         $event.Source | Should -Be $script:InitialBranch.Source
+    }
+
+    # Scenario: A configured remote refuses the create-only record ref while it remains absent.
+    # Purpose: A storage capacity/permission failure must not claim a peer revision conflict.
+    It 'InterT130_reports_unverified_create_write_without_false_revision_conflict' {
+        $root = Join-Path $TestDrive 'rejected-record-create'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $remote = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remote
+        $flag = Join-Path $remote 'deny-records'
+        Set-Content -LiteralPath $flag -Value 'synthetic create ref refusal'
+        $message = $null
+        try { New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-13' -Fields $script:InitialCommon -OperationId 'create-thirteen' | Out-Null }
+        catch { $message = [string]$_.Exception.Message }
+        $message | Should -Match 'selected Git Handoff storage write was not verified'
+        $message | Should -Not -Match 'revision conflict'
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-13') | Should -BeNullOrEmpty
+        Remove-Item -LiteralPath $flag
+        $recovered = New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-13' -Fields $script:InitialCommon -OperationId 'create-thirteen'
+        $recovered.Status | Should -Be 'created'
+    }
+
+    # Scenario: A Windows bare remote cannot create a long loose ref lock under the adopter's chosen prefix.
+    # Purpose: Give a concrete path-capacity error and preserve the same operation for a configured retry.
+    It 'InterT140_reports_windows_ref_path_failure_then_recovers_after_opt_in_git_configuration' -Skip:(-not $IsWindows) {
+        $root = Join-Path $TestDrive 'windows-long-ref'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $remote = Join-Path $root 'remote.git'
+        $prefix = 'refs/heads/handoff-v1/' + ('x' * 200)
+        $long = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RefPrefix $prefix
+        $message = $null
+        try { New-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14' -Fields $script:InitialCommon -OperationId 'create-fourteen' | Out-Null }
+        catch { $message = [string]$_.Exception.Message }
+        $message | Should -Match 'Git Handoff ref path or directory is unavailable'
+        $message | Should -Not -Match 'revision conflict'
+        (Get-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14') | Should -BeNullOrEmpty
+        & git -C $remote config core.longpaths true
+        & git -C $a.RepositoryRoot config core.longpaths true
+        $recovered = New-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14' -Fields $script:InitialCommon -OperationId 'create-fourteen'
+        $recovered.Status | Should -Be 'created'
+        (Get-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14').Revision | Should -Be $recovered.Revision
     }
 }

@@ -8,6 +8,8 @@ Load `../scripts/GitRefHandoffAdapter.psm1` only after the adopting user has sel
 
 The remote must support writes to a dedicated `refs/heads/handoff-v1` namespace and the explicit expected SHA form of `--force-with-lease`. Limit writers to that namespace if the host supports it. Do not point the module at a general application source repository unless the adopter has explicitly designated its dedicated Handoff refs for storage. Configure authentication through the host's normal private credential mechanism; this module neither obtains nor stores credentials, and a protected or unavailable ref stops the Handoff mutation. No operation writes a regular source branch, Notion page, Jira issue, or another selected authority.
 
+On Windows, full SHA-256 record refs under a deeply nested **local bare remote or writer clone** can exceed Git's default path capacity. A controlled local test showed that `core.longpaths=true` on both the isolated bare remote and each writer clone allowed that exact ref to be written and read back; an adopting user must verify the selected host's behavior and may instead use a shorter isolated Git store path. The module never changes Git configuration. A ref that remains absent after a rejected create-only push is an unverified storage write, not evidence of a competing revision. Only a different observed remote SHA is a conditional revision conflict. Preserve the Operation ID and inspect the selected remote's ref path, permissions, and long-ref support before retrying.
+
 ## Mapping
 
 - `New-GitHandoffAdapter` takes `RepositoryRoot`, `RemoteName`, and a safe `RefPrefix`. The adopter must opt in and separately establish remote write permission; creation does not create the remote or Handoff data.
