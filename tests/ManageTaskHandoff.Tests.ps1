@@ -30,6 +30,9 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.branch.requiredFields) | Should -Contain 'Branch ID'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Fork Point'
         $script:Contract.branch.uniquePrimaryBranch | Should -BeFalse
+        $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
+        $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
+        $script:Contract.common.structuralIndexChangesRequireIntegrationDecision | Should -BeFalse
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
         foreach ($case in $script:Cases.lookup) {
@@ -66,10 +69,12 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.integration.selectionOrder) | Should -Be @('conditional-common-write','common-readback','branch-outcomes','archive-selected-and-superseded-branches')
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
         $script:Contract.changes.appendOnly | Should -BeTrue
+        @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')
         @($script:Contract.changes.requiredFields) | Should -Contain 'Operation ID'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Previous State'
         @($script:Contract.changes.requiredFields) | Should -Contain 'New State'
         @($script:Contract.branch.outcomeValues) | Should -Be @('Selected','Partially Selected','Superseded')
+        @($script:Contract.branch.optionalFields) | Should -Contain 'Applicability Scope'
         @($script:Contract.branch.lifecycleValues) | Should -Be @('Active','Archived')
         @($script:Contract.branch.workStateValues) | Should -Be @('Running','Awaiting Review','Interrupted','Blocked','Failed')
         @($script:Contract.common.lifecycleValues) | Should -Not -Contain 'Conflict'
@@ -82,6 +87,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.archive.inactivityDaysConfigurable | Should -BeTrue
         $script:Contract.archive.readRefreshesActivity | Should -BeFalse
         $script:Contract.archive.noOpRefreshesActivity | Should -BeFalse
+        $script:Contract.archive.exactArchivedBranchOnlyRestored | Should -BeTrue
+        $script:Contract.archive.otherPeersRemainArchived | Should -BeTrue
         foreach ($case in $script:Cases.archive) {
             $now = [DateTimeOffset]$case.now
             $last = [DateTimeOffset]$case.lastActivity
@@ -99,6 +106,7 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.adapter.fixedAuthorityPlatform | Should -BeNullOrEmpty
         $script:Contract.adapter.conditionalMutation | Should -BeTrue
         $script:Contract.adapter.operationIdIdempotency | Should -BeTrue
+        $script:Contract.adapter.eventAppendAfterRecordReadback | Should -BeTrue
         $script:Contract.adapter.onRevisionConflict | Should -Be 'reread-and-reapply-gate'
         $script:Contract.adapter.onPartialFailure | Should -Be 'retain-retryable-state-and-report-each-record'
         $script:Contract.adapter.onAuthorityUnavailable | Should -Be 'do-not-promote-unverified-facts'
