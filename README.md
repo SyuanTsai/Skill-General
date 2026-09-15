@@ -46,7 +46,8 @@ tests/
 | `plan-production-change` | Evidence-based production change planning |
 | `verify-data-access-performance` | Query-count and data-access performance verification |
 | `investigate-datadog-logs` | Datadog log and APM investigation |
-| `manage-notion-ai-memory` | Durable Notion memory and task Handoffs |
+| `manage-notion-ai-memory` | Durable cross-task Notion memory |
+| `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
 | `review-agent-skills` | Agent Skill package review |
 
 ## Canonical validation

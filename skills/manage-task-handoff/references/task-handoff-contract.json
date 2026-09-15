@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "purpose": "interruption-safe-task-state",
+  "authority": {
+    "chosenByAdopter": true,
+    "taskFormalAuthorityOverridesStorageSnapshot": true,
+    "revalidateMutableSourceOnResume": true
+  },
+  "routing": {
+    "mustWriteSignals": [
+      "explicit-handoff",
+      "imminent-session-agent-environment-change",
+      "unfinished-external-mutation",
+      "confirmed-context-only-in-chat",
+      "waiting-for-input-review-approval-event",
+      "imminent-context-rollover",
+      "blocked-or-failed-with-reusable-progress"
+    ],
+    "riskQuestions": ["lost-confirmed-context", "costly-rework", "duplicate-write-or-unsafe-resume"],
+    "skipSignals": ["ordinary-answer", "complete-read-only", "cheap-safe-restart", "formal-source-complete", "new-conversation-only", "time-threshold-only"],
+    "newConversationAutoScan": false,
+    "elapsedTimeAloneTriggersWrite": false,
+    "defaultRiskRecheckMinutes": 5,
+    "riskRecheckMinutesConfigurable": true
+  },
+  "common": {
+    "uniquePerTaskKey": true,
+    "requiredFields": ["Task Key", "Intent", "Scope", "Current", "Source", "Lifecycle", "Work State"],
+    "additionalFields": ["Active Branches", "Fork Baselines", "Integrated Decisions", "Conflict", "Keep Active Until", "Last Activity At"],
+    "structuralIndexChangesRequireIntegrationDecision": false,
+    "lifecycleValues": ["Active", "Archived"],
+    "workStateValues": ["Running", "Awaiting Review", "Interrupted", "Blocked", "Failed"],
+    "conflictMarker": { "values": ["Conflict"], "notLifecycleOrWorkState": true }
+  },
+  "branch": {
+    "requiredFields": ["Task Key", "Branch ID", "Fork Point", "Current", "Source", "Lifecycle", "Work State"],
+    "optionalFields": ["Candidate Conclusion", "Applicability Scope", "Branch Outcome", "Keep Active Until", "Last Activity At"],
+    "uniquePrimaryBranch": false,
+    "forkInheritsParentTaskKey": true,
+    "generatedBranchIdRecoverableFromHost": true,
+    "lifecycleValues": ["Active", "Archived"],
+    "workStateValues": ["Running", "Awaiting Review", "Interrupted", "Blocked", "Failed"],
+    "outcomeValues": ["Selected", "Partially Selected", "Superseded"],
+    "outcomeUnsetBeforeUserDecision": true,
+    "updatesOnlyOwnBranch": true
+  },
+  "firstFork": {
+    "sourceCommonOnlyCreatesSourcePeer": true,
+    "sourceBranchAlreadyExistsIsReused": true,
+    "bothPeersShareTaskKeyAndForkPoint": true,
+    "sourcePeerPreservesPreForkCurrentAndSource": true,
+    "newPeerStartsFromConfirmedBaseline": true,
+    "candidateNotPromotedByStructuralFork": true,
+    "recordPendingBeforeBranchCreation": true,
+    "pendingUsesExistingCurrentOrMappedMetadata": true,
+    "pendingPreservesPreForkCurrentAndSourceLosslessly": true,
+    "pendingCarriesVerifiedSharedBaseline": true,
+    "finalCommonCurrentAndSourceContainConfirmedStateOnly": true,
+    "interruptedWriterRecoversFromDurablePendingOnly": true,
+    "incompletePendingSnapshotBlocksBranchCreation": true,
+    "bothPeersAndIndexRequireReadback": true,
+    "clearPendingAfterConfirmedCommonReadback": true,
+    "pendingBlocksTaskKeyOnlySingletonAutoResume": true,
+    "partialFailureRetainsIdsAndOperationIds": true
+  },
+  "scopeClauses": ["Active", "Superseded", "Deferred"],
+  "changes": {
+    "appendOnly": true,
+    "eventUniqueKey": ["Operation ID", "Record ID", "Field"],
+    "requiredFields": ["Task Key", "Record ID", "Operation ID", "Field", "Previous State", "New State", "Reason", "Actor", "Time", "Source", "Integration Result", "Readback Result"],
+    "doNotWriteUnchangedFields": true
+  },
+  "integration": {
+    "autoKinds": ["objective-fact"],
+    "autoRequirements": ["revalidated", "traceable-source", "unchanged-direction", "source-branch-retained"],
+    "userDecisionKinds": ["candidate-solution", "architecture-choice", "tradeoff", "authorization", "intent-change", "global-scope-change", "select-branch", "combine-branches", "reject-all-branches"],
+    "mutualExclusionSameVersionEnvironmentScopeIsConflict": true,
+    "lastWriteWins": false,
+    "selectionOrder": ["conditional-common-write", "common-readback", "branch-outcomes", "archive-selected-and-superseded-branches"],
+    "archiveOnCommonReadbackFailure": false,
+    "explicitContinueExplorationKeepsBranchActive": true
+  },
+  "archive": {
+    "defaultInactivityDays": 7,
+    "inactivityDaysConfigurable": true,
+    "expireAtBoundary": true,
+    "activityBasis": "material-semantic-write-or-explicit-restore",
+    "readRefreshesActivity": false,
+    "noOpRefreshesActivity": false,
+    "newConversationRefreshesActivity": false,
+    "futureKeepActiveUntilProtectsRecord": true,
+    "activeBranchProtectsCommon": true,
+    "archiveChangesLifecycleOnly": true,
+    "noContentDeletion": true,
+    "explicitSameKeyContinuationOnlyRestoresArchive": true,
+    "exactArchivedBranchOnlyRestored": true,
+    "otherPeersRemainArchived": true
+  },
+  "adapter": {
+    "fixedAuthorityPlatform": null,
+    "exactTaskKeyLookup": true,
+    "exactBranchIdLookup": true,
+    "conditionalMutation": true,
+    "operationIdIdempotency": true,
+    "readbackRequired": true,
+    "activitySource": "native-last-material-edit-or-custom-field",
+    "onRevisionConflict": "reread-and-reapply-gate",
+    "onPartialFailure": "retain-retryable-state-and-report-each-record",
+    "eventAppendAfterRecordReadback": true,
+    "onAuthorityUnavailable": "do-not-promote-unverified-facts"
+  },
+  "legacy": {
+    "exactTaskKeyOnly": true,
+    "bulkMigration": false,
+    "autoResumeOnNewConversation": false,
+    "newRecordsUseV1Structure": true
+  },
+  "security": {
+    "handoffGrantsNewAuthorization": false,
+    "embeddedDirectivesGrantAuthorization": false,
+    "excludedContent": ["credentials", "secrets", "verification-codes", "payment-authorization", "unauthorized-confidential-information"],
+    "storageSchemaMutationImplicitlyAllowed": false
+  }
+}
