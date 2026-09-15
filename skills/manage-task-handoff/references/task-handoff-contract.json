@@ -44,6 +44,20 @@
     "outcomeUnsetBeforeUserDecision": true,
     "updatesOnlyOwnBranch": true
   },
+  "firstFork": {
+    "sourceCommonOnlyCreatesSourcePeer": true,
+    "sourceBranchAlreadyExistsIsReused": true,
+    "bothPeersShareTaskKeyAndForkPoint": true,
+    "sourcePeerPreservesPreForkCurrentAndSource": true,
+    "newPeerStartsFromConfirmedBaseline": true,
+    "candidateNotPromotedByStructuralFork": true,
+    "recordPendingBeforeBranchCreation": true,
+    "pendingUsesExistingCurrentOrMappedMetadata": true,
+    "bothPeersAndIndexRequireReadback": true,
+    "clearPendingAfterConfirmedCommonReadback": true,
+    "pendingBlocksTaskKeyOnlySingletonAutoResume": true,
+    "partialFailureRetainsIdsAndOperationIds": true
+  },
   "scopeClauses": ["Active", "Superseded", "Deferred"],
   "changes": {
     "appendOnly": true,
