@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "routing": [
+    { "id": "explicit-handoff", "signals": ["explicit-handoff"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "unfinished-external-write", "signals": ["unfinished-external-mutation"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "checkpoint-only-in-chat", "signals": ["confirmed-context-only-in-chat"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "unlisted-duplicate-cost", "signals": [], "risk": ["costly-rework"], "stableKey": true, "expected": "write" },
+    { "id": "simple-read", "signals": ["complete-read-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "new-conversation", "signals": ["new-conversation-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "five-minute-alone", "signals": ["time-threshold-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "no-unique-key", "signals": ["explicit-handoff"], "risk": [], "stableKey": false, "expected": "report-identity-limit" }
+  ],
+  "lookup": [
+    { "id": "branch-id", "taskKey": "jira:ABC-1", "branchId": "thread:A", "mainCount": 1, "branchMatches": 1, "activeBranches": 2, "expected": "exact-branch" },
+    { "id": "one-active", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 1, "branchMatches": 0, "activeBranches": 1, "expected": "unique-active" },
+    { "id": "peer-ambiguity", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 1, "branchMatches": 0, "activeBranches": 2, "expected": "resolve-or-ask-material" },
+    { "id": "duplicate-main", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 2, "branchMatches": 0, "activeBranches": 0, "expected": "stop-integrity-conflict" },
+    { "id": "duplicate-branch", "taskKey": "jira:ABC-1", "branchId": "thread:A", "mainCount": 1, "branchMatches": 2, "activeBranches": 2, "expected": "stop-integrity-conflict" }
+  ],
+  "integration": [
+    { "id": "verified-neutral-fact", "kind": "objective-fact", "verified": true, "traceableSource": true, "changesDirection": false, "expected": "auto-common-with-provenance" },
+    { "id": "unverified-fact", "kind": "objective-fact", "verified": false, "traceableSource": true, "changesDirection": false, "expected": "branch-only" },
+    { "id": "candidate-choice", "kind": "candidate-solution", "verified": true, "traceableSource": true, "changesDirection": false, "expected": "user-decision" },
+    { "id": "scope-change", "kind": "objective-fact", "verified": true, "traceableSource": true, "changesDirection": true, "expected": "user-decision" }
+  ],
+  "conflicts": [
+    { "id": "same-context-mutual-exclusion", "mutuallyExclusive": true, "sameVersionEnvironmentScope": true, "revalidated": true, "material": true, "expected": "conflict-user-decision" },
+    { "id": "different-version", "mutuallyExclusive": true, "sameVersionEnvironmentScope": false, "revalidated": true, "material": true, "expected": "retain-applicability" },
+    { "id": "stale-claim", "mutuallyExclusive": true, "sameVersionEnvironmentScope": true, "revalidated": false, "material": true, "expected": "revalidate-or-supersede" }
+  ],
+  "archive": [
+    { "id": "before-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-08T00:00:01Z", "keepActiveUntil": null, "activeBranches": 0, "record": "common", "expected": "Active" },
+    { "id": "at-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-08T00:00:00Z", "keepActiveUntil": null, "activeBranches": 0, "record": "common", "expected": "Archived" },
+    { "id": "past-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T23:59:59Z", "keepActiveUntil": null, "activeBranches": 0, "record": "branch", "expected": "Archived" },
+    { "id": "future-hold", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": "2026-09-16T00:00:00Z", "activeBranches": 0, "record": "branch", "expected": "Active" },
+    { "id": "active-peer", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": null, "activeBranches": 1, "record": "common", "expected": "Active" }
+  ]
+}
