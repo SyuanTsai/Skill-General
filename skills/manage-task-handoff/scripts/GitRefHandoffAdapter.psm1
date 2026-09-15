@@ -134,11 +134,19 @@ function Push-GitHandoffIfRevision {
     Assert-GitAdapter -Adapter $Adapter
     $lease = "--force-with-lease=${Ref}:${ExpectedRevision}"
     $refspec = "${Commit}:${Ref}"
-    & git -C $Adapter.RepositoryRoot push --quiet $lease $Adapter.RemoteName $refspec 2>$null
+    $pushOutput = @(& git -C $Adapter.RepositoryRoot push --quiet $lease $Adapter.RemoteName $refspec 2>&1)
     $status = $LASTEXITCODE
     $observed = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $Ref
     if ($observed -ceq $Commit) { return $Commit }
-    if ($status -ne 0 -and $observed -cne $ExpectedRevision) { throw 'Conditional Handoff revision conflict; re-read formal authority and records.' }
+    $expectedRemote = if ([string]::IsNullOrEmpty($ExpectedRevision)) { $null } else { $ExpectedRevision }
+    if ($status -ne 0 -and $observed -cne $expectedRemote) { throw 'Conditional Handoff revision conflict; re-read formal authority and records.' }
+    $pushDiagnostic = @($pushOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($status -ne 0 -and $pushDiagnostic -match '(?i)file\s*name too long') {
+        throw 'Git Handoff ref path is too long for the selected storage remote; check its long-ref support or use a shorter isolated store path.'
+    }
+    if ($status -ne 0 -and $pushDiagnostic -match '(?is)cannot lock ref.+unable to create directory') {
+        throw 'Git Handoff ref path or directory is unavailable for the selected storage remote; check long-ref support, path depth, and permissions.'
+    }
     throw 'The selected Git Handoff storage write was not verified; retain this operation ID.'
 }
 
