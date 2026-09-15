@@ -92,22 +92,100 @@ exit 0
         $observed.Fields.Current | Should -Be 'A verified version 2'
     }
 
-    # A and B share one Task Key and fork point; their own Current values and common Active index must stay separate.
+    # A common-only conversation first materializes its own A branch, then B from the confirmed fork baseline.
     It 'InterT30_keeps_forked_peer_branches_and_common_index_distinct' {
         $root = Join-Path $TestDrive 'peer-branches'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         $b = New-WriterFixture -Root $root -WriterId 'writer-b'
-        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3' -Fields $script:InitialCommon -OperationId 'create-common-3' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-a' | Out-Null
-        New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:B' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-b' | Out-Null
+        $commonOnlyA = [ordered]@{
+            Intent = 'Compare parser options; no option selected'
+            Scope = 'S1 Active: confirmed version 2 requirement'
+            Current = 'Confirmed version 2 requirement; A candidate parser X tested but not selected'
+            Source = 'synthetic revision r2; A candidate evidence x-1'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3' -Fields $commonOnlyA -OperationId 'create-common-3' | Out-Null
+        $forkSnapshot = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3'
+        $pendingCurrent = "Fork pending A/B from $($forkSnapshot.Revision); IDs thread:A and thread:B; operations fork-a and fork-b; A candidate remains A-only"
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-3' -ExpectedRevision $forkSnapshot.Revision `
+            -Changes ([ordered]@{Current=$pendingCurrent}) -OperationId 'fork-pending-3' | Out-Null
+        (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-3').Fields.Current | Should -Be $pendingCurrent
+        $sourceA = [ordered]@{
+            Current = $forkSnapshot.Fields.Current
+            Source = $forkSnapshot.Fields.Source
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        $newB = [ordered]@{
+            Current = 'B explores parser Y from confirmed version 2 requirement; no choice selected'
+            Source = "synthetic revision r2; shared fork $($forkSnapshot.Revision); A evidence trace-only"
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:A' -ForkPoint $forkSnapshot.Revision -Fields $sourceA -OperationId 'fork-a' | Out-Null
+        New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:B' -ForkPoint $forkSnapshot.Revision -Fields $newB -OperationId 'fork-b' | Out-Null
         $readA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:A'
         $readB = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:B'
+        $readA.ForkPoint | Should -Be $forkSnapshot.Revision
+        $readB.ForkPoint | Should -Be $forkSnapshot.Revision
+        $readA.Fields.Current | Should -Be $forkSnapshot.Fields.Current
+        $readA.Fields.Source | Should -Be $forkSnapshot.Fields.Source
+        $readB.Fields.Current | Should -Not -Match 'parser X tested'
+        @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
+        $indexedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-3' -ExpectedRevision $indexedCommon.Revision `
+            -Changes ([ordered]@{Current='Confirmed version 2 requirement; A/B active; no parser selected'}) `
+            -OperationId 'fork-finish-3' | Out-Null
+        (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-3').Fields.Current | Should -Be 'Confirmed version 2 requirement; A/B active; no parser selected'
         Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-3' -BranchId 'thread:A' -ExpectedRevision $readA.Revision -Changes ([ordered]@{Current='A tested version 1'}) -OperationId 'branch-a-update' | Out-Null
         Set-GitHandoffFields -Adapter $b -RecordKind branch -TaskKey 'demo:ABC-3' -BranchId 'thread:B' -ExpectedRevision $readB.Revision -Changes ([ordered]@{Current='B tested version 2'}) -OperationId 'branch-b-update' | Out-Null
         (Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:A').Fields.Current | Should -Be 'A tested version 1'
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:B').Fields.Current | Should -Be 'B tested version 2'
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').Fields.Current | Should -Be 'Confirmed version 2 requirement; A/B active; no parser selected'
+    }
+
+    # A failed second index write leaves B exact-readable and common pending until the same operation is reconciled.
+    It 'InterT35_recovers_a_partial_first_fork_without_losing_A_or_promoting_B' {
+        $root = Join-Path $TestDrive 'partial-first-fork'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $b = New-WriterFixture -Root $root -WriterId 'writer-b'
+        $commonFields = [ordered]@{
+            Intent = 'Compare options without selecting one'
+            Scope = 'Confirmed version 2 requirement'
+            Current = 'A candidate evidence retained; decision pending'
+            Source = 'synthetic revision r2; A evidence x-2'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35' -Fields $commonFields -OperationId 'create-common-35' | Out-Null
+        $forkSnapshot = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35'
+        $pendingCurrent = "Fork pending A/B from $($forkSnapshot.Revision); IDs thread:A and thread:B; operations fork-a-35 and fork-b-35"
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-35' -ExpectedRevision $forkSnapshot.Revision `
+            -Changes ([ordered]@{Current=$pendingCurrent}) -OperationId 'fork-pending-35' | Out-Null
+        $sourceA = [ordered]@{Current=$forkSnapshot.Fields.Current;Source=$forkSnapshot.Fields.Source;Lifecycle='Active';'Work State'='Running'}
+        $newB = [ordered]@{Current='B alternative not selected';Source='synthetic revision r2; confirmed baseline only';Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:A' -ForkPoint $forkSnapshot.Revision -Fields $sourceA -OperationId 'fork-a-35' | Out-Null
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-index') -Value 'reject B index' -Encoding ascii
+        { New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId 'thread:B' -ForkPoint $forkSnapshot.Revision -Fields $newB -OperationId 'fork-b-35' } | Should -Throw
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:A').Fields.Current | Should -Be $forkSnapshot.Fields.Current
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:B').Fields.Current | Should -Be 'B alternative not selected'
+        @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches) | Should -Be @('thread:A')
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').Fields.Current | Should -Be $pendingCurrent
+        Remove-Item -LiteralPath (Join-Path $remoteRoot 'deny-index') -Force
+        $recovered = New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId 'thread:B' -ForkPoint $forkSnapshot.Revision -Fields $newB -OperationId 'fork-b-35'
+        $recovered.Indexed | Should -BeTrue
+        @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
+        $indexedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-35' -ExpectedRevision $indexedCommon.Revision `
+            -Changes ([ordered]@{Current='Confirmed version 2 requirement; A/B active; no option selected'}) `
+            -OperationId 'fork-finish-35' | Out-Null
+        (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-35').Fields.Current | Should -Be 'Confirmed version 2 requirement; A/B active; no option selected'
     }
 
     # An uncertain response after a multi-field update must not duplicate or drop either field event on retry.
