@@ -45,11 +45,11 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
             'isolated-snapshot-payload','payload-free-completed-envelope'
         )
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Intended Branch Identity Digests'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
         @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
-            'isolated-payload-absent','all-intended-branch-records-absent',
-            'all-intended-branch-creation-outcomes-absent','all-intended-branch-index-entries-absent'
+            'isolated-payload-absent','all-branch-creation-target-records-absent',
+            'all-branch-creation-target-outcomes-absent','all-branch-creation-target-index-entries-absent'
         )
         $script:Contract.forkRecovery.abandonmentRequiresExactAuthorization | Should -BeTrue
         $script:Contract.forkRecovery.abandonmentUsesConditionalRevision | Should -BeTrue
