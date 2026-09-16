@@ -27,6 +27,50 @@ Describe 'Optional Git-ref Task Handoff adapter' {
                 -Authorize { param($request) $true }
         }
 
+        function New-TestGitHandoffBranch {
+            param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+                [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)][string] $ForkPoint,
+                [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId,
+                [string] $Actor='synthetic-test-writer')
+            $fixtureForkId = "fixture-$OperationId"
+            $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $Adapter -TaskKey $TaskKey)
+            if ($pending.Count -eq 0) {
+                $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+                if ($null -eq $common) { throw 'The synthetic branch fixture requires common first.' }
+                $effectiveForkPoint = if (@($common.ActiveBranches).Count -eq 0) { [string]$common.Revision } else { $ForkPoint }
+                $payload = [ordered]@{
+                    'Fork Point' = $effectiveForkPoint
+                    'Source Branch ID' = $BranchId
+                    'Intended Branch IDs' = @($BranchId)
+                    'Source Snapshot' = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
+                    'Shared Baseline' = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
+                    'Verified Active Branches' = @($common.ActiveBranches)
+                    'Branch Creation Operations' = [ordered]@{$BranchId=$OperationId}
+                    'Step Operation IDs' = [ordered]@{create=$OperationId}
+                }
+                New-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey `
+                    -ForkId "fixture-$OperationId" -Payload $payload -OperationId "prepare-$OperationId" `
+                    -Actor $Actor | Out-Null
+                $ForkPoint = $effectiveForkPoint
+            }
+            else {
+                $fixtureRecovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey `
+                    -ForkId $fixtureForkId -ErrorAction SilentlyContinue
+                if ($null -ne $fixtureRecovery) { $ForkPoint = [string]$fixtureRecovery.Payload['Fork Point'] }
+            }
+            $result = GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey `
+                -BranchId $BranchId -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId -Actor $Actor
+            $fixtureRecovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey `
+                -ForkId $fixtureForkId -ErrorAction SilentlyContinue
+            if ($null -ne $fixtureRecovery -and $fixtureRecovery.Status -eq 'Pending' -and
+                @($fixtureRecovery.Payload['Intended Branch IDs']).Count -eq 1) {
+                Complete-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey `
+                    -ForkId $fixtureForkId -ExpectedRevision $fixtureRecovery.Revision `
+                    -OperationId "complete-$OperationId" | Out-Null
+            }
+            return $result
+        }
+
         function Add-SelectiveRejectHook {
             param([string] $RemoteRoot)
             $hook = Join-Path $RemoteRoot 'hooks/pre-receive'
@@ -201,9 +245,9 @@ exit 0
             -OperationId 'create-common-ab' -Actor 'writer-a' | Out-Null
         New-GitHandoffCommon -Adapter $a -TaskKey 'a' -Fields $script:InitialCommon `
             -OperationId 'create-common-a' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'a:b' -BranchId 'c' -ForkPoint 'shared-r1' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'a:b' -BranchId 'c' -ForkPoint 'shared-r1' `
             -Fields $script:InitialBranch -OperationId 'create-colliding-branch' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'a' -BranchId 'b:c' -ForkPoint 'shared-r1' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'a' -BranchId 'b:c' -ForkPoint 'shared-r1' `
             -Fields $script:InitialBranch -OperationId 'create-colliding-branch' -Actor 'writer-a' | Out-Null
         $first = Get-GitHandoffBranch -Adapter $a -TaskKey 'a:b' -BranchId 'c'
         $second = Get-GitHandoffBranch -Adapter $a -TaskKey 'a' -BranchId 'b:c'
@@ -212,6 +256,17 @@ exit 0
             -OperationId 'create-colliding-branch' -Field 'Current').RecordId | Should -Be $first.RecordId
         (Get-GitHandoffEvent -Adapter $a -TaskKey 'a' -BranchId 'b:c' -RecordKind branch `
             -OperationId 'create-colliding-branch' -Field 'Current').RecordId | Should -Be $second.RecordId
+    }
+
+    It 'InterT19_rejects_unpaired_utf16_before_hashing_any_identity' {
+        $root = Join-Path $TestDrive 'unicode'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $badTaskKey = 'demo:bad-' + [char]0xD800
+        { New-GitHandoffCommon -Adapter $a -TaskKey $badTaskKey -Fields $script:InitialCommon `
+            -OperationId 'reject-invalid-unicode' -Actor 'writer-a' } |
+            Should -Throw '*well-formed Unicode*'
+        @(& git -C $a.RepositoryRoot ls-remote origin 'refs/heads/handoff-v1/*').Count | Should -Be 0
     }
 
     # Two writers start from the same SHA. A's success must make B's stale write fail without changing A's fields.
@@ -261,7 +316,7 @@ exit 0
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-records') -Value 'reject A branch' -Encoding ascii
         $attemptedA = [ordered]@{Current=$preFork.Fields.Current;Source=$preFork.Fields.Source;Lifecycle='Active';'Work State'='Running'}
-        { New-GitHandoffBranch -Adapter $originalWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A' -ForkPoint $preFork.Revision `
+        { New-TestGitHandoffBranch -Adapter $originalWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A' -ForkPoint $preFork.Revision `
             -Fields $attemptedA -OperationId 'fork-a-28' } | Should -Throw
         (Get-GitHandoffBranch -Adapter $originalWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A') | Should -BeNullOrEmpty
         (Get-GitHandoffCommon -Adapter $originalWriter -TaskKey 'demo:ABC-28').Fields.Current | Should -Be $commonFields.Current
@@ -279,10 +334,10 @@ exit 0
         $envelope.Count | Should -Be 1
         $envelope[0].PSObject.Properties.Name | Should -Not -Contain 'Payload'
         $recoverA = [ordered]@{Current=$persisted['Source Snapshot'].Current;Source=$persisted['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
-        $recoverB = [ordered]@{Current="B explores parser Y from $($persisted['Shared Baseline'].Current)";Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
-        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][0] `
+        $recoverB = [ordered]@{Current=$persisted['Shared Baseline'].Current;Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
+        New-TestGitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][0] `
             -ForkPoint $persisted['Fork Point'] -Fields $recoverA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
-        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][1] `
+        New-TestGitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][1] `
             -ForkPoint $persisted['Fork Point'] -Fields $recoverB -OperationId $persisted['Step Operation IDs'].createB | Out-Null
         $readA = Get-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A'
         $readB = Get-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:B'
@@ -408,14 +463,89 @@ exit 0
         }
         New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:swapped-operations' -ForkId 'swapped-fork' `
             -Payload $payload -OperationId 'create-swapped-recovery' -Actor 'writer-a' | Out-Null
-        { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
+        { New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
             -ForkPoint $preFork.Revision -Fields $script:InitialBranch -OperationId 'create-swapped-b' } |
             Should -Throw '*target-operation binding*'
         Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' `
             -BranchId 'thread:A' | Should -BeNullOrEmpty
-        $created = New-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
-            -ForkPoint $preFork.Revision -Fields $script:InitialBranch -OperationId 'create-swapped-a'
+        $expectedA = [ordered]@{Current=$payload['Source Snapshot'].Current;Source=$payload['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
+        $created = New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
+            -ForkPoint $preFork.Revision -Fields $expectedA -OperationId 'create-swapped-a'
         $created.Indexed | Should -BeTrue
+    }
+
+    It 'InterT29f_requires_pending_attestation_and_rejects_stale_or_mismatched_branch_creation' {
+        $root = Join-Path $TestDrive 'bound-branch-create'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:bound-create' -Fields $script:InitialCommon `
+            -OperationId 'create-bound-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:bound-create'
+        { GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $a -TaskKey 'demo:bound-create' `
+            -BranchId 'thread:A' -ForkPoint $common.Revision -Fields $script:InitialBranch `
+            -OperationId 'create-without-pending' -Actor 'writer-a' } | Should -Throw '*Pending fork recovery*'
+
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A')
+            'Source Snapshot' = [ordered]@{Current=$script:InitialBranch.Current;Source=$script:InitialBranch.Source}
+            'Shared Baseline' = [ordered]@{Current=$script:InitialBranch.Current;Source=$script:InitialBranch.Source}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-bound-a'}
+            'Step Operation IDs' = [ordered]@{create='create-bound-a'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:bound-create' -ForkId 'bound-fork' `
+            -Payload $payload -OperationId 'prepare-bound-fork' -Actor 'writer-a' | Out-Null
+        $wrongFields = [ordered]@{Current='unattested branch content';Source=$script:InitialBranch.Source;Lifecycle='Active';'Work State'='Running'}
+        { GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $a -TaskKey 'demo:bound-create' `
+            -BranchId 'thread:A' -ForkPoint $common.Revision -Fields $wrongFields `
+            -OperationId 'create-bound-a' -Actor 'writer-a' } | Should -Throw '*attested recovery payload*'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:bound-create' -BranchId 'thread:A' | Should -BeNullOrEmpty
+
+        $current = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:bound-create'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:bound-create' `
+            -ExpectedRevision $current.Revision -Changes ([ordered]@{Current='semantic state advanced'}) `
+            -OperationId 'advance-bound-common' -Actor 'writer-a' -Reason 'advance after recovery capture' | Out-Null
+        { GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $a -TaskKey 'demo:bound-create' `
+            -BranchId 'thread:A' -ForkPoint $common.Revision -Fields $script:InitialBranch `
+            -OperationId 'create-bound-a' -Actor 'writer-a' } | Should -Throw '*recovery fence changed*'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:bound-create' -BranchId 'thread:A' | Should -BeNullOrEmpty
+    }
+
+    It 'InterT29g_filters_denied_pending_items_and_blocks_common_archival' {
+        $root = Join-Path $TestDrive 'pending-authorization'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-auth' -Fields $script:InitialCommon `
+            -OperationId 'create-pending-auth-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-auth'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A')
+            'Source Snapshot' = [ordered]@{Current=$script:InitialBranch.Current;Source=$script:InitialBranch.Source}
+            'Shared Baseline' = [ordered]@{Current=$script:InitialBranch.Current;Source=$script:InitialBranch.Source}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-pending-auth-a'}
+            'Step Operation IDs' = [ordered]@{create='create-pending-auth-a'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:pending-auth' -ForkId 'pending-auth-fork' `
+            -Payload $payload -OperationId 'prepare-pending-auth' -Actor 'writer-a' | Out-Null
+        { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:pending-auth' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
+            -OperationId 'archive-with-pending' -Actor 'writer-a' -Reason 'must remain protected' } |
+            Should -Throw '*Pending fork recovery protects common*'
+
+        $filtered = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RemoteName origin `
+            -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'filtered-principal' } `
+            -Authorize {
+                param($request)
+                if ($request.Action -eq 'fork-recovery:list-item') { return $false }
+                if ($request.Action -ne 'fork-recovery:list') { throw "unexpected authorization action: $($request.Action)" }
+                return $true
+            }
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $filtered -TaskKey 'demo:pending-auth').Count | Should -Be 0
     }
 
     # Scenario: The payload never commits for an existing-A fork and none of the missing branch work starts.
@@ -426,7 +556,7 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:abandon-empty' -Fields $script:InitialCommon `
             -OperationId 'create-abandon-common' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-existing-a' -Actor 'writer-a' | Out-Null
         $payload = [ordered]@{
             'Fork Point' = 'shared-r1'
@@ -506,13 +636,14 @@ exit 0
         Set-Content -LiteralPath $flag -Value 'reject branch after envelope claim' -Encoding ascii
         $branchFailure = $null
         try {
-            try { New-GitHandoffBranch -Adapter $claimWriter -TaskKey 'demo:claim-exists' -BranchId 'thread:B' `
-                -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-payload-b' `
+            try { New-TestGitHandoffBranch -Adapter $claimWriter -TaskKey 'demo:claim-exists' -BranchId 'thread:B' `
+                -ForkPoint $claimCommon.Revision -Fields ([ordered]@{Current='shared state';Source='shared evidence';Lifecycle='Active';'Work State'='Running'}) `
+                -OperationId 'create-payload-b' `
                 -Actor 'writer-a' | Out-Null }
             catch { $branchFailure = [string]$_.Exception.Message }
         }
         finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
-        $branchFailure | Should -Match 'selected Git Handoff storage write was not verified'
+        $branchFailure | Should -Match 'bound fork branch write was not verified'
         (Get-GitHandoffBranch -Adapter $claimWriter -TaskKey 'demo:claim-exists' -BranchId 'thread:B') | Should -BeNullOrEmpty
         $payloadRefs = @(& git -C $claimWriter.RepositoryRoot ls-remote origin 'refs/heads/handoff-v1/recovery/*')
         $payloadRefs.Count | Should -Be 1
@@ -606,13 +737,13 @@ exit 0
             'Work State' = 'Running'
         }
         $newB = [ordered]@{
-            Current = "B explores parser Y from $($persisted['Shared Baseline'].Current)"
-            Source = "$($persisted['Shared Baseline'].Source); shared fork $($persisted['Fork Point']); A evidence trace-only"
+            Current = $persisted['Shared Baseline'].Current
+            Source = $persisted['Shared Baseline'].Source
             Lifecycle = 'Active'
             'Work State' = 'Running'
         }
-        New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB | Out-Null
+        New-TestGitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB | Out-Null
         $readA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:A'
         $readB = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:B'
         $readA.ForkPoint | Should -Be $forkSnapshot.Revision
@@ -673,8 +804,8 @@ exit 0
         $persisted['Source Snapshot'].Current | Should -Be $forkSnapshot.Fields.Current
         $persisted['Source Snapshot'].Source | Should -Be $forkSnapshot.Fields.Source
         $sourceA = [ordered]@{Current=$persisted['Source Snapshot'].Current;Source=$persisted['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
-        $newB = [ordered]@{Current='B alternative not selected';Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
+        $newB = [ordered]@{Current=$persisted['Shared Baseline'].Current;Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
         $recoveryRetry = New-GitHandoffForkRecovery -Adapter $b -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35' `
             -Payload $recoveryPayload -OperationId 'fork-pending-35' -Actor 'writer-a'
         $recoveryRetry.Status | Should -Be 'Pending'
@@ -682,14 +813,14 @@ exit 0
         $remoteRoot = Join-Path $root 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-index') -Value 'reject B index' -Encoding ascii
-        { New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB } | Should -Throw
+        { New-TestGitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB } | Should -Throw
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:A').Fields.Current | Should -Be $forkSnapshot.Fields.Current
-        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:B').Fields.Current | Should -Be 'B alternative not selected'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:B' | Should -BeNullOrEmpty
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches) | Should -Be @('thread:A')
         (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').Fields.Current | Should -Be $commonFields.Current
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:ABC-35').Count | Should -Be 1
         Remove-Item -LiteralPath (Join-Path $remoteRoot 'deny-index') -Force
-        $recovered = New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB
+        $recovered = New-TestGitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB
         $recovered.Indexed | Should -BeTrue
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
         $indexedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35'
@@ -765,8 +896,8 @@ exit 0
         $recoveredEvent.VerifiedPrincipal | Should -Be 'synthetic-principal'
     }
 
-    # A branch exists but an index push fails. Its exact Branch ID remains recoverable before Task Key-only lookup works.
-    It 'InterT60_reconciles_a_durable_branch_after_common_index_failure' {
+    # The atomic branch/common fence is rejected before later Active-index reconciliation can begin.
+    It 'InterT60_retries_branch_creation_after_atomic_common_fence_failure' {
         $root = Join-Path $TestDrive 'index-rejection'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
@@ -776,14 +907,13 @@ exit 0
         Add-SelectiveRejectHook -RemoteRoot $remote
         $flag = Join-Path $remote 'deny-index'
         Set-Content -LiteralPath $flag -Value 'synthetic common index failure'
-        { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-six' } | Should -Throw
-        $branchBefore = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A'
-        $branchBefore.Revision | Should -Not -BeNullOrEmpty
+        { New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-six' } | Should -Throw
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A' | Should -BeNullOrEmpty
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-6').ActiveBranches).Count | Should -Be 0
         Remove-Item -LiteralPath $flag
-        $repaired = New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-six'
+        $repaired = New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-6' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-six'
         $repaired.Indexed | Should -BeTrue
-        $repaired.BranchRevision | Should -Be $branchBefore.Revision
+        $repaired.BranchRevision | Should -Not -BeNullOrEmpty
         $commonAfter = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-6'
         $commonAfter.ActiveBranches | Should -Contain 'thread:A'
         $commonAfter.LastActivityAt | Should -Be $commonBefore.LastActivityAt
@@ -831,7 +961,7 @@ exit 0
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-8' -Fields $script:InitialCommon -OperationId 'create-common-8' | Out-Null
         $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-8'
         { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-8' -ExpectedRevision $common.Revision -Changes ([ordered]@{'Work State'='Completed'}) -OperationId 'bad-workstate' } | Should -Throw
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-8' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-eight' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-8' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-eight' | Out-Null
         $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-8' -BranchId 'thread:A'
         { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-8' -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) -OperationId 'no-decision' } | Should -Throw
         { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-8' `
@@ -859,7 +989,7 @@ exit 0
             $fields = [ordered]@{}
             foreach ($name in $script:InitialBranch.Keys) { $fields[$name] = $script:InitialBranch[$name] }
             $fields[$field] = 'fixture'
-            { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:branch-optional-case' `
+            { New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:branch-optional-case' `
                 -BranchId "thread:$($field.Replace(' ', '-'))" -ForkPoint 'shared-r1' `
                 -Fields $fields -OperationId "bad-branch-$($field.Replace(' ', '-'))" -Actor 'writer-a' } | Should -Throw
         }
@@ -875,22 +1005,22 @@ exit 0
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83' -Fields $script:InitialCommon `
             -OperationId 'create-decision-binding-common' -Actor 'writer-a' | Out-Null
         foreach ($branchId in @('thread:A','thread:B')) {
-            New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId `
+            New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId `
                 -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
                 -OperationId "create-$($branchId.Replace(':','-'))" -Actor 'writer-a' | Out-Null
         }
 
         $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83'
         $bindings = @(
-            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A' -Outcome Selected
-            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:B' -Outcome Selected
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A' -Outcome Superseded
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:B' -Outcome Superseded
         )
         Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q83' `
             -ExpectedRevision $common.Revision -Changes ([ordered]@{
                 Current='Decision revision one';'Decision Branch Bindings'=$bindings
             }) `
             -OperationId 'decision-one' -DecisionConfirmed -Actor 'writer-a' `
-            -Reason 'user selected both peer results' | Out-Null
+            -Reason 'initial user decision superseded both peer results' | Out-Null
         $staleDecisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
 
         $peerCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:q83'
@@ -919,6 +1049,16 @@ exit 0
         $branchA.Fields.Lifecycle | Should -Be 'Active'
 
         $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
+        $preOutcomeA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -ExpectedRevision $preOutcomeA.Revision `
+            -Changes ([ordered]@{'Branch Outcome'='Selected';Current='mixed finalization write'}) `
+            -OperationId 'mixed-outcome-a' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'reject mixed outcome mutation' } | Should -Throw '*only Branch Outcome*'
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-before-outcome-a' `
+            -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'outcome evidence must exist first' } | Should -Throw '*Branch Outcome*recorded first*'
         foreach ($branchId in @('thread:A','thread:B')) {
             $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId
             Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q83' `
@@ -969,6 +1109,15 @@ exit 0
             -BranchId 'thread:B' -Lifecycle Archived -OperationId 'archive-b-different' `
             -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
             -Reason 'duplicate archive must not synthesize a new event' } | Should -Throw
+        $postDecisionCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q83' `
+            -ExpectedRevision $postDecisionCommon.Revision -Changes ([ordered]@{Current='ordinary revision inheriting prior bindings'}) `
+            -OperationId 'ordinary-after-decision' -Actor 'writer-a' -Reason 'prove inherited bindings are not fresh authority' | Out-Null
+        $inheritedRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'reject-inherited-decision' `
+            -DecisionCommonRevision $inheritedRevision -Actor 'writer-a' `
+            -Reason 'an ordinary descendant cannot authorize finalization' } | Should -Throw '*did not originate*'
     }
 
     # Scenario: A peer changes reviewed branch content after a common decision but before its finalization.
@@ -980,7 +1129,7 @@ exit 0
         $b = New-WriterFixture -Root $root -WriterId 'b'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84' -Fields $script:InitialCommon `
             -OperationId 'create-q84-common' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
             -OperationId 'create-q84-a' -Actor 'writer-a' | Out-Null
 
@@ -1090,7 +1239,7 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84a' -Fields $script:InitialCommon `
             -OperationId 'create-q84a-common' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
             -OperationId 'create-q84a-a' -Actor 'writer-a' | Out-Null
 
@@ -1136,6 +1285,60 @@ exit 0
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A').Fields.Lifecycle | Should -Be 'Active'
     }
 
+    It 'InterT84b_reconciles_finalization_and_continuation_events_before_stale_checks' {
+        $root = Join-Path $TestDrive 'q84b'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $remote = Join-Path $root 'remote.git'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84b' -Fields $script:InitialCommon `
+            -OperationId 'create-q84b-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q84b' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+            -OperationId 'create-q84b-a' -Actor 'writer-a' | Out-Null
+        $binding = Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84b' `
+            -BranchId 'thread:A' -Outcome Selected
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84b'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84b' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Exact q84b decision';'Decision Branch Bindings'=@($binding)
+            }) -OperationId 'q84b-decision' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'user selected exact q84b branch' | Out-Null
+        $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84b').Revision
+
+        Add-SelectiveRejectHook -RemoteRoot $remote
+        $eventFlag = Join-Path $remote 'deny-events'
+        Set-Content -LiteralPath $eventFlag -Value 'block outcome event once'
+        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84b' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84b' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision `
+            -Changes ([ordered]@{'Branch Outcome'='Selected'}) -OperationId 'q84b-outcome' `
+            -DecisionConfirmed -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'persist selected outcome' } | Should -Throw
+        Remove-Item -LiteralPath $eventFlag
+        $advancedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84b'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84b' `
+            -ExpectedRevision $advancedCommon.Revision -Changes ([ordered]@{Current='Decision context advanced after outcome commit'}) `
+            -OperationId 'q84b-advance-common' -Actor 'writer-a' -Reason 'invalidate old decision context' | Out-Null
+        $committedOutcomeBranch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84b' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84b' `
+            -BranchId 'thread:A' -ExpectedRevision $committedOutcomeBranch.Revision `
+            -Changes ([ordered]@{'Branch Outcome'='Selected'}) -OperationId 'q84b-outcome' `
+            -DecisionConfirmed -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'persist selected outcome' } | Should -Throw
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84b' -RecordKind branch `
+            -BranchId 'thread:A' -OperationId 'q84b-outcome' -Field 'Branch Outcome').ReadbackResult | Should -Be 'verified'
+
+        Set-Content -LiteralPath $eventFlag -Value 'block continuation event once'
+        { Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:q84b' -BranchId 'thread:A' `
+            -OperationId 'q84b-continue' -Actor 'writer-a' -Reason 'continue after committed outcome' } | Should -Throw
+        Remove-Item -LiteralPath $eventFlag
+        $continued = Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:q84b' -BranchId 'thread:A' `
+            -OperationId 'q84b-continue' -Actor 'writer-a' -Reason 'continue after committed outcome'
+        $continued.ContinuationGeneration | Should -Be 1
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84b' -RecordKind branch `
+            -BranchId 'thread:A' -OperationId 'q84b-continue' -Field 'Continuation Generation').ReadbackResult | Should -Be 'verified'
+    }
+
     # Scenario: An update tries to clear a required field after creation validation has already passed.
     # Purpose: Keep every committed common and branch record readable under the required-field contract.
     It 'InterT85_rejects_updates_that_remove_required_record_fields' {
@@ -1165,7 +1368,7 @@ exit 0
         Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:archived-common' `
             -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
             -OperationId 'archive-common-before-branch' -Actor 'writer-a' -Reason 'explicit close with no active peers' | Out-Null
-        { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:archived-common' -BranchId 'thread:A' `
+        { New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:archived-common' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'forbidden-peer-create' `
             -Actor 'writer-a' } | Should -Throw
         Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:archived-common' -BranchId 'thread:A' | Should -BeNullOrEmpty
@@ -1187,7 +1390,7 @@ exit 0
         { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:index-operation-collision' `
             -ExpectedRevision $common.Revision -Changes ([ordered]@{Current='attempt reserved identity'}) `
             -OperationId '__handoff_internal_v1__:adopter-claim' -Actor 'writer-a' } | Should -Throw
-        $created = New-GitHandoffBranch -Adapter $a -TaskKey 'demo:index-operation-collision' `
+        $created = New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:index-operation-collision' `
             -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
             -OperationId 'create-collision-branch' -Actor 'writer-a'
         $created.Indexed | Should -BeTrue
@@ -1204,8 +1407,8 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         $remote = Join-Path $root 'remote.git'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-9' -Fields $script:InitialCommon -OperationId 'create-common-9' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-9' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-nine-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-9' -BranchId 'thread:B' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-nine-b' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-9' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-nine-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-9' -BranchId 'thread:B' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-nine-b' | Out-Null
         Add-SelectiveRejectHook -RemoteRoot $remote
         $flag = Join-Path $remote 'deny-index'
         Set-Content -LiteralPath $flag -Value 'synthetic archive index failure'
@@ -1238,7 +1441,7 @@ exit 0
         $remote = Join-Path $root 'remote.git'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:lifecycle-race' -Fields $script:InitialCommon `
             -OperationId 'create-race-common' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:lifecycle-race' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:lifecycle-race' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-race-branch' `
             -Actor 'writer-a' | Out-Null
 
@@ -1326,6 +1529,24 @@ exit 0
         $remote = Join-Path $root 'remote.git'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:create-archive-race' -Fields $script:InitialCommon `
             -OperationId 'create-race-common' -Actor 'writer-a' | Out-Null
+        $createRaceCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:create-archive-race'
+        $createRaceFields = [ordered]@{
+            Current='Separate peer checkpoint';Source='synthetic fixture revision r2';
+            Lifecycle='Active';'Work State'='Running'
+        }
+        $createRacePayload = [ordered]@{
+            'Fork Point' = $createRaceCommon.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A')
+            'Source Snapshot' = [ordered]@{Current=$createRaceFields.Current;Source=$createRaceFields.Source}
+            'Shared Baseline' = [ordered]@{Current=$createRaceFields.Current;Source=$createRaceFields.Source}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-race-branch'}
+            'Step Operation IDs' = [ordered]@{create='create-race-branch'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:create-archive-race' `
+            -ForkId 'fixture-create-race-branch' -Payload $createRacePayload `
+            -OperationId 'prepare-create-race-branch' -Actor 'writer-a' | Out-Null
 
         $hook = Join-Path $remote 'hooks/pre-receive'
         $hookText = @'
@@ -1353,28 +1574,26 @@ exit 0
         Set-Content -LiteralPath $block -Value 'pause stale creation index write'
         $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
         $createJob = Start-Job -ScriptBlock {
-            param($ModulePath,$RepositoryRoot)
+            param($ModulePath,$RepositoryRoot,$ForkPoint)
             Import-Module $ModulePath -Force
             $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                 -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                 -Authorize { param($request) $true }
             New-GitHandoffBranch -Adapter $adapter -TaskKey 'demo:create-archive-race' `
-                -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields ([ordered]@{
+                -BranchId 'thread:A' -ForkPoint $ForkPoint -Fields ([ordered]@{
                     Current='Separate peer checkpoint';Source='synthetic fixture revision r2';
                     Lifecycle='Active';'Work State'='Running'
                 }) -OperationId 'create-race-branch' -Actor 'writer-a'
-        } -ArgumentList $modulePath,$a.RepositoryRoot
+        } -ArgumentList $modulePath,$a.RepositoryRoot,$createRaceCommon.Revision
         try {
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(60)
             while (-not (Test-Path -LiteralPath $entered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
                 Start-Sleep -Milliseconds 50
             }
             Test-Path -LiteralPath $entered | Should -BeTrue
-            $branch = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:create-archive-race' -BranchId 'thread:A'
-            Set-GitHandoffFields -Adapter $b -RecordKind branch -TaskKey 'demo:create-archive-race' `
-                -BranchId 'thread:A' -ExpectedRevision $branch.Revision `
-                -Changes ([ordered]@{Lifecycle='Archived'}) -OperationId 'archive-during-create' `
-                -SuppressActivity -Actor 'writer-b' -Reason 'archive newly created inactive branch' | Out-Null
+            Set-GitHandoffBranchLifecycle -Adapter $b -TaskKey 'demo:create-archive-race' `
+                -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-during-create' `
+                -Actor 'writer-b' -Reason 'archive newly created inactive branch' | Out-Null
         }
         finally {
             Remove-Item -LiteralPath $block -Force -ErrorAction SilentlyContinue
@@ -1395,7 +1614,7 @@ exit 0
         $remote = Join-Path $root 'remote.git'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:common-archive-race' -Fields $script:InitialCommon `
             -OperationId 'create-common-archive-race' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:common-archive-race' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:common-archive-race' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-common-archive-race-branch' `
             -Actor 'writer-a' | Out-Null
         Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:common-archive-race' `
@@ -1464,7 +1683,7 @@ exit 0
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-10' -Fields $script:InitialCommon -OperationId 'create-common-10' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-10' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-ten' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-10' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-ten' | Out-Null
         $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-10'
         { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-10' -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) -OperationId 'premature-common-archive' -Reason 'explicit close after recorded state' } | Should -Throw
         (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-10').Fields.Lifecycle | Should -Be 'Active'
@@ -1480,10 +1699,13 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         $remote = Join-Path $root 'remote.git'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-11' -Fields $script:InitialCommon -OperationId 'create-common-11' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-11' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-eleven' | Out-Null
-        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-11' -BranchId 'thread:A'
-        Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-11' -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes ([ordered]@{Lifecycle='Archived'}) -OperationId 'archive-eleven' -SuppressActivity -Reason 'explicit branch archival after common checkpoint' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-11' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'fork-eleven' | Out-Null
         Add-SelectiveRejectHook -RemoteRoot $remote
+        $indexFlag = Join-Path $remote 'deny-index'
+        Set-Content -LiteralPath $indexFlag -Value 'synthetic common index failure'
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:ABC-11' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'archive-eleven' } | Should -Throw
+        Remove-Item -LiteralPath $indexFlag
         $flag = Join-Path $remote 'deny-events'
         Set-Content -LiteralPath $flag -Value 'synthetic index event failure'
         { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:ABC-11' -BranchId 'thread:A' `
@@ -1511,7 +1733,7 @@ exit 0
             Lifecycle = 'Active'
             'Work State' = 'Running'
         }
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-12' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $branchFields -OperationId 'fork-twelve' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-12' -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields $branchFields -OperationId 'fork-twelve' | Out-Null
         $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-12' -BranchId 'thread:A'
         { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-12' -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Work State'='Awaiting Review'}) -OperationId 'review-without-reason' } | Should -Throw
         Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-12' -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Work State'='Awaiting Review'}) -OperationId 'review-twelve' -Actor 'agent:writer-a' -Reason 'specific tests passed; user review pending' | Out-Null
@@ -1534,7 +1756,7 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:index-actor' -Fields $script:InitialCommon `
             -OperationId 'create-index-actor-common' -Actor 'writer-a' | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:index-actor' -BranchId 'thread:A' `
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:index-actor' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-index-actor-branch' `
             -Actor 'writer-a' | Out-Null
         $result = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:index-actor' -BranchId 'thread:A' `
