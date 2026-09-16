@@ -39,6 +39,16 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         @($script:Contract.memory.contentStates) | Should -Be @('Active','Superseded','Pending','Archived')
     }
 
+    # Scenario: A stable key retains superseded history beside its current value.
+    # Purpose: Reject only multiple current truths without dead-ending normal version history.
+    It 'UnitT25_allows_historical_versions_but_rejects_multiple_active_records' {
+        $skillText = Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')
+        $operations = Get-Content -Raw (Join-Path $script:Skill 'references/memory-operations.md')
+        $skillText | Should -Match 'more than one `Active` record'
+        $skillText | Should -Match '`Superseded` and `Archived` records with that key are history'
+        $operations | Should -Match 'Historical `Superseded` or `Archived` versions with the same key are expected'
+    }
+
     # Scenario: A Guest role or unknown workspace attempts a durable write.
     # Purpose: Preserve the intended Notion boundary while independent work continues.
     It 'UnitT30_fails_closed_on_unestablished_workspace_or_write_role' {

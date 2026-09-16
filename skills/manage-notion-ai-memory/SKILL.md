@@ -38,7 +38,7 @@ Value: Traditional Chinese release notes (confirmed by user)
 
 ## Errors and recovery
 
-If the exact Memory Key lookup is duplicated or a record's owner or workspace cannot be verified, stop writes and report the conflict. If a connector write succeeds but the new value cannot be read back, report that durable saving remains unverified instead of retrying with a new key. A missing Notion connector or property leaves the memory write incomplete; it does not authorize schema repair or a Task Handoff fallback into long-term memory.
+If the exact Memory Key lookup returns more than one `Active` record, or a record's owner or workspace cannot be verified, stop writes and report the conflict. `Superseded` and `Archived` records with that key are history and do not create a duplicate-key conflict. If a connector write succeeds but the new value cannot be read back, report that durable saving remains unverified instead of retrying with a new key. A missing Notion connector or property leaves the memory write incomplete; it does not authorize schema repair or a Task Handoff fallback into long-term memory.
 
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0

@@ -36,6 +36,7 @@ When the user explicitly asks to remember safe content, treat that request as th
 
 Before creating a record, search the exact `Memory Key`:
 
+- If more than one record with `Status = Active` uses the key, stop writes and report an integrity conflict. Historical `Superseded` or `Archived` versions with the same key are expected and do not conflict with the single Active record.
 - If the effective content is unchanged, do not duplicate it. Add a materially new source or verification detail only when useful.
 - If new confirmed information replaces an old record, preserve the old record and mark it `Superseded`; keep the replacement `Active`.
 - If the key is already used for a different subject, refine the key with a stable project or source identifier instead of overwriting the unrelated record.
