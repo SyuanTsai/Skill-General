@@ -40,7 +40,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload | Should -BeTrue
         $script:Contract.forkRecovery.envelopeListNeverLoadsPayload | Should -BeTrue
         @($script:Contract.forkRecovery.creationOrder) | Should -Be @(
-            'payload-free-pending-envelope','isolated-snapshot-payload'
+            'atomic-payload-free-pending-envelope-protected-control-and-pending-index',
+            'isolated-snapshot-payload'
         )
         @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
             'isolated-snapshot-payload','payload-free-completed-envelope'
@@ -55,6 +56,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.envelopeCreationRevalidatesCommonRevision | Should -BeTrue
         $script:Contract.forkRecovery.branchCreationTargetOperationMappingExact | Should -BeTrue
         $script:Contract.forkRecovery.protectedControlRecordSeparateFromEnvelopeAndPayload | Should -BeTrue
+        $script:Contract.forkRecovery.initialEnvelopeControlAndPendingIndexAtomic | Should -BeTrue
+        @($script:Contract.forkRecovery.initialAtomicSet) | Should -Be @(
+            'payload-free-pending-envelope','protected-control-record','protected-pending-index-entry'
+        )
         @($script:Contract.forkRecovery.protectedControlRequiredEvidence) | Should -Be @(
             'Source Branch ID','Branch Creation Operations','Expected Branch Creation Payload Digests',
             'Payload Object Identity','Payload Digest','Verified Common Revision At Creation','Source ACL Locator'
@@ -181,7 +186,7 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.integration.onReviewedBranchChangeDuringFinalization | Should -Be 'stop-and-require-renewed-user-confirmation'
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
         $script:Contract.changes.appendOnly | Should -BeTrue
-        @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')
+        @($script:Contract.changes.eventUniqueKey) | Should -Be @('Authority Scope','Operation ID','Record ID','Field')
         @($script:Contract.changes.requiredFields) | Should -Contain 'Operation ID'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Previous State'

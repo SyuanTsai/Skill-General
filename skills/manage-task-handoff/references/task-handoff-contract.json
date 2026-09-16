@@ -56,7 +56,7 @@
     "separateLogicalRecord": true,
     "payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload": true,
     "envelopeListNeverLoadsPayload": true,
-    "creationOrder": ["payload-free-pending-envelope", "isolated-snapshot-payload"],
+    "creationOrder": ["atomic-payload-free-pending-envelope-protected-control-and-pending-index", "isolated-snapshot-payload"],
     "completionOrder": ["isolated-snapshot-payload", "payload-free-completed-envelope"],
     "payloadExcludedFromCommonBranchAndEventRecall": true,
     "pendingEnvelopeVisibleToTaskRecall": true,
@@ -67,6 +67,8 @@
     "envelopeCreationRevalidatesCommonRevision": true,
     "branchCreationTargetOperationMappingExact": true,
     "protectedControlRecordSeparateFromEnvelopeAndPayload": true,
+    "initialEnvelopeControlAndPendingIndexAtomic": true,
+    "initialAtomicSet": ["payload-free-pending-envelope", "protected-control-record", "protected-pending-index-entry"],
     "protectedControlRequiredEvidence": ["Source Branch ID", "Branch Creation Operations", "Expected Branch Creation Payload Digests", "Payload Object Identity", "Payload Digest", "Verified Common Revision At Creation", "Source ACL Locator"],
     "pendingListUsesAuthorizationIndexWithoutEnvelopeLoad": true,
     "pendingListMayReturnOpaqueBlockingIndicator": true,
@@ -122,7 +124,7 @@
   "scopeClauses": ["Active", "Superseded", "Deferred"],
   "changes": {
     "appendOnly": true,
-    "eventUniqueKey": ["Operation ID", "Record ID", "Field"],
+    "eventUniqueKey": ["Authority Scope", "Operation ID", "Record ID", "Field"],
     "requiredFields": ["Authority Scope", "Verified Principal", "Task Key", "Record ID", "Operation ID", "Field", "Previous State", "New State", "Reason", "Actor", "Time", "Source", "Integration Result", "Readback Result"],
     "doNotWriteUnchangedFields": true
   },
