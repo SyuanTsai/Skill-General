@@ -44,8 +44,14 @@ Describe 'manage-task-handoff Skill contract' {
             'isolated-snapshot-payload'
         )
         @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
-            'isolated-snapshot-payload','payload-free-completed-envelope'
+            'isolated-snapshot-payload','common-fence-released-or-atomically-released',
+            'atomic-payload-free-completed-envelope-and-terminal-pending-index','terminal-set-readback'
         )
+        $script:Contract.forkRecovery.terminalEnvelopeAndPendingIndexAtomic | Should -BeTrue
+        $script:Contract.forkRecovery.terminalSetReadbackRequired | Should -BeTrue
+        $script:Contract.forkRecovery.commonFenceReleasedBeforeOrWithTerminalTransition | Should -BeTrue
+        @($script:Contract.forkRecovery.terminalIndexStatusValues) | Should -Be @('Completed','Abandoned')
+        $script:Contract.forkRecovery.terminalIndexNoLongerBlocksRecall | Should -BeTrue
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target-Operation Bindings'
@@ -289,6 +295,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.legacy.adopterDefinedLegacyScopeMappingRequired | Should -BeTrue
         $script:Contract.legacy.workspaceCredentialsDoNotAuthorizeCaller | Should -BeTrue
         $script:Contract.legacy.unmappedOrDeniedSourceFailsBeforeQuery | Should -BeTrue
+        $script:Contract.legacy.readOnlyReplayCapturesMainAndUnmergedFingerprint | Should -BeTrue
+        $script:Contract.legacy.readOnlyReplayRevalidatesFingerprintBeforeReturn | Should -BeTrue
+        $script:Contract.legacy.onUnstableReadOnlyReplay | Should -Be 'bounded-reconstruct-or-stop'
         $script:Contract.legacy.bulkMigration | Should -BeFalse
         $script:Contract.legacy.autoResumeOnNewConversation | Should -BeFalse
         $script:Contract.security.handoffGrantsNewAuthorization | Should -BeFalse
