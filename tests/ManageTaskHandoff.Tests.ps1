@@ -70,7 +70,17 @@ Describe 'manage-task-handoff Skill contract' {
     # Scenario: A branch is selected after a common write that may fail on readback.
     # Purpose: Keep every related branch recoverable until the common decision is verified.
     It 'InterT40_preserves_order_and_append_only_status_history' {
-        @($script:Contract.integration.selectionOrder) | Should -Be @('conditional-common-write','common-readback','branch-outcomes','archive-selected-and-superseded-branches')
+        @($script:Contract.integration.selectionOrder) | Should -Be @(
+            'conditional-common-write',
+            'common-readback',
+            'branch-outcomes',
+            'archive-selected-and-superseded-branches',
+            'remove-archived-branches-from-active-index',
+            'active-index-readback'
+        )
+        $script:Contract.integration.selectedBranchIndexRemovalRequired | Should -BeTrue
+        $script:Contract.integration.indexRemovalRetainsStableOperationIds | Should -BeTrue
+        $script:Contract.integration.indexRemovalFailureIsPartialReconciliation | Should -BeTrue
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
         $script:Contract.changes.appendOnly | Should -BeTrue
         @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')

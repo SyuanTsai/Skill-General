@@ -80,7 +80,10 @@
     "userDecisionKinds": ["candidate-solution", "architecture-choice", "tradeoff", "authorization", "intent-change", "global-scope-change", "select-branch", "combine-branches", "reject-all-branches"],
     "mutualExclusionSameVersionEnvironmentScopeIsConflict": true,
     "lastWriteWins": false,
-    "selectionOrder": ["conditional-common-write", "common-readback", "branch-outcomes", "archive-selected-and-superseded-branches"],
+    "selectionOrder": ["conditional-common-write", "common-readback", "branch-outcomes", "archive-selected-and-superseded-branches", "remove-archived-branches-from-active-index", "active-index-readback"],
+    "selectedBranchIndexRemovalRequired": true,
+    "indexRemovalRetainsStableOperationIds": true,
+    "indexRemovalFailureIsPartialReconciliation": true,
     "archiveOnCommonReadbackFailure": false,
     "explicitContinueExplorationKeepsBranchActive": true
   },
