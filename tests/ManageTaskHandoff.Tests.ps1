@@ -35,13 +35,17 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.common.structuralIndexChangesRequireIntegrationDecision | Should -BeFalse
         $script:Contract.firstFork.pendingBeforeEveryMissingBranchCreation | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingPreservesReplacedCommonCurrent | Should -BeTrue
+        $script:Contract.firstFork.pendingUsesDedicatedForkRecoveryRecord | Should -BeTrue
+        $script:Contract.firstFork.pendingNeverUsesCommonOrBranchFields | Should -BeTrue
+        $script:Contract.firstFork.forkRecoveryExcludedFromTaskRecall | Should -BeTrue
+        $script:Contract.firstFork.forkRecoveryHistoryKeepsPayloadIsolated | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingPreservesBranchCurrentAndSource | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingCarriesVerifiedSharedBaseline | Should -BeTrue
         $script:Contract.firstFork.existingPeerAdvanceUsesPersistedSnapshot | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingClearsAfterBranchAndIndexReadback | Should -BeTrue
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
+        $script:Contract.adapter.exactForkRecoveryLookup | Should -BeTrue
         foreach ($case in $script:Cases.lookup) {
             $action = if ($case.mainCount -gt 1 -or $case.branchMatches -gt 1) { 'stop-integrity-conflict' }
                 elseif ($case.branchId -and $case.branchMatches -eq 1) { 'exact-branch' }
