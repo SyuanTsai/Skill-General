@@ -465,6 +465,41 @@ exit 0
         { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-8' -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) -OperationId 'no-decision' } | Should -Throw
     }
 
+    # Scenario: An update tries to clear a required field after creation validation has already passed.
+    # Purpose: Keep every committed common and branch record readable under the required-field contract.
+    It 'InterT85_rejects_updates_that_remove_required_record_fields' {
+        $root = Join-Path $TestDrive 'q85'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:required-update' -Fields $script:InitialCommon `
+            -OperationId 'create-required-update' -Actor 'writer-a' | Out-Null
+        $before = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:required-update'
+        { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:required-update' `
+            -ExpectedRevision $before.Revision -Changes ([ordered]@{Source=$null}) `
+            -OperationId 'clear-required-source' -Actor 'writer-a' } | Should -Throw
+        $after = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:required-update'
+        $after.Revision | Should -Be $before.Revision
+        $after.Fields.Source | Should -Be $script:InitialCommon.Source
+    }
+
+    # Scenario: A caller creates a new peer while the exact common record is archived.
+    # Purpose: Require explicit common continuation before a durable Active branch can exist.
+    It 'InterT87_rejects_branch_creation_under_an_archived_common_record' {
+        $root = Join-Path $TestDrive 'q87'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:archived-common' -Fields $script:InitialCommon `
+            -OperationId 'create-archived-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:archived-common'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:archived-common' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
+            -OperationId 'archive-common-before-branch' -Actor 'writer-a' -Reason 'explicit close with no active peers' | Out-Null
+        { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:archived-common' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'forbidden-peer-create' `
+            -Actor 'writer-a' } | Should -Throw
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:archived-common' -BranchId 'thread:A' | Should -BeNullOrEmpty
+    }
+
     It 'InterT90_repairs_an_archived_branch_index_and_restores_only_the_exact_peer' {
         $root = Join-Path $TestDrive 'archive-retry'
         [void](New-Item -ItemType Directory -Path $root)
@@ -493,6 +528,74 @@ exit 0
         $post = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-9'
         $post.ActiveBranches | Should -Contain 'thread:A'
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-9' -BranchId 'thread:B').Fields.Lifecycle | Should -Be 'Active'
+    }
+
+    # Scenario: Archive pauses while updating common, then another writer restores the same branch before the stale index push completes.
+    # Purpose: Reconcile the common index from the latest branch revision instead of the archive caller's stale lifecycle.
+    It 'InterT95_revalidates_branch_lifecycle_after_a_concurrent_restore' {
+        $root = Join-Path $TestDrive 'q95'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $b = New-WriterFixture -Root $root -WriterId 'writer-b'
+        $remote = Join-Path $root 'remote.git'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:lifecycle-race' -Fields $script:InitialCommon `
+            -OperationId 'create-race-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:lifecycle-race' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-race-branch' `
+            -Actor 'writer-a' | Out-Null
+
+        $hook = Join-Path $remote 'hooks/pre-receive'
+        $hookText = @'
+#!/bin/sh
+while read old new ref; do
+  case "$ref" in
+    refs/heads/handoff-v1/records/*/common)
+      if [ -f "$GIT_DIR/block-index" ]; then
+        : > "$GIT_DIR/index-entered"
+        while [ -f "$GIT_DIR/block-index" ]; do sleep 0.05; done
+      fi
+      ;;
+  esac
+done
+exit 0
+'@
+        Set-Content -LiteralPath $hook -Value $hookText -Encoding utf8
+        if (-not $IsWindows) {
+            $mode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute
+            [IO.File]::SetUnixFileMode($hook, $mode)
+        }
+        $block = Join-Path $remote 'block-index'
+        $entered = Join-Path $remote 'index-entered'
+        Set-Content -LiteralPath $block -Value 'pause stale archive index write'
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $archiveJob = Start-Job -ScriptBlock {
+            param($ModulePath,$RepositoryRoot)
+            Import-Module $ModulePath -Force
+            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin
+            Set-GitHandoffBranchLifecycle -Adapter $adapter -TaskKey 'demo:lifecycle-race' `
+                -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-race' `
+                -Actor 'writer-a' -Reason 'archive after branch review'
+        } -ArgumentList $modulePath,$a.RepositoryRoot
+        try {
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+            while (-not (Test-Path -LiteralPath $entered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 50
+            }
+            Test-Path -LiteralPath $entered | Should -BeTrue
+            $restored = Set-GitHandoffBranchLifecycle -Adapter $b -TaskKey 'demo:lifecycle-race' `
+                -BranchId 'thread:A' -Lifecycle Active -OperationId 'restore-race' `
+                -ExplicitContinuation -Actor 'writer-b' -Reason 'explicitly continue the exact branch'
+            $restored.Indexed | Should -BeTrue
+        }
+        finally {
+            Remove-Item -LiteralPath $block -Force -ErrorAction SilentlyContinue
+        }
+        $archiveResult = Receive-Job -Job $archiveJob -Wait -AutoRemoveJob -ErrorAction Stop
+        $archiveResult | Should -Not -BeNullOrEmpty
+        $finalBranch = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:lifecycle-race' -BranchId 'thread:A'
+        $finalCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:lifecycle-race'
+        $finalBranch.Fields.Lifecycle | Should -Be 'Active'
+        $finalCommon.ActiveBranches | Should -Contain 'thread:A'
     }
 
     It 'InterT100_blocks_common_archival_while_a_peer_is_still_indexed_active' {
@@ -551,6 +654,25 @@ exit 0
         $event.PreviousState | Should -Be 'Running'
         $event.NewState | Should -Be 'Awaiting Review'
         $event.Source | Should -Be $script:InitialBranch.Source
+    }
+
+    # Scenario: One actor archives a branch and the adapter mutates both the branch and common index.
+    # Purpose: Preserve the same actual writer identity across the complete lifecycle operation.
+    It 'InterT125_forwards_the_lifecycle_actor_to_the_common_index_event' {
+        $root = Join-Path $TestDrive 'q125'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:index-actor' -Fields $script:InitialCommon `
+            -OperationId 'create-index-actor-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:index-actor' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-index-actor-branch' `
+            -Actor 'writer-a' | Out-Null
+        Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:index-actor' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'archive-with-actor' -Actor 'agent:writer-a' `
+            -Reason 'archive after verified branch integration' | Out-Null
+        $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:index-actor' -RecordKind common `
+            -OperationId 'archive-with-actor:index' -Field 'Active Branches'
+        $event.Actor | Should -Be 'agent:writer-a'
     }
 
     # Scenario: A configured remote refuses the create-only record ref while it remains absent.

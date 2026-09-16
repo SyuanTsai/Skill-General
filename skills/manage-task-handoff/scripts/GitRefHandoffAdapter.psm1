@@ -240,6 +240,22 @@ function Assert-HandoffFieldsSafe {
     }
 }
 
+function Assert-HandoffRequiredFields {
+    param([Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][ValidateSet('common','branch')][string] $RecordKind)
+    $required = if ($RecordKind -eq 'common') {
+        @('Task Key','Intent','Scope','Current','Source','Lifecycle','Work State')
+    }
+    else {
+        @('Task Key','Branch ID','Fork Point','Current','Source','Lifecycle','Work State')
+    }
+    foreach ($field in $required) {
+        if (-not $Fields.Contains($field) -or $null -eq $Fields[$field] -or
+            ($Fields[$field] -is [string] -and [string]::IsNullOrWhiteSpace([string]$Fields[$field]))) {
+            throw "Required Handoff field '$field' is absent or empty."
+        }
+    }
+}
+
 function Get-GitHandoffOperationOrigin {
     param($Adapter,[Parameter(Mandatory = $true)] $Current,[string] $OperationId)
     $history = @(& git -C $Adapter.RepositoryRoot rev-list --first-parent $Current.Revision 2>$null)
@@ -402,11 +418,7 @@ function New-GitHandoffRecord {
         if ($logicalFields.Contains([string]$field)) { throw "A system identity field was duplicated: '$field'." }
         $logicalFields[[string]$field] = $Fields[$field]
     }
-    $required = if ($RecordKind -eq 'common') { @('Task Key','Intent','Scope','Current','Source','Lifecycle','Work State') }
-        else { @('Task Key','Branch ID','Fork Point','Current','Source','Lifecycle','Work State') }
-    foreach ($field in $required) {
-        if (-not $logicalFields.Contains($field) -or $null -eq $logicalFields[$field]) { throw "Required Handoff field '$field' is absent." }
-    }
+    Assert-HandoffRequiredFields -Fields $logicalFields -RecordKind $RecordKind
     if ($logicalFields.Lifecycle -cne 'Active') { throw 'A new Handoff record starts Active; exact Archived continuation uses restore.' }
     $payload = [ordered]@{ fields=$Fields;forkPoint=$ForkPoint }
     $digest = Get-OperationPayloadDigest -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -Changes $payload -Actor $Actor
@@ -499,6 +511,7 @@ function Set-GitHandoffFields {
         if ($fieldName -ceq 'Active Branches') { $newRecord.activeBranches = @($next) }
         else { $newRecord.fields[$fieldName] = $next }
     }
+    Assert-HandoffRequiredFields -Fields $newRecord.fields -RecordKind $RecordKind
     if ($actualChanges.Count -eq 0) { return [pscustomobject]@{RecordId=$old.Record.recordId;Revision=$old.Revision;Status='no-op'} }
     $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray() `
         -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)
@@ -524,13 +537,20 @@ function New-GitHandoffBranch {
         [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)][string] $ForkPoint,
         [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId,
         [Parameter(Mandatory = $true)][string] $Actor)
-    if ($null -eq (Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey)) { throw 'Branch creation requires the exact common Task Key.' }
+    $initialCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+    if ($null -eq $initialCommon) { throw 'Branch creation requires the exact common Task Key.' }
+    if ($initialCommon.Fields.Lifecycle -cne 'Active') {
+        throw 'Branch creation requires an Active common record; restore the exact common by explicit continuation first.'
+    }
     $branch = New-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId -Actor $Actor
     if ((Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId).Fields.Lifecycle -ceq 'Archived') {
         throw 'An archived branch must be restored by exact explicit continuation, not indexed as a new branch.'
     }
     for ($attempt = 0; $attempt -lt 3; $attempt++) {
         $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+        if ($common.Fields.Lifecycle -cne 'Active') {
+            throw "Branch '$BranchId' is durable but cannot be indexed under an Archived common record; restore common explicitly and retry the exact operation."
+        }
         if ($common.ActiveBranches -ccontains $BranchId) {
             $indexedRecord = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
             if ($null -ne $indexedRecord.Record.operations["${OperationId}:index"]) {
@@ -589,26 +609,43 @@ function Set-GitHandoffBranchLifecycle {
         }
     }
     $branch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
-    if ($branch.Fields.Lifecycle -cne $Lifecycle) { throw 'The exact branch lifecycle was not read back; retain its operation ID.' }
-    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    $requestedBranchRevision = if ($branch.Fields.Lifecycle -ceq $Lifecycle) { [string]$branch.Revision } else { $null }
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $branch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
         $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-        $indexed = ($common.ActiveBranches -ccontains $BranchId)
-        if ($indexed -eq ($Lifecycle -ceq 'Active')) {
-            $indexedRecord = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
-            if ($null -ne $indexedRecord.Record.operations["${OperationId}:index"]) {
-                Complete-GitHandoffEvents -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -OperationId "${OperationId}:index" | Out-Null
-            }
-            return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$branch.Revision;CommonRevision=$common.Revision;Indexed=$indexed}
+        if ($null -eq $branch -or $null -eq $common) { throw 'The exact common or branch record disappeared during lifecycle reconciliation.' }
+        $effectiveLifecycle = [string]$branch.Fields.Lifecycle
+        $shouldBeIndexed = ($effectiveLifecycle -ceq 'Active')
+        $indexOperationId = if ($null -ne $requestedBranchRevision -and $branch.Revision -ceq $requestedBranchRevision -and $effectiveLifecycle -ceq $Lifecycle) {
+            "${OperationId}:index"
         }
-        if ($Lifecycle -ceq 'Active') { $newIndex = @($common.ActiveBranches) + @($BranchId) }
+        else {
+            "${OperationId}:index:reconcile:$($branch.Revision)"
+        }
+        $indexed = ($common.ActiveBranches -ccontains $BranchId)
+        if ($indexed -eq $shouldBeIndexed) {
+            $indexedRecord = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+            if ($null -ne $indexedRecord.Record.operations[$indexOperationId]) {
+                Complete-GitHandoffEvents -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -OperationId $indexOperationId | Out-Null
+            }
+            return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$branch.Revision;CommonRevision=$common.Revision;Lifecycle=$effectiveLifecycle;Indexed=$indexed}
+        }
+        if ($shouldBeIndexed) { $newIndex = @($common.ActiveBranches) + @($BranchId) }
         else { $newIndex = @($common.ActiveBranches | Where-Object { $_ -cne $BranchId }) }
+        $observedBranchRevision = [string]$branch.Revision
         try {
             Set-GitHandoffFields -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -ExpectedRevision $common.Revision `
-                -Changes ([ordered]@{'Active Branches'=$newIndex}) -OperationId "${OperationId}:index" -SuppressActivity `
-                -Reason 'reconcile exact peer Active index after lifecycle change' | Out-Null
+                -Changes ([ordered]@{'Active Branches'=$newIndex}) -OperationId $indexOperationId -SuppressActivity `
+                -Actor $Actor -Reason 'reconcile exact peer Active index after lifecycle change' | Out-Null
+            $verifiedBranch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
+            $verifiedCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+            if ($verifiedBranch.Revision -ceq $observedBranchRevision -and
+                (($verifiedCommon.ActiveBranches -ccontains $BranchId) -eq $shouldBeIndexed)) {
+                return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$verifiedBranch.Revision;CommonRevision=$verifiedCommon.Revision;Lifecycle=$effectiveLifecycle;Indexed=$shouldBeIndexed}
+            }
         }
         catch {
-            if ($attempt -eq 2) {
+            if ($attempt -eq 5) {
                 throw "Branch '$BranchId' lifecycle is durable but common index reconciliation is pending; retain Operation ID '$OperationId': $($_.Exception.Message)"
             }
         }
