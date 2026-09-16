@@ -39,6 +39,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.common.structuralIndexChangesRequireIntegrationDecision | Should -BeFalse
         $script:Contract.firstFork.pendingBeforeEveryMissingBranchCreation | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
+        $script:Contract.firstFork.existingPeerContinuationPrecedesRecovery | Should -BeTrue
+        $script:Contract.firstFork.existingPeerPendingCarriesPostFenceGenerationAndContinuationOperation | Should -BeTrue
         $script:Contract.firstFork.pendingUsesDedicatedForkRecoveryRecord | Should -BeTrue
         $script:Contract.firstFork.pendingNeverUsesCommonOrBranchFields | Should -BeTrue
         $script:Contract.firstFork.forkRecoveryPayloadExcludedFromTaskRecall | Should -BeTrue
@@ -121,6 +123,8 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.integration.reviewedBranchContentIdentityExcludes) | Should -Be @('Lifecycle','Branch Outcome','Last Activity At','operation-log')
         $script:Contract.integration.continuationGenerationIncludedInReviewedBranchIdentity | Should -BeTrue
         $script:Contract.integration.finalizationRejectsContinuationGenerationChange | Should -BeTrue
+        $script:Contract.integration.explicitContinuationAlwaysAdvancesGeneration | Should -BeTrue
+        $script:Contract.integration.forkFromExistingBranchBeginsContinuationBeforeSnapshot | Should -BeTrue
         $script:Contract.integration.decisionWriteRequiresExactReviewedBranchRevisionAndIdentity | Should -BeTrue
         $script:Contract.integration.branchStorageRevisionCursorIndependentFromReviewedContentIdentity | Should -BeTrue
         $script:Contract.integration.acceptedBranchRevisionMustDescendFromReviewedOrigin | Should -BeTrue
@@ -154,6 +158,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.archive.otherPeersRemainArchived | Should -BeTrue
         $script:Contract.archive.branchContinuationGenerationInitial | Should -Be 0
         $script:Contract.archive.explicitRestoreIncrementsContinuationGeneration | Should -BeTrue
+        $script:Contract.archive.explicitActiveContinuationIncrementsContinuationGeneration | Should -BeTrue
+        $script:Contract.archive.continuationIncrementPrecedesResumedWorkOrFork | Should -BeTrue
+        $script:Contract.archive.sameContinuationOperationIdOwnsOneIncrement | Should -BeTrue
+        $script:Contract.archive.readOnlyInspectionAndFinalizationDoNotIncrementGeneration | Should -BeTrue
         $script:Contract.archive.restoreLifecycleAndGenerationInOneConditionalOperation | Should -BeTrue
         $script:Contract.archive.oldDecisionCannotFinalizeRestoredGeneration | Should -BeTrue
         $script:Contract.archive.indexRemovalBindsArchivedBranchRevision | Should -BeTrue
@@ -203,6 +211,10 @@ Describe 'manage-task-handoff Skill contract' {
     # Purpose: Make old data opt-in and keep storage evidence from granting new authority.
     It 'UnitT70_keeps_legacy_read_only_and_secrets_out_of_storage' {
         $script:Contract.legacy.exactTaskKeyOnly | Should -BeTrue
+        $script:Contract.legacy.verifiedPrincipalAuthorizationBeforeQuery | Should -BeTrue
+        $script:Contract.legacy.adopterDefinedLegacyScopeMappingRequired | Should -BeTrue
+        $script:Contract.legacy.workspaceCredentialsDoNotAuthorizeCaller | Should -BeTrue
+        $script:Contract.legacy.unmappedOrDeniedSourceFailsBeforeQuery | Should -BeTrue
         $script:Contract.legacy.bulkMigration | Should -BeFalse
         $script:Contract.legacy.autoResumeOnNewConversation | Should -BeFalse
         $script:Contract.security.handoffGrantsNewAuthorization | Should -BeFalse
