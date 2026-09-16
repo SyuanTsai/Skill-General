@@ -255,7 +255,8 @@ function Assert-HandoffFieldsSafe {
     param([Parameter(Mandatory = $true)] $Fields,[string] $RecordKind,[switch] $DecisionConfirmed)
     if ($Fields -isnot [Collections.IDictionary]) { throw 'Changed Handoff fields must be an ordered mapping.' }
     $canonicalFields = @('Task Key','Branch ID','Fork Point','Intent','Scope','Current','Source','Lifecycle',
-        'Work State','Branch Outcome','Active Branches','Last Activity At')
+        'Work State','Branch Outcome','Active Branches','Last Activity At','Keep Active Until','Conflict',
+        'Candidate Conclusion','Applicability Scope','Fork Baselines','Integrated Decisions')
     foreach ($name in $Fields.Keys) {
         if ([string]::IsNullOrWhiteSpace([string]$name) -or [string]$name -match '(?i)password|token|secret|private.?key') {
             throw 'A Handoff field has an empty or sensitive name; do not store credentials.'
@@ -476,8 +477,11 @@ function New-GitHandoffRecord {
     Assert-HandoffOperationId -OperationId $OperationId
     Assert-HandoffFieldsSafe -Fields $Fields -RecordKind $RecordKind
     if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff creation event requires the actual writer actor.' }
-    if (@($Fields.Keys | Where-Object { [string]$_ -ieq 'Active Branches' }).Count -gt 0) {
-        throw "Active Branches is a structural common index; create the record first, then use the branch index reconciliation operation."
+    $creationManagedFields = @($Fields.Keys | Where-Object {
+        [string]$_ -ieq 'Active Branches' -or [string]$_ -ieq 'Last Activity At'
+    })
+    if ($creationManagedFields.Count -gt 0) {
+        throw "Active Branches and Last Activity At are system-managed fields; create the record without caller values."
     }
     $recordId = Get-HandoffRecordId -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($ForkPoint)) { throw 'Fork Point is required.' }
@@ -575,6 +579,9 @@ function Invoke-GitHandoffFieldsMutation {
     foreach ($field in $Changes.Keys) {
         $fieldName = [string]$field
         if ($fieldName -ceq 'Active Branches' -and $RecordKind -ne 'common') { throw 'Only common may change the structural Active index.' }
+        if ($fieldName -ceq 'Active Branches' -and -not $InternalOperation) {
+            throw 'Active Branches may be changed only by adapter-owned branch lifecycle reconciliation.'
+        }
         if ($fieldName -cin @('Task Key','Branch ID','Fork Point','Last Activity At')) { throw 'Handoff identity and activity cannot be replaced through changed fields.' }
         $previous = Get-HandoffFieldValue -Record $newRecord -Field $fieldName
         $next = $Changes[$field]
@@ -627,42 +634,65 @@ function New-GitHandoffBranch {
     if ($initialCommon.Fields.Lifecycle -cne 'Active') {
         throw 'Branch creation requires an Active common record; restore the exact common by explicit continuation first.'
     }
-    $branch = New-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId -Actor $Actor
-    $branchRecord = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
-    if ($branchRecord.Record.fields.Lifecycle -ceq 'Archived') {
-        throw 'An archived branch must be restored by exact explicit continuation, not indexed as a new branch.'
-    }
-    $branchOrigin = Get-GitHandoffOperationOrigin -Adapter $Adapter -Current $branchRecord -OperationId $OperationId
-    $indexOperationId = Get-HandoffInternalOperationId -Purpose 'branch-create-index' -TaskKey $TaskKey `
-        -BranchId $BranchId -ParentOperationId $OperationId -Binding $branchOrigin.Revision
-    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    New-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId `
+        -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId -Actor $Actor | Out-Null
+    $indexOperationIds = [Collections.Generic.List[string]]::new()
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $branchRecord = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
         $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-        if ($common.Fields.Lifecycle -cne 'Active') {
+        if ($null -eq $branchRecord -or $null -eq $common) {
+            throw 'The exact common or newly created branch disappeared during index reconciliation.'
+        }
+        $effectiveLifecycle = [string]$branchRecord.Fields.Lifecycle
+        $shouldBeIndexed = ($effectiveLifecycle -ceq 'Active')
+        if ($shouldBeIndexed -and $common.Fields.Lifecycle -cne 'Active') {
             throw "Branch '$BranchId' is durable but cannot be indexed under an Archived common record; restore common explicitly and retry the exact operation."
         }
-        if ($common.ActiveBranches -ccontains $BranchId) {
-            Complete-GitHandoffInternalEvents -Adapter $Adapter -TaskKey $TaskKey -Purpose 'branch-create-index' `
-                -ParentOperationId $OperationId -BranchId $BranchId -AdditionalOperationIds @($indexOperationId) | Out-Null
-            return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$branch.Revision;CommonRevision=$common.Revision;
-                Indexed=$true;IndexOperationId=$indexOperationId}
+        $indexOperationId = Get-HandoffInternalOperationId -Purpose 'branch-create-index' -TaskKey $TaskKey `
+            -BranchId $BranchId -ParentOperationId $OperationId `
+            -Binding "$($branchRecord.Revision)|${effectiveLifecycle}"
+        if (-not $indexOperationIds.Contains($indexOperationId)) { $indexOperationIds.Add($indexOperationId) }
+        $indexed = ($common.ActiveBranches -ccontains $BranchId)
+        if ($indexed -eq $shouldBeIndexed) {
+            $verifiedBranch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
+            $verifiedCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+            if ($verifiedBranch.Revision -cne $branchRecord.Revision -or
+                ([string]$verifiedBranch.Fields.Lifecycle -ceq 'Active') -ne $shouldBeIndexed -or
+                (($verifiedCommon.ActiveBranches -ccontains $BranchId) -ne $shouldBeIndexed)) {
+                continue
+            }
+            $completedIndexIds = @(Complete-GitHandoffInternalEvents -Adapter $Adapter -TaskKey $TaskKey `
+                -Purpose 'branch-create-index' -ParentOperationId $OperationId -BranchId $BranchId `
+                -AdditionalOperationIds $indexOperationIds.ToArray())
+            return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$verifiedBranch.Revision;CommonRevision=$verifiedCommon.Revision;
+                Lifecycle=$effectiveLifecycle;Indexed=$shouldBeIndexed;
+                IndexOperationId=$(if ($completedIndexIds -ccontains $indexOperationId) { $indexOperationId } else { $null });
+                IndexOperationIds=$completedIndexIds}
         }
-        $newIndex = @($common.ActiveBranches) + @($BranchId)
+        if ($shouldBeIndexed) { $newIndex = @($common.ActiveBranches) + @($BranchId) }
+        else { $newIndex = @($common.ActiveBranches | Where-Object { $_ -cne $BranchId }) }
+        $observedBranchRevision = [string]$branchRecord.Revision
         try {
             $index = Invoke-GitHandoffFieldsMutation -Adapter $Adapter -RecordKind common -TaskKey $TaskKey `
                 -ExpectedRevision $common.Revision -Changes ([ordered]@{'Active Branches'=$newIndex}) `
                 -OperationId $indexOperationId -SuppressActivity -Actor $Actor `
-                -Reason 'index exact peer branch after creation' -InternalOperation
-            $rechecked = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-            if ($rechecked.ActiveBranches -ccontains $BranchId) {
-                Complete-GitHandoffInternalEvents -Adapter $Adapter -TaskKey $TaskKey -Purpose 'branch-create-index' `
-                    -ParentOperationId $OperationId -BranchId $BranchId -AdditionalOperationIds @($indexOperationId) | Out-Null
-                return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$branch.Revision;CommonRevision=$index.Revision;
-                    Indexed=$true;IndexOperationId=$indexOperationId}
+                -Reason 'reconcile exact peer index after branch creation' -InternalOperation
+            $verifiedBranch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
+            $verifiedCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+            if ($verifiedBranch.Revision -ceq $observedBranchRevision -and
+                ([string]$verifiedBranch.Fields.Lifecycle -ceq 'Active') -eq $shouldBeIndexed -and
+                (($verifiedCommon.ActiveBranches -ccontains $BranchId) -eq $shouldBeIndexed)) {
+                $completedIndexIds = @(Complete-GitHandoffInternalEvents -Adapter $Adapter -TaskKey $TaskKey `
+                    -Purpose 'branch-create-index' -ParentOperationId $OperationId -BranchId $BranchId `
+                    -AdditionalOperationIds $indexOperationIds.ToArray())
+                return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$verifiedBranch.Revision;
+                    CommonRevision=$verifiedCommon.Revision;Lifecycle=$effectiveLifecycle;Indexed=$shouldBeIndexed;
+                    IndexOperationId=$indexOperationId;IndexOperationIds=$completedIndexIds}
             }
         }
-        catch { if ($attempt -eq 2) { throw "Branch '$BranchId' is durable but unindexed; retain Operation ID '$OperationId' and retry only common index: $($_.Exception.Message)" } }
+        catch { if ($attempt -eq 5) { throw "Branch '$BranchId' is durable but its lifecycle/index reconciliation is pending; retain Operation ID '$OperationId': $($_.Exception.Message)" } }
     }
-    throw "Branch '$BranchId' was not fully indexed after creation; retain its exact ID and Operation ID '$OperationId'."
+    throw "Branch '$BranchId' lifecycle and common Active index were not jointly verified after creation; retain its exact ID and Operation ID '$OperationId'."
 }
 
 function Set-GitHandoffBranchLifecycle {

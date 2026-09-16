@@ -115,6 +115,28 @@ exit 0
         Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:active-branches' | Should -BeNullOrEmpty
     }
 
+    # Scenario: Creation supplies the adapter-managed activity timestamp and an ordinary caller writes the structural index.
+    # Purpose: Keep both system fields single-sourced by the adapter's verified operations.
+    It 'InterT17a_rejects_system_managed_activity_creation_and_external_index_writes' {
+        $root = Join-Path $TestDrive 'system-fields'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $fields = [ordered]@{}
+        foreach ($name in $script:InitialCommon.Keys) { $fields[$name] = $script:InitialCommon[$name] }
+        $fields['Last Activity At'] = '2026-09-16T00:00:00Z'
+        { New-GitHandoffCommon -Adapter $a -TaskKey 'demo:managed-activity' -Fields $fields `
+            -OperationId 'create-with-activity' -Actor 'writer-a' } | Should -Throw
+        Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:managed-activity' | Should -BeNullOrEmpty
+
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:external-index' -Fields $script:InitialCommon `
+            -OperationId 'create-external-index-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:external-index'
+        { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:external-index' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{'Active Branches'=@('ghost')}) `
+            -OperationId 'external-index-write' -Actor 'writer-a' } | Should -Throw
+        @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:external-index').ActiveBranches).Count | Should -Be 0
+    }
+
     # Scenario: Legal Task Key and Branch ID pairs contain colons but concatenate to the same text.
     # Purpose: Keep branch record and event identities collision-free for every legal identifier pair.
     It 'InterT18_encodes_task_and_branch_identity_without_delimiter_collisions' {
@@ -476,6 +498,31 @@ exit 0
             -DecisionConfirmed } | Should -Throw
     }
 
+    # Scenario: Callers use casing variants for every optional field named by the public contract.
+    # Purpose: Make canonical field spelling complete for case-sensitive storage consumers.
+    It 'InterT82_rejects_case_variants_for_all_recognized_optional_fields' {
+        $root = Join-Path $TestDrive 'canonical-optional-fields'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        foreach ($field in @('fork baselines','integrated decisions','conflict','keep active until')) {
+            $fields = [ordered]@{}
+            foreach ($name in $script:InitialCommon.Keys) { $fields[$name] = $script:InitialCommon[$name] }
+            $fields[$field] = 'fixture'
+            { New-GitHandoffCommon -Adapter $a -TaskKey "demo:common-$($field.Replace(' ', '-'))" `
+                -Fields $fields -OperationId "bad-common-$($field.Replace(' ', '-'))" -Actor 'writer-a' } | Should -Throw
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:branch-optional-case' -Fields $script:InitialCommon `
+            -OperationId 'create-branch-optional-case-common' -Actor 'writer-a' | Out-Null
+        foreach ($field in @('candidate conclusion','applicability scope')) {
+            $fields = [ordered]@{}
+            foreach ($name in $script:InitialBranch.Keys) { $fields[$name] = $script:InitialBranch[$name] }
+            $fields[$field] = 'fixture'
+            { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:branch-optional-case' `
+                -BranchId "thread:$($field.Replace(' ', '-'))" -ForkPoint 'shared-r1' `
+                -Fields $fields -OperationId "bad-branch-$($field.Replace(' ', '-'))" -Actor 'writer-a' } | Should -Throw
+        }
+    }
+
     # Scenario: An update tries to clear a required field after creation validation has already passed.
     # Purpose: Keep every committed common and branch record readable under the required-field contract.
     It 'InterT85_rejects_updates_that_remove_required_record_fields' {
@@ -652,6 +699,73 @@ exit 0
         $finalCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:lifecycle-race'
         $finalBranch.Fields.Lifecycle | Should -Be 'Active'
         $finalCommon.ActiveBranches | Should -Contain 'thread:A'
+    }
+
+    # Scenario: Branch creation pauses before its common-index write while another writer archives that new branch.
+    # Purpose: Prevent a stale create path from leaving an Archived branch in the Active index.
+    It 'InterT96_reconciles_creation_index_against_a_concurrent_archive' {
+        $root = Join-Path $TestDrive 'q96'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $b = New-WriterFixture -Root $root -WriterId 'writer-b'
+        $remote = Join-Path $root 'remote.git'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:create-archive-race' -Fields $script:InitialCommon `
+            -OperationId 'create-race-common' -Actor 'writer-a' | Out-Null
+
+        $hook = Join-Path $remote 'hooks/pre-receive'
+        $hookText = @'
+#!/bin/sh
+while read old new ref; do
+  case "$ref" in
+    refs/heads/handoff-v1/records/*/common)
+      compact=$(git show "$new:record.json" | tr -d '\r\n ')
+      if [ -f "$GIT_DIR/block-create-index" ] && printf '%s' "$compact" | grep -Fq '"activeBranches":["thread:A"]'; then
+        : > "$GIT_DIR/create-index-entered"
+        while [ -f "$GIT_DIR/block-create-index" ]; do sleep 0.05; done
+      fi
+      ;;
+  esac
+done
+exit 0
+'@
+        Set-Content -LiteralPath $hook -Value $hookText -Encoding utf8
+        if (-not $IsWindows) {
+            $mode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute
+            [IO.File]::SetUnixFileMode($hook, $mode)
+        }
+        $block = Join-Path $remote 'block-create-index'
+        $entered = Join-Path $remote 'create-index-entered'
+        Set-Content -LiteralPath $block -Value 'pause stale creation index write'
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $createJob = Start-Job -ScriptBlock {
+            param($ModulePath,$RepositoryRoot)
+            Import-Module $ModulePath -Force
+            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin
+            New-GitHandoffBranch -Adapter $adapter -TaskKey 'demo:create-archive-race' `
+                -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields ([ordered]@{
+                    Current='Separate peer checkpoint';Source='synthetic fixture revision r2';
+                    Lifecycle='Active';'Work State'='Running'
+                }) -OperationId 'create-race-branch' -Actor 'writer-a'
+        } -ArgumentList $modulePath,$a.RepositoryRoot
+        try {
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+            while (-not (Test-Path -LiteralPath $entered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 50
+            }
+            Test-Path -LiteralPath $entered | Should -BeTrue
+            $branch = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:create-archive-race' -BranchId 'thread:A'
+            Set-GitHandoffFields -Adapter $b -RecordKind branch -TaskKey 'demo:create-archive-race' `
+                -BranchId 'thread:A' -ExpectedRevision $branch.Revision `
+                -Changes ([ordered]@{Lifecycle='Archived'}) -OperationId 'archive-during-create' `
+                -SuppressActivity -Actor 'writer-b' -Reason 'archive newly created inactive branch' | Out-Null
+        }
+        finally {
+            Remove-Item -LiteralPath $block -Force -ErrorAction SilentlyContinue
+        }
+        $createResult = Receive-Job -Job $createJob -Wait -AutoRemoveJob -ErrorAction Stop
+        $createResult.Indexed | Should -BeFalse
+        (Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:create-archive-race' -BranchId 'thread:A').Fields.Lifecycle | Should -Be 'Archived'
+        (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:create-archive-race').ActiveBranches | Should -Not -Contain 'thread:A'
     }
 
     # Scenario: Branch restore pauses before re-indexing and another writer archives the empty common record.
