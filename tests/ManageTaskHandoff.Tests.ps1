@@ -37,8 +37,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
         $script:Contract.firstFork.pendingUsesDedicatedForkRecoveryRecord | Should -BeTrue
         $script:Contract.firstFork.pendingNeverUsesCommonOrBranchFields | Should -BeTrue
-        $script:Contract.firstFork.forkRecoveryExcludedFromTaskRecall | Should -BeTrue
+        $script:Contract.firstFork.forkRecoveryPayloadExcludedFromTaskRecall | Should -BeTrue
+        $script:Contract.firstFork.pendingEnvelopeVisibleToTaskRecall | Should -BeTrue
         $script:Contract.firstFork.forkRecoveryHistoryKeepsPayloadIsolated | Should -BeTrue
+        $script:Contract.firstFork.commonOnlyRecoveryCompletesAfterConfirmedCommonReadback | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingPreservesBranchCurrentAndSource | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingCarriesVerifiedSharedBaseline | Should -BeTrue
         $script:Contract.firstFork.existingPeerAdvanceUsesPersistedSnapshot | Should -BeTrue
