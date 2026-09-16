@@ -11,7 +11,7 @@ Describe 'Optional Git-ref Task Handoff adapter' {
         $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = 'synthetic-test-writer'
 
         function New-WriterFixture {
-            param([string] $Root, [string] $WriterId)
+            param([string] $Root, [string] $WriterId, [string] $AuthorityScope='synthetic-scope')
             $remote = Join-Path $Root 'remote.git'
             $local = Join-Path $Root $WriterId
             if (-not (Test-Path -LiteralPath $remote)) {
@@ -22,7 +22,9 @@ Describe 'Optional Git-ref Task Handoff adapter' {
             if ($LASTEXITCODE) { throw 'Could not create a separate test writer.' }
             & git -C $local config user.name "Synthetic $WriterId"
             & git -C $local config user.email "$WriterId@example.invalid"
-            return New-GitHandoffAdapter -RepositoryRoot $local -RemoteName origin
+            return New-GitHandoffAdapter -RepositoryRoot $local -RemoteName origin `
+                -AuthorityScope $AuthorityScope -GetVerifiedPrincipal { 'synthetic-principal' } `
+                -Authorize { param($request) $true }
         }
 
         function Add-SelectiveRejectHook {
@@ -71,6 +73,39 @@ exit 0
         else { $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = $script:PriorCommonCreationActorDefault }
         if ($null -eq $script:PriorBranchCreationActorDefault) { $PSDefaultParameterValues.Remove('New-GitHandoffBranch:Actor') }
         else { $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = $script:PriorBranchCreationActorDefault }
+    }
+
+    # Scenario: Two adopters use the same remote and Task Key under different scopes, while another caller is denied.
+    # Purpose: Bind physical identity to Authority Scope and require trusted-principal policy checks before record access.
+    It 'InterT05_authorizes_every_scoped_identity_without_cross_scope_lookup' {
+        $root = Join-Path $TestDrive 'authorized-scopes'
+        [void](New-Item -ItemType Directory -Path $root)
+        $alpha = New-WriterFixture -Root $root -WriterId 'alpha' -AuthorityScope 'scope:alpha'
+        $beta = New-WriterFixture -Root $root -WriterId 'beta' -AuthorityScope 'scope:beta'
+        New-GitHandoffCommon -Adapter $alpha -TaskKey 'demo:same-key' -Fields $script:InitialCommon `
+            -OperationId 'create-alpha' -Actor 'writer-alpha' | Out-Null
+        $betaFields = [ordered]@{}
+        foreach ($name in $script:InitialCommon.Keys) { $betaFields[$name] = $script:InitialCommon[$name] }
+        $betaFields.Current = 'Independent beta scope'
+        New-GitHandoffCommon -Adapter $beta -TaskKey 'demo:same-key' -Fields $betaFields `
+            -OperationId 'create-beta' -Actor 'writer-beta' | Out-Null
+
+        $alphaRead = Get-GitHandoffCommon -Adapter $alpha -TaskKey 'demo:same-key'
+        $betaRead = Get-GitHandoffCommon -Adapter $beta -TaskKey 'demo:same-key'
+        $alphaRead.AuthorityScope | Should -Be 'scope:alpha'
+        $betaRead.AuthorityScope | Should -Be 'scope:beta'
+        $alphaRead.Fields.Current | Should -Be $script:InitialCommon.Current
+        $betaRead.Fields.Current | Should -Be 'Independent beta scope'
+        $alphaRead.RecordId | Should -Not -Be $betaRead.RecordId
+
+        $denied = New-GitHandoffAdapter -RepositoryRoot $alpha.RepositoryRoot -RemoteName origin `
+            -AuthorityScope 'scope:alpha' -GetVerifiedPrincipal { 'denied-principal' } `
+            -Authorize { param($request) $false }
+        { Get-GitHandoffCommon -Adapter $denied -TaskKey 'demo:same-key' } | Should -Throw '*access was denied*'
+        $unverified = New-GitHandoffAdapter -RepositoryRoot $alpha.RepositoryRoot -RemoteName origin `
+            -AuthorityScope 'scope:alpha' -GetVerifiedPrincipal { $null } `
+            -Authorize { param($request) $true }
+        { Get-GitHandoffCommon -Adapter $unverified -TaskKey 'demo:same-key' } | Should -Throw '*authorization is unavailable*'
     }
 
     # A real bare remote, two independent clones, and an explicit expected ref prove the uniqueness boundary.
@@ -622,8 +657,10 @@ exit 0
         $archiveEvent.DecisionCommonRevision | Should -Be $decisionRevision
         $outcomeEvent.DecisionBranchRevision | Should -Be $peerBindings[0].reviewedRevision
         $outcomeEvent.DecisionBranchContentSha256 | Should -Be $peerBindings[0].reviewedContentSha256
+        $outcomeEvent.DecisionBranchContinuationGeneration | Should -Be $peerBindings[0].continuationGeneration
         $archiveEvent.DecisionBranchRevision | Should -Be $peerBindings[1].reviewedRevision
         $archiveEvent.DecisionBranchContentSha256 | Should -Be $peerBindings[1].reviewedContentSha256
+        $archiveEvent.DecisionBranchContinuationGeneration | Should -Be $peerBindings[1].continuationGeneration
         $retriedArchiveA = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
             -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
             -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
@@ -727,15 +764,27 @@ exit 0
             $event.DecisionCommonRevision | Should -Be $newDecisionRevision
             $event.DecisionBranchRevision | Should -Be $newBinding.reviewedRevision
             $event.DecisionBranchContentSha256 | Should -Be $newBinding.reviewedContentSha256
+            $event.DecisionBranchContinuationGeneration | Should -Be $newBinding.continuationGeneration
         }
         $archive.DecisionBranchRevision | Should -Be $newBinding.reviewedRevision
         $archive.DecisionBranchContentSha256 | Should -Be $newBinding.reviewedContentSha256
+        $archive.DecisionBranchContinuationGeneration | Should -Be $newBinding.continuationGeneration
         { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
             -Lifecycle Archived -OperationId 'new-decision-archive' -DecisionCommonRevision $newDecisionRevision `
             -Actor 'different-writer' -Reason 'archive renewed branch A after integration' } | Should -Throw
         { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
             -Lifecycle Archived -OperationId 'new-decision-archive' -DecisionCommonRevision $newDecisionRevision `
             -Actor 'writer-a' -Reason 'different retry reason' } | Should -Throw
+        $restored = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Active -OperationId 'restore-after-decision' -ExplicitContinuation `
+            -Actor 'writer-a' -Reason 'continue the exact archived branch'
+        $restored.ContinuationGeneration | Should -Be ([int64]$newBinding.continuationGeneration + 1)
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'stale-decision-after-restore' -DecisionCommonRevision $newDecisionRevision `
+            -Actor 'writer-a' -Reason 'old decision cannot archive restored branch' } | Should -Throw
+        $continued = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
+        $continued.Fields.Lifecycle | Should -Be 'Active'
+        $continued.ContinuationGeneration | Should -Be ([int64]$newBinding.continuationGeneration + 1)
     }
 
     # Scenario: An update tries to clear a required field after creation validation has already passed.
@@ -883,7 +932,9 @@ exit 0
         $archiveJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot)
             Import-Module $ModulePath -Force
-            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin
+            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                -Authorize { param($request) $true }
             Set-GitHandoffBranchLifecycle -Adapter $adapter -TaskKey 'demo:lifecycle-race' `
                 -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-race' `
                 -Actor 'writer-a' -Reason 'archive after branch review'
@@ -955,7 +1006,9 @@ exit 0
         $createJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot)
             Import-Module $ModulePath -Force
-            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin
+            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                -Authorize { param($request) $true }
             New-GitHandoffBranch -Adapter $adapter -TaskKey 'demo:create-archive-race' `
                 -BranchId 'thread:A' -ForkPoint 'shared-r1' -Fields ([ordered]@{
                     Current='Separate peer checkpoint';Source='synthetic fixture revision r2';
@@ -1028,7 +1081,9 @@ exit 0
         $restoreJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot)
             Import-Module $ModulePath -Force
-            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin
+            $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                -Authorize { param($request) $true }
             Set-GitHandoffBranchLifecycle -Adapter $adapter -TaskKey 'demo:common-archive-race' `
                 -BranchId 'thread:A' -Lifecycle Active -OperationId 'restore-common-race' `
                 -ExplicitContinuation -Actor 'writer-a' -Reason 'explicitly restore exact branch'
@@ -1170,7 +1225,8 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         $remote = Join-Path $root 'remote.git'
         $prefix = 'refs/heads/handoff-v1/' + ('x' * 200)
-        $long = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RefPrefix $prefix
+        $long = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RefPrefix $prefix `
+            -AuthorityScope $a.AuthorityScope -GetVerifiedPrincipal $a.GetVerifiedPrincipal -Authorize $a.Authorize
         $message = $null
         try { New-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14' -Fields $script:InitialCommon -OperationId 'create-fourteen' | Out-Null }
         catch { $message = [string]$_.Exception.Message }
