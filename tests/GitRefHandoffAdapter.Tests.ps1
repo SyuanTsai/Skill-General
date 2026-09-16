@@ -252,6 +252,7 @@ exit 0
             'Source Snapshot' = [ordered]@{Current=$preFork.Fields.Current;Source=$preFork.Fields.Source;HostIdentity='thread:A'}
             'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no parser selected';Source='synthetic revision r2; confirmed requirement'}
             'Verified Active Branches' = @($preFork.ActiveBranches)
+            'Branch Creation Operations' = [ordered]@{'thread:A'='fork-a-28';'thread:B'='fork-b-28'}
             'Step Operation IDs' = [ordered]@{createA='fork-a-28';createB='fork-b-28';finish='fork-finish-28'}
         }
         New-GitHandoffForkRecovery -Adapter $originalWriter -TaskKey 'demo:ABC-28' -ForkId 'first-fork-28' `
@@ -309,17 +310,21 @@ exit 0
         $root = Join-Path $TestDrive 'payload-free-envelope'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:envelope-only' -Fields $script:InitialCommon `
+            -OperationId 'create-envelope-common' -Actor 'display-writer' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:envelope-only'
         $remoteRoot = Join-Path $root 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         $flag = Join-Path $remoteRoot 'deny-recovery-payload'
         Set-Content -LiteralPath $flag -Value 'reject isolated recovery payload' -Encoding ascii
         $payload = [ordered]@{
-            'Fork Point' = 'shared-r1'
+            'Fork Point' = $preFork.Revision
             'Source Branch ID' = 'thread:A'
             'Intended Branch IDs' = @('thread:B')
             'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
             'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
             'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='fork-envelope-b'}
             'Step Operation IDs' = [ordered]@{createB='fork-envelope-b';indexB='fork-envelope-index'}
         }
         try {
@@ -342,6 +347,77 @@ exit 0
         $recovered.Record.verifiedPrincipal | Should -Be 'synthetic-principal'
     }
 
+    # Scenario: A common-only envelope is durable without its payload, then the common record advances.
+    # Purpose: Reject the stale pre-fork snapshot instead of attaching it to a newer common revision.
+    It 'InterT29d_rejects_a_stale_common_only_payload_after_envelope_creation' {
+        $root = Join-Path $TestDrive 'stale-envelope'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:stale-envelope' -Fields $script:InitialCommon `
+            -OperationId 'create-stale-common' -Actor 'writer-a' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:stale-envelope'
+        $payload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-stale-b'}
+            'Step Operation IDs' = [ordered]@{createB='create-stale-b'}
+        }
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-recovery-payload'
+        Set-Content -LiteralPath $flag -Value 'reject isolated recovery payload' -Encoding ascii
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:stale-envelope' -ForkId 'stale-fork' `
+                -Payload $payload -OperationId 'create-stale-envelope' -Actor 'writer-a' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
+        $current = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:stale-envelope'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:stale-envelope' `
+            -ExpectedRevision $current.Revision -Changes ([ordered]@{Current='newer confirmed common state'}) `
+            -OperationId 'advance-stale-common' | Out-Null
+        { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:stale-envelope' -ForkId 'stale-fork' `
+            -Payload $payload -OperationId 'create-stale-envelope' -Actor 'writer-a' } |
+            Should -Throw '*verified pre-fork common revision changed*'
+        Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:stale-envelope' `
+            -ForkId 'stale-fork' | Should -BeNullOrEmpty
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:stale-envelope').Count | Should -Be 1
+    }
+
+    # Scenario: Two absent targets have distinct creation operations, but a caller swaps them.
+    # Purpose: Bind each branch identity to its own operation before any branch record is written.
+    It 'InterT29e_rejects_cross_swapped_branch_creation_operations' {
+        $root = Join-Path $TestDrive 'swapped-operations'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:swapped-operations' -Fields $script:InitialCommon `
+            -OperationId 'create-swapped-common' -Actor 'writer-a' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:swapped-operations'
+        $payload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-swapped-a';'thread:B'='create-swapped-b'}
+            'Step Operation IDs' = [ordered]@{createA='create-swapped-a';createB='create-swapped-b'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:swapped-operations' -ForkId 'swapped-fork' `
+            -Payload $payload -OperationId 'create-swapped-recovery' -Actor 'writer-a' | Out-Null
+        { New-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
+            -ForkPoint $preFork.Revision -Fields $script:InitialBranch -OperationId 'create-swapped-b' } |
+            Should -Throw '*target-operation binding*'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' `
+            -BranchId 'thread:A' | Should -BeNullOrEmpty
+        $created = New-GitHandoffBranch -Adapter $a -TaskKey 'demo:swapped-operations' -BranchId 'thread:A' `
+            -ForkPoint $preFork.Revision -Fields $script:InitialBranch -OperationId 'create-swapped-a'
+        $created.Indexed | Should -BeTrue
+    }
+
     # Scenario: The payload never commits for an existing-A fork and none of the missing branch work starts.
     # Purpose: Release singleton blocking through a reviewed terminal envelope without treating the existing source as new work.
     It 'InterT29a_abandons_only_an_empty_envelope_and_never_reuses_its_fork_id' {
@@ -359,6 +435,7 @@ exit 0
             'Source Snapshot' = [ordered]@{Current='existing A state';Source='existing A evidence'}
             'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
             'Verified Active Branches' = @('thread:A')
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-missing-b'}
             'Step Operation IDs' = [ordered]@{createB='create-missing-b';indexB='index-missing-b'}
         }
         $remoteRoot = Join-Path $root 'remote.git'
@@ -394,13 +471,15 @@ exit 0
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:payload-exists' -Fields $script:InitialCommon `
             -OperationId 'create-payload-common' -Actor 'writer-a' | Out-Null
+        $payloadCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:payload-exists'
         $payload = [ordered]@{
-            'Fork Point' = 'shared-r1'
+            'Fork Point' = $payloadCommon.Revision
             'Source Branch ID' = 'thread:A'
             'Intended Branch IDs' = @('thread:B')
             'Source Snapshot' = [ordered]@{Current='source state';Source='source evidence'}
             'Shared Baseline' = [ordered]@{Current='shared state';Source='shared evidence'}
             'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-payload-b'}
             'Step Operation IDs' = [ordered]@{createB='create-payload-b'}
         }
         $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:payload-exists' -ForkId 'payload-present' `
@@ -415,8 +494,12 @@ exit 0
         $claimWriter = New-WriterFixture -Root $claimRoot -WriterId 'a'
         New-GitHandoffCommon -Adapter $claimWriter -TaskKey 'demo:claim-exists' -Fields $script:InitialCommon `
             -OperationId 'create-claim-common' -Actor 'writer-a' | Out-Null
+        $claimCommon = Get-GitHandoffCommon -Adapter $claimWriter -TaskKey 'demo:claim-exists'
+        $claimPayload = [ordered]@{}
+        foreach ($name in $payload.Keys) { $claimPayload[$name] = $payload[$name] }
+        $claimPayload['Fork Point'] = $claimCommon.Revision
         New-GitHandoffForkRecovery -Adapter $claimWriter -TaskKey 'demo:claim-exists' -ForkId 'claim-present' `
-            -Payload $payload -OperationId 'create-claim-recovery' -Actor 'writer-a' | Out-Null
+            -Payload $claimPayload -OperationId 'create-claim-recovery' -Actor 'writer-a' | Out-Null
         $remoteRoot = Join-Path $claimRoot 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         $flag = Join-Path $remoteRoot 'deny-records'
@@ -449,13 +532,17 @@ exit 0
         $root = Join-Path $TestDrive 'da'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:deny-abandon' -Fields $script:InitialCommon `
+            -OperationId 'create-denied-common' -Actor 'writer-a' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:deny-abandon'
         $payload = [ordered]@{
-            'Fork Point' = 'shared-r1'
+            'Fork Point' = $preFork.Revision
             'Source Branch ID' = 'thread:A'
             'Intended Branch IDs' = @('thread:B')
             'Source Snapshot' = [ordered]@{Current='source state';Source='source evidence'}
             'Shared Baseline' = [ordered]@{Current='shared state';Source='shared evidence'}
             'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='denied-create-b'}
             'Step Operation IDs' = [ordered]@{createB='denied-create-b'}
         }
         $remoteRoot = Join-Path $root 'remote.git'
@@ -500,6 +587,7 @@ exit 0
             'Source Snapshot' = [ordered]@{Current=$forkSnapshot.Fields.Current;Source=$forkSnapshot.Fields.Source;HostIdentity='thread:A'}
             'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no parser selected';Source='synthetic revision r2; confirmed requirement'}
             'Verified Active Branches' = @($forkSnapshot.ActiveBranches)
+            'Branch Creation Operations' = [ordered]@{'thread:A'='fork-a';'thread:B'='fork-b'}
             'Step Operation IDs' = [ordered]@{createA='fork-a';createB='fork-b';finish='fork-finish-3'}
         }
         New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:ABC-3' -ForkId 'first-fork-3' `
@@ -575,6 +663,7 @@ exit 0
             'Source Snapshot' = [ordered]@{Current=$forkSnapshot.Fields.Current;Source=$forkSnapshot.Fields.Source;HostIdentity='thread:A'}
             'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no option selected';Source='synthetic revision r2; confirmed baseline only'}
             'Verified Active Branches' = @($forkSnapshot.ActiveBranches)
+            'Branch Creation Operations' = [ordered]@{'thread:A'='fork-a-35';'thread:B'='fork-b-35'}
             'Step Operation IDs' = [ordered]@{createA='fork-a-35';createB='fork-b-35';finish='fork-finish-35'}
         }
         New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35' `

@@ -275,7 +275,7 @@ function Assert-HandoffForkRecoveryPayload {
     param([Parameter(Mandatory = $true)] $Payload)
     if ($Payload -isnot [Collections.IDictionary]) { throw 'Fork recovery payload must be an ordered mapping.' }
     $required = @('Fork Point','Source Branch ID','Intended Branch IDs','Source Snapshot','Shared Baseline',
-        'Verified Active Branches','Step Operation IDs')
+        'Verified Active Branches','Branch Creation Operations','Step Operation IDs')
     foreach ($field in $required) {
         if (-not $Payload.Contains($field) -or $null -eq $Payload[$field]) {
             throw "Fork recovery payload is missing '$field'."
@@ -286,6 +286,7 @@ function Assert-HandoffForkRecoveryPayload {
         @($Payload['Intended Branch IDs']).Count -lt 1 -or
         $Payload['Source Snapshot'] -isnot [Collections.IDictionary] -or
         $Payload['Shared Baseline'] -isnot [Collections.IDictionary] -or
+        $Payload['Branch Creation Operations'] -isnot [Collections.IDictionary] -or
         $Payload['Step Operation IDs'] -isnot [Collections.IDictionary]) {
         throw 'Fork recovery payload has an invalid identity, snapshot, baseline, or operation map.'
     }
@@ -316,20 +317,35 @@ function Get-HandoffForkRecoveryEnvelopeEvidence {
     }
     if ($targets.Count -lt 1) { throw 'Fork recovery requires at least one absent branch creation target.' }
     $targetDigests = @($targets | ForEach-Object { Get-HandoffSha256 -Value $_ } | Sort-Object -Unique)
-    $creationOperationDigests = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($entry in $Payload['Step Operation IDs'].GetEnumerator()) {
-        if ([string]$entry.Key -notmatch '(?i)^create') { continue }
-        if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
-            throw 'Fork recovery branch creation Operation IDs must be stable and nonempty.'
-        }
-        [void]$creationOperationDigests.Add((Get-HandoffSha256 -Value ([string]$entry.Value)))
+    $creationOperations = $Payload['Branch Creation Operations']
+    if ($creationOperations.Count -ne $targets.Count) {
+        throw 'Fork recovery Branch Creation Operations must contain every absent target and no other branch.'
     }
-    if ($creationOperationDigests.Count -lt $targetDigests.Count) {
-        throw 'Fork recovery lacks one stable branch creation Operation ID per creation target.'
+    $creationOperationDigests = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $bindingEntries = [Collections.Generic.List[object]]::new()
+    foreach ($entry in $creationOperations.GetEnumerator()) {
+        $branchId = [string]$entry.Key
+        $operationId = [string]$entry.Value
+        if ([string]::IsNullOrWhiteSpace($branchId) -or -not $targets.Contains($branchId)) {
+            throw 'Fork recovery Branch Creation Operations contains a non-target branch identity.'
+        }
+        Assert-HandoffOperationId -OperationId $operationId
+        $operationDigest = Get-HandoffSha256 -Value $operationId
+        if (-not $creationOperationDigests.Add($operationDigest)) {
+            throw 'Fork recovery requires a distinct creation Operation ID for every absent target.'
+        }
+        $bindingEntries.Add([pscustomobject]@{
+            TargetDigest=(Get-HandoffSha256 -Value $branchId);OperationDigest=$operationDigest
+        })
+    }
+    $bindings = [ordered]@{}
+    foreach ($entry in @($bindingEntries | Sort-Object TargetDigest)) {
+        $bindings[$entry.TargetDigest] = $entry.OperationDigest
     }
     return [pscustomobject]@{
         BranchCreationTargetDigests=@($targetDigests)
         BranchCreationOperationDigests=@($creationOperationDigests | Sort-Object)
+        BranchCreationBindings=$bindings
     }
 }
 
@@ -345,16 +361,31 @@ function Test-HandoffSha256Array {
 
 function Assert-HandoffForkRecoveryClaimShape {
     param([Parameter(Mandatory = $true)] $Document)
-    if (-not $Document.Contains('branchCreationClaims') -or
+    if (-not $Document.Contains('branchCreationBindings') -or
+        $Document.branchCreationBindings -isnot [Collections.IDictionary] -or
+        -not $Document.Contains('branchCreationClaims') -or
         $Document.branchCreationClaims -isnot [Collections.IDictionary]) {
-        throw 'The fork-recovery envelope lacks its branch-creation claim map.'
+        throw 'The fork-recovery envelope lacks its branch-creation binding or claim map.'
     }
     $targets = @($Document.branchCreationTargetDigests)
     $operations = @($Document.branchCreationOperationDigests)
+    if ($Document.branchCreationBindings.Count -ne $targets.Count -or $operations.Count -ne $targets.Count) {
+        throw 'The fork-recovery envelope branch-creation binding is not exact.'
+    }
+    foreach ($target in $targets) {
+        if (-not $Document.branchCreationBindings.Contains($target) -or
+            [string]$Document.branchCreationBindings[$target] -cnotmatch '^[0-9a-f]{64}$' -or
+            $operations -cnotcontains [string]$Document.branchCreationBindings[$target]) {
+            throw 'The fork-recovery envelope contains an invalid target-operation binding.'
+        }
+    }
+    if (@($Document.branchCreationBindings.Values | Sort-Object -Unique).Count -ne $targets.Count) {
+        throw 'The fork-recovery envelope reuses a branch-creation operation across targets.'
+    }
     foreach ($entry in $Document.branchCreationClaims.GetEnumerator()) {
         if ($targets -cnotcontains [string]$entry.Key -or $entry.Value -isnot [Collections.IDictionary] -or
             [string]$entry.Value.operationDigest -cnotmatch '^[0-9a-f]{64}$' -or
-            $operations -cnotcontains [string]$entry.Value.operationDigest -or
+            [string]$Document.branchCreationBindings[[string]$entry.Key] -cne [string]$entry.Value.operationDigest -or
             [string]::IsNullOrWhiteSpace([string]$entry.Value.verifiedPrincipal) -or
             [string]::IsNullOrWhiteSpace([string]$entry.Value.claimedAt)) {
             throw 'The fork-recovery envelope contains an invalid branch-creation claim.'
@@ -375,6 +406,7 @@ function Read-GitHandoffForkRecoveryEnvelope {
         $document.forkId -cne $ForkId -or $document.recordId -cne $recordId -or
         [string]$document.status -cnotin @('Pending','Completed','Abandoned') -or
         [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+        [string]$document.verifiedCommonRevisionAtCreation -cnotmatch '^[0-9a-f]{40,64}$' -or
         -not (Test-HandoffSha256Array -Value $document.branchCreationTargetDigests) -or
         -not (Test-HandoffSha256Array -Value $document.branchCreationOperationDigests `
             -MinimumCount @($document.branchCreationTargetDigests).Count) -or
@@ -436,6 +468,7 @@ function Get-GitHandoffForkRecovery {
         throw 'The completed fork-recovery payload lacks immutable completion evidence.'
     }
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $payloadEvidence = Get-HandoffForkRecoveryEnvelopeEvidence -Payload $document.payload
     $statusConsistent = ($null -ne $envelope -and ($envelope.Status -ceq [string]$document.status -or
         ([string]$document.status -ceq 'Completed' -and $envelope.Status -ceq 'Pending')))
     $completionConsistent = ($null -ne $envelope -and
@@ -447,7 +480,15 @@ function Get-GitHandoffForkRecovery {
         $envelope.Record.payloadDigest -cne $document.payloadDigest -or
         $envelope.Record.creationOperationId -cne $document.creationOperationId -or
         $envelope.Record.actor -cne $document.actor -or
-        $envelope.Record.verifiedPrincipal -cne $document.verifiedPrincipal) {
+        $envelope.Record.verifiedPrincipal -cne $document.verifiedPrincipal -or
+        (@($envelope.Record.branchCreationTargetDigests) | ConvertTo-Json -Compress) -cne
+            (@($payloadEvidence.BranchCreationTargetDigests) | ConvertTo-Json -Compress) -or
+        (@($envelope.Record.branchCreationOperationDigests) | ConvertTo-Json -Compress) -cne
+            (@($payloadEvidence.BranchCreationOperationDigests) | ConvertTo-Json -Compress) -or
+        ($envelope.Record.branchCreationBindings | ConvertTo-Json -Compress) -cne
+            ($payloadEvidence.BranchCreationBindings | ConvertTo-Json -Compress) -or
+        (@($document.payload['Verified Active Branches']).Count -eq 0 -and
+         [string]$document.payload['Fork Point'] -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation)) {
         throw 'The fork-recovery payload and payload-free envelope do not match.'
     }
     return [pscustomobject]@{AuthorityScope=[string]$document.authorityScope;
@@ -563,8 +604,8 @@ function Add-GitHandoffForkRecoveryBranchClaim {
         $envelope = $pending[0]
         $claimPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:claim' `
             -TaskKey $TaskKey -ForkId $envelope.ForkId -BranchId $BranchId
-        if (@($envelope.Record.branchCreationOperationDigests) -cnotcontains $operationDigest) {
-            throw 'The branch Operation ID is not bound to the Pending fork-recovery envelope.'
+        if ([string]$envelope.Record.branchCreationBindings[$targetDigest] -cne $operationDigest) {
+            throw 'The branch Operation ID does not match the Pending fork-recovery target-operation binding.'
         }
         $payloadRef = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $envelope.ForkId
         if ($null -eq (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $payloadRef)) {
@@ -621,15 +662,22 @@ function New-GitHandoffForkRecovery {
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $envelope) {
         $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-        $actualActive = if ($null -eq $common) { @() } else { @($common.ActiveBranches | Sort-Object -Unique) }
+        if ($null -eq $common) { throw 'Fork recovery requires the exact common Task Key.' }
+        $verifiedCommonRevision = [string]$common.Revision
+        $actualActive = @($common.ActiveBranches | Sort-Object -Unique)
         $declaredActive = @($Payload['Verified Active Branches'] | ForEach-Object { [string]$_ } | Sort-Object -Unique)
         if (($actualActive | ConvertTo-Json -Compress) -cne ($declaredActive | ConvertTo-Json -Compress)) {
             throw 'Fork recovery Verified Active Branches do not match the exact scoped common index.'
         }
+        if ($actualActive.Count -eq 0 -and [string]$Payload['Fork Point'] -cne $verifiedCommonRevision) {
+            throw 'A common-only fork recovery Fork Point must equal the exact verified common revision.'
+        }
         $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
-            payloadDigest=$digest;branchCreationTargetDigests=@($envelopeEvidence.BranchCreationTargetDigests);
+            payloadDigest=$digest;verifiedCommonRevisionAtCreation=$verifiedCommonRevision;
+            branchCreationTargetDigests=@($envelopeEvidence.BranchCreationTargetDigests);
             branchCreationOperationDigests=@($envelopeEvidence.BranchCreationOperationDigests);
+            branchCreationBindings=$envelopeEvidence.BranchCreationBindings;
             branchCreationClaims=[ordered]@{};
             creationOperationId=$OperationId;actor=$Actor;verifiedPrincipal=$verifiedPrincipal;
             createdAt=[DateTimeOffset]::UtcNow.ToString('o');completionOperationId=$null;
@@ -651,7 +699,9 @@ function New-GitHandoffForkRecovery {
         (@($envelope.Record.branchCreationTargetDigests) | ConvertTo-Json -Compress) -cne
             (@($envelopeEvidence.BranchCreationTargetDigests) | ConvertTo-Json -Compress) -or
         (@($envelope.Record.branchCreationOperationDigests) | ConvertTo-Json -Compress) -cne
-            (@($envelopeEvidence.BranchCreationOperationDigests) | ConvertTo-Json -Compress)) {
+            (@($envelopeEvidence.BranchCreationOperationDigests) | ConvertTo-Json -Compress) -or
+        ($envelope.Record.branchCreationBindings | ConvertTo-Json -Compress) -cne
+            ($envelopeEvidence.BranchCreationBindings | ConvertTo-Json -Compress)) {
         throw 'A different fork-recovery envelope operation already owns this Task Key and Fork ID.'
     }
     $originPrincipal = [string]$envelope.Record.verifiedPrincipal
@@ -661,7 +711,19 @@ function New-GitHandoffForkRecovery {
         if ($existing.Record.creationOperationId -cne $OperationId -or $existing.Record.payloadDigest -cne $digest) {
             throw 'A different fork-recovery operation already owns this Task Key and Fork ID.'
         }
+        if ($envelope.Record.branchCreationClaims.Count -eq 0) {
+            $currentCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+            if ($null -eq $currentCommon -or
+                [string]$currentCommon.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
+                throw 'The verified pre-fork common revision changed before branch creation began.'
+            }
+        }
         return $existing
+    }
+    $currentCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+    if ($null -eq $currentCommon -or
+        [string]$currentCommon.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
+        throw 'The verified pre-fork common revision changed before the recovery payload became durable.'
     }
     $document = [ordered]@{schemaVersion=1;recordKind='fork-recovery';recordId=$recordId;
         authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;
@@ -675,6 +737,11 @@ function New-GitHandoffForkRecovery {
     if ($null -eq $readback -or $readback.Revision -cne $commit -or
         $readback.Record.payloadDigest -cne $digest -or $readback.Record.verifiedPrincipal -cne $originPrincipal) {
         throw "Fork recovery '$ForkId' creation was not read back."
+    }
+    $commonAfterPayload = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+    if ($null -eq $commonAfterPayload -or
+        [string]$commonAfterPayload.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
+        throw 'The verified pre-fork common revision changed while the recovery payload was being written.'
     }
     return $readback
 }
