@@ -47,7 +47,13 @@ Describe 'manage-task-handoff Skill contract' {
         )
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target-Operation Bindings'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Verified Common Revision At Creation'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Claims'
+        @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Branch Creation Operations'
+        $script:Contract.forkRecovery.commonOnlyForkPointEqualsVerifiedCommonRevision | Should -BeTrue
+        $script:Contract.forkRecovery.envelopeCreationRevalidatesCommonRevision | Should -BeTrue
+        $script:Contract.forkRecovery.branchCreationTargetOperationMappingExact | Should -BeTrue
         @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
             'isolated-payload-absent','all-branch-creation-target-records-absent',
             'all-branch-creation-target-outcomes-absent','all-branch-creation-target-index-entries-absent'
