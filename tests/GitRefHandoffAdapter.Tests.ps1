@@ -551,15 +551,27 @@ exit 0
         }
 
         $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83'
+        $bindings = @(
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A' -Outcome Selected
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:B' -Outcome Selected
+        )
         Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q83' `
-            -ExpectedRevision $common.Revision -Changes ([ordered]@{Current='Decision revision one'}) `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision revision one';'Decision Branch Bindings'=$bindings
+            }) `
             -OperationId 'decision-one' -DecisionConfirmed -Actor 'writer-a' `
             -Reason 'user selected both peer results' | Out-Null
         $staleDecisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
 
         $peerCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:q83'
+        $peerBindings = @(
+            Get-GitHandoffBranchReviewBinding -Adapter $b -TaskKey 'demo:q83' -BranchId 'thread:A' -Outcome Selected
+            Get-GitHandoffBranchReviewBinding -Adapter $b -TaskKey 'demo:q83' -BranchId 'thread:B' -Outcome Selected
+        )
         Set-GitHandoffFields -Adapter $b -RecordKind common -TaskKey 'demo:q83' `
-            -ExpectedRevision $peerCommon.Revision -Changes ([ordered]@{Current='Decision revision two'}) `
+            -ExpectedRevision $peerCommon.Revision -Changes ([ordered]@{
+                Current='Decision revision two';'Decision Branch Bindings'=$peerBindings
+            }) `
             -OperationId 'decision-two' -DecisionConfirmed -Actor 'writer-b' `
             -Reason 'user replaced the prior branch decision' | Out-Null
         $branchA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A'
@@ -608,6 +620,10 @@ exit 0
             -RecordKind branch -BranchId 'thread:B' -OperationId 'archive-b' -Field 'Lifecycle'
         $outcomeEvent.DecisionCommonRevision | Should -Be $decisionRevision
         $archiveEvent.DecisionCommonRevision | Should -Be $decisionRevision
+        $outcomeEvent.DecisionBranchRevision | Should -Be $peerBindings[0].reviewedRevision
+        $outcomeEvent.DecisionBranchContentSha256 | Should -Be $peerBindings[0].reviewedContentSha256
+        $archiveEvent.DecisionBranchRevision | Should -Be $peerBindings[1].reviewedRevision
+        $archiveEvent.DecisionBranchContentSha256 | Should -Be $peerBindings[1].reviewedContentSha256
         $retriedArchiveA = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
             -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
             -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
@@ -621,6 +637,105 @@ exit 0
             -BranchId 'thread:B' -Lifecycle Archived -OperationId 'archive-b-different' `
             -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
             -Reason 'duplicate archive must not synthesize a new event' } | Should -Throw
+    }
+
+    # Scenario: A peer changes reviewed branch content after a common decision but before its finalization.
+    # Purpose: Stop old-decision outcomes and archival until the user confirms a new exact branch revision and content identity.
+    It 'InterT84_binds_finalization_to_the_exact_reviewed_branch_revision_and_content' {
+        $root = Join-Path $TestDrive 'q84'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84' -Fields $script:InitialCommon `
+            -OperationId 'create-q84-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+            -OperationId 'create-q84-a' -Actor 'writer-a' | Out-Null
+
+        $binding = Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84' `
+            -BranchId 'thread:A' -Outcome Selected
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84'
+        $malformedBinding = [ordered]@{
+            branchId=$binding.branchId;reviewedRevision=$binding.reviewedRevision;
+            reviewedContentSha256=$binding.reviewedContentSha256
+        }
+        { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Malformed binding';'Decision Branch Bindings'=@($malformedBinding)
+            }) -OperationId 'reject-malformed-binding' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'reject incomplete reviewed branch identity' } | Should -Throw
+        { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Duplicate binding';'Decision Branch Bindings'=@($binding,$binding)
+            }) -OperationId 'reject-duplicate-binding' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'reject ambiguous reviewed branch identity' } | Should -Throw
+
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision over exact branch A';'Decision Branch Bindings'=@($binding)
+            }) -OperationId 'q84-decision-one' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'user selected reviewed branch A' | Out-Null
+        $oldDecisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84').Revision
+
+        $branchBeforePeer = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84' `
+            -BranchId 'thread:A' -ExpectedRevision $branchBeforePeer.Revision `
+            -Changes ([ordered]@{'Branch Outcome'='Superseded'}) -OperationId 'wrong-outcome' `
+            -DecisionConfirmed -DecisionCommonRevision $oldDecisionRevision -Actor 'writer-a' `
+            -Reason 'outcome does not match confirmed selection' } | Should -Throw
+
+        $peerBranch = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:q84' -BranchId 'thread:A'
+        Set-GitHandoffFields -Adapter $b -RecordKind branch -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -ExpectedRevision $peerBranch.Revision -Changes ([ordered]@{Current='Peer changed reviewed content'}) `
+            -OperationId 'peer-advanced-content' -Actor 'writer-b' `
+            -Reason 'continue exploring branch A' | Out-Null
+        $advanced = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -ExpectedRevision $advanced.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+            -OperationId 'old-decision-outcome' -DecisionConfirmed -DecisionCommonRevision $oldDecisionRevision `
+            -Actor 'writer-a' -Reason 'must reject changed branch content' } | Should -Throw
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'old-decision-archive' -DecisionCommonRevision $oldDecisionRevision `
+            -Actor 'writer-a' -Reason 'must reject changed branch content' } | Should -Throw
+        $afterRejectedFinalization = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
+        $afterRejectedFinalization.Fields.Contains('Branch Outcome') | Should -BeFalse
+        $afterRejectedFinalization.Fields.Lifecycle | Should -Be 'Active'
+
+        $newBinding = Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84' `
+            -BranchId 'thread:A' -Outcome Selected
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Renewed decision over changed branch A';'Decision Branch Bindings'=@($newBinding)
+            }) -OperationId 'q84-decision-two' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'user renewed selection over current branch A' | Out-Null
+        $newDecisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84').Revision
+        $currentBranch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
+        Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -ExpectedRevision $currentBranch.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+            -OperationId 'new-decision-outcome' -DecisionConfirmed -DecisionCommonRevision $newDecisionRevision `
+            -Actor 'writer-a' -Reason 'adopt renewed branch A' | Out-Null
+        $archive = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'new-decision-archive' -DecisionCommonRevision $newDecisionRevision `
+            -Actor 'writer-a' -Reason 'archive renewed branch A after integration'
+
+        $outcomeEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84' -RecordKind branch `
+            -BranchId 'thread:A' -OperationId 'new-decision-outcome' -Field 'Branch Outcome'
+        $archiveEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84' -RecordKind branch `
+            -BranchId 'thread:A' -OperationId 'new-decision-archive' -Field 'Lifecycle'
+        foreach ($event in @($outcomeEvent,$archiveEvent)) {
+            $event.DecisionCommonRevision | Should -Be $newDecisionRevision
+            $event.DecisionBranchRevision | Should -Be $newBinding.reviewedRevision
+            $event.DecisionBranchContentSha256 | Should -Be $newBinding.reviewedContentSha256
+        }
+        $archive.DecisionBranchRevision | Should -Be $newBinding.reviewedRevision
+        $archive.DecisionBranchContentSha256 | Should -Be $newBinding.reviewedContentSha256
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'new-decision-archive' -DecisionCommonRevision $newDecisionRevision `
+            -Actor 'different-writer' -Reason 'archive renewed branch A after integration' } | Should -Throw
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'new-decision-archive' -DecisionCommonRevision $newDecisionRevision `
+            -Actor 'writer-a' -Reason 'different retry reason' } | Should -Throw
     }
 
     # Scenario: An update tries to clear a required field after creation validation has already passed.
