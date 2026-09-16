@@ -47,6 +47,9 @@
   "firstFork": {
     "sourceCommonOnlyCreatesSourcePeer": true,
     "sourceBranchAlreadyExistsIsReused": true,
+    "pendingBeforeEveryMissingBranchCreation": true,
+    "existingPeerPendingCarriesBranchAndIndexOperations": true,
+    "existingPeerPendingClearsAfterBranchAndIndexReadback": true,
     "bothPeersShareTaskKeyAndForkPoint": true,
     "sourcePeerPreservesPreForkCurrentAndSource": true,
     "newPeerStartsFromConfirmedBaseline": true,

@@ -33,6 +33,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
         $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
         $script:Contract.common.structuralIndexChangesRequireIntegrationDecision | Should -BeFalse
+        $script:Contract.firstFork.pendingBeforeEveryMissingBranchCreation | Should -BeTrue
+        $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
+        $script:Contract.firstFork.existingPeerPendingClearsAfterBranchAndIndexReadback | Should -BeTrue
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
         foreach ($case in $script:Cases.lookup) {
