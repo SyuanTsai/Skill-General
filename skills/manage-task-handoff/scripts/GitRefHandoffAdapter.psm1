@@ -291,6 +291,77 @@ function Assert-HandoffForkRecoveryPayload {
     }
 }
 
+function Get-HandoffForkRecoveryEnvelopeEvidence {
+    param([Parameter(Mandatory = $true)] $Payload)
+    Assert-HandoffForkRecoveryPayload -Payload $Payload
+    $active = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($branchId in @($Payload['Verified Active Branches'])) {
+        if ([string]::IsNullOrWhiteSpace([string]$branchId)) {
+            throw 'Fork recovery verified Active branches contain an invalid identity.'
+        }
+        if (-not $active.Add([string]$branchId)) {
+            throw 'Fork recovery verified Active branches must be unique.'
+        }
+    }
+    $targets = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $intended = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($branchId in @($Payload['Intended Branch IDs'])) {
+        if ([string]::IsNullOrWhiteSpace([string]$branchId)) {
+            throw 'Fork recovery intended branches contain an invalid identity.'
+        }
+        if (-not $intended.Add([string]$branchId)) {
+            throw 'Fork recovery intended branch identities must be unique.'
+        }
+        if (-not $active.Contains([string]$branchId)) { [void]$targets.Add([string]$branchId) }
+    }
+    if ($targets.Count -lt 1) { throw 'Fork recovery requires at least one absent branch creation target.' }
+    $targetDigests = @($targets | ForEach-Object { Get-HandoffSha256 -Value $_ } | Sort-Object -Unique)
+    $creationOperationDigests = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $Payload['Step Operation IDs'].GetEnumerator()) {
+        if ([string]$entry.Key -notmatch '(?i)^create') { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+            throw 'Fork recovery branch creation Operation IDs must be stable and nonempty.'
+        }
+        [void]$creationOperationDigests.Add((Get-HandoffSha256 -Value ([string]$entry.Value)))
+    }
+    if ($creationOperationDigests.Count -lt $targetDigests.Count) {
+        throw 'Fork recovery lacks one stable branch creation Operation ID per creation target.'
+    }
+    return [pscustomobject]@{
+        BranchCreationTargetDigests=@($targetDigests)
+        BranchCreationOperationDigests=@($creationOperationDigests | Sort-Object)
+    }
+}
+
+function Test-HandoffSha256Array {
+    param($Value,[int] $MinimumCount=1)
+    $items = @($Value)
+    if ($items.Count -lt $MinimumCount) { return $false }
+    foreach ($item in $items) {
+        if ([string]$item -cnotmatch '^[0-9a-f]{64}$') { return $false }
+    }
+    return @($items | Sort-Object -Unique).Count -eq $items.Count
+}
+
+function Assert-HandoffForkRecoveryClaimShape {
+    param([Parameter(Mandatory = $true)] $Document)
+    if (-not $Document.Contains('branchCreationClaims') -or
+        $Document.branchCreationClaims -isnot [Collections.IDictionary]) {
+        throw 'The fork-recovery envelope lacks its branch-creation claim map.'
+    }
+    $targets = @($Document.branchCreationTargetDigests)
+    $operations = @($Document.branchCreationOperationDigests)
+    foreach ($entry in $Document.branchCreationClaims.GetEnumerator()) {
+        if ($targets -cnotcontains [string]$entry.Key -or $entry.Value -isnot [Collections.IDictionary] -or
+            [string]$entry.Value.operationDigest -cnotmatch '^[0-9a-f]{64}$' -or
+            $operations -cnotcontains [string]$entry.Value.operationDigest -or
+            [string]::IsNullOrWhiteSpace([string]$entry.Value.verifiedPrincipal) -or
+            [string]::IsNullOrWhiteSpace([string]$entry.Value.claimedAt)) {
+            throw 'The fork-recovery envelope contains an invalid branch-creation claim.'
+        }
+    }
+}
+
 function Read-GitHandoffForkRecoveryEnvelope {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
         [Parameter(Mandatory = $true)][string] $ForkId)
@@ -302,8 +373,11 @@ function Read-GitHandoffForkRecoveryEnvelope {
     if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery-envelope' -or
         $document.authorityScope -cne [string]$Adapter.AuthorityScope -or $document.taskKey -cne $TaskKey -or
         $document.forkId -cne $ForkId -or $document.recordId -cne $recordId -or
-        [string]$document.status -cnotin @('Pending','Completed') -or
+        [string]$document.status -cnotin @('Pending','Completed','Abandoned') -or
         [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+        -not (Test-HandoffSha256Array -Value $document.branchCreationTargetDigests) -or
+        -not (Test-HandoffSha256Array -Value $document.branchCreationOperationDigests `
+            -MinimumCount @($document.branchCreationTargetDigests).Count) -or
         [string]::IsNullOrWhiteSpace([string]$document.creationOperationId) -or
         [string]::IsNullOrWhiteSpace([string]$document.actor) -or
         [string]::IsNullOrWhiteSpace([string]$document.verifiedPrincipal) -or
@@ -316,6 +390,14 @@ function Read-GitHandoffForkRecoveryEnvelope {
          [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
         throw 'The completed fork-recovery envelope lacks immutable completion evidence.'
     }
+    if ([string]$document.status -ceq 'Abandoned' -and
+        ([string]::IsNullOrWhiteSpace([string]$document.abandonmentOperationId) -or
+         [string]::IsNullOrWhiteSpace([string]$document.abandonmentVerifiedPrincipal) -or
+         [string]::IsNullOrWhiteSpace([string]$document.abandonmentReason) -or
+         [string]::IsNullOrWhiteSpace([string]$document.abandonedAt))) {
+        throw 'The abandoned fork-recovery envelope lacks immutable abandonment evidence.'
+    }
+    Assert-HandoffForkRecoveryClaimShape -Document $document
     return [pscustomobject]@{AuthorityScope=[string]$document.authorityScope;TaskKey=$TaskKey;
         ForkId=$ForkId;Status=[string]$document.status;Revision=$revision;Record=$document}
 }
@@ -394,8 +476,11 @@ function Get-GitHandoffPendingForkRecoveries {
         if ($document.schemaVersion -ne 1 -or $document.authorityScope -cne [string]$Adapter.AuthorityScope -or
             $document.taskKey -cne $TaskKey -or $document.recordKind -cne 'fork-recovery-envelope' -or
             [string]::IsNullOrWhiteSpace([string]$document.forkId) -or $document.Contains('payload') -or
-            [string]$document.status -cnotin @('Pending','Completed') -or
+            [string]$document.status -cnotin @('Pending','Completed','Abandoned') -or
             [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+            -not (Test-HandoffSha256Array -Value $document.branchCreationTargetDigests) -or
+            -not (Test-HandoffSha256Array -Value $document.branchCreationOperationDigests `
+                -MinimumCount @($document.branchCreationTargetDigests).Count) -or
             [string]::IsNullOrWhiteSpace([string]$document.creationOperationId) -or
             [string]::IsNullOrWhiteSpace([string]$document.actor) -or
             [string]::IsNullOrWhiteSpace([string]$document.verifiedPrincipal) -or
@@ -408,6 +493,14 @@ function Get-GitHandoffPendingForkRecoveries {
              [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
             throw 'A completed fork-recovery envelope lacks immutable completion evidence.'
         }
+        if ([string]$document.status -ceq 'Abandoned' -and
+            ([string]::IsNullOrWhiteSpace([string]$document.abandonmentOperationId) -or
+             [string]::IsNullOrWhiteSpace([string]$document.abandonmentVerifiedPrincipal) -or
+             [string]::IsNullOrWhiteSpace([string]$document.abandonmentReason) -or
+             [string]::IsNullOrWhiteSpace([string]$document.abandonedAt))) {
+            throw 'An abandoned fork-recovery envelope lacks immutable abandonment evidence.'
+        }
+        Assert-HandoffForkRecoveryClaimShape -Document $document
         if ([string]$document.status -ceq 'Pending') {
             $envelopes.Add([pscustomobject]@{AuthorityScope=[string]$document.authorityScope;
                 TaskKey=$TaskKey;ForkId=[string]$document.forkId;
@@ -415,6 +508,100 @@ function Get-GitHandoffPendingForkRecoveries {
         }
     }
     return $envelopes.ToArray()
+}
+
+function Get-GitHandoffForkRecoveryTargetEnvelopes {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId)
+    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:list' -TaskKey $TaskKey | Out-Null
+    $targetDigest = Get-HandoffSha256 -Value $BranchId
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
+    $prefix = "$($Adapter.RefPrefix)/recovery-envelopes/$scopedTaskHash/"
+    $lines = @(& git -C $Adapter.RepositoryRoot ls-remote $Adapter.RemoteName "$prefix*" 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Fork-recovery envelopes could not be checked before branch creation.' }
+    $targetEnvelopes = [Collections.Generic.List[object]]::new()
+    foreach ($line in $lines) {
+        $parts = ([string]$line) -split "`t", 2
+        if ($parts.Count -ne 2 -or [string]$parts[0] -cnotmatch '^[0-9a-f]{40,64}$' -or
+            -not ([string]$parts[1]).StartsWith($prefix,[StringComparison]::Ordinal)) {
+            throw 'Fork-recovery envelope listing returned an invalid ref.'
+        }
+        $document = Read-GitHandoffDocument -Adapter $Adapter -Ref ([string]$parts[1]) `
+            -Revision ([string]$parts[0]) -FileName 'envelope.json'
+        if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery-envelope' -or
+            $document.authorityScope -cne [string]$Adapter.AuthorityScope -or $document.taskKey -cne $TaskKey -or
+            [string]::IsNullOrWhiteSpace([string]$document.forkId)) {
+            throw 'Fork-recovery envelope does not match its scoped Task Key.'
+        }
+        if (@($document.branchCreationTargetDigests) -ccontains $targetDigest) {
+            $validated = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey `
+                -ForkId ([string]$document.forkId)
+            $targetEnvelopes.Add($validated)
+        }
+    }
+    return $targetEnvelopes.ToArray()
+}
+
+function Add-GitHandoffForkRecoveryBranchClaim {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)][string] $OperationId)
+    $targetDigest = Get-HandoffSha256 -Value $BranchId
+    $operationDigest = Get-HandoffSha256 -Value $OperationId
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $targetEnvelopes = @(Get-GitHandoffForkRecoveryTargetEnvelopes -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId)
+        $pending = @($targetEnvelopes | Where-Object { $_.Status -ceq 'Pending' })
+        if ($pending.Count -gt 1) { throw 'Multiple Pending fork recoveries target the same branch creation.' }
+        if ($pending.Count -eq 0) {
+            if (@($targetEnvelopes | Where-Object { $_.Status -ceq 'Completed' }).Count -gt 0) {
+                throw 'A completed fork recovery already owns this missing branch target.'
+            }
+            if (@($targetEnvelopes | Where-Object { $_.Status -ceq 'Abandoned' }).Count -gt 0) {
+                throw 'An abandoned fork recovery requires a new Pending Fork ID before this branch can be created.'
+            }
+            return $null
+        }
+        $envelope = $pending[0]
+        $claimPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:claim' `
+            -TaskKey $TaskKey -ForkId $envelope.ForkId -BranchId $BranchId
+        if (@($envelope.Record.branchCreationOperationDigests) -cnotcontains $operationDigest) {
+            throw 'The branch Operation ID is not bound to the Pending fork-recovery envelope.'
+        }
+        $payloadRef = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $envelope.ForkId
+        if ($null -eq (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $payloadRef)) {
+            throw 'The isolated fork-recovery payload is not durable; branch creation remains blocked.'
+        }
+        $existingClaim = $envelope.Record.branchCreationClaims[$targetDigest]
+        if ($null -ne $existingClaim) {
+            if ([string]$existingClaim.operationDigest -cne $operationDigest) {
+                throw 'Another operation already claimed this fork-recovery branch target.'
+            }
+            return $envelope
+        }
+        $document = $envelope.Record
+        $document.branchCreationClaims[$targetDigest] = [ordered]@{
+            operationDigest=$operationDigest;verifiedPrincipal=$claimPrincipal;
+            claimedAt=[DateTimeOffset]::UtcNow.ToString('o')
+        }
+        $ref = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $envelope.ForkId
+        $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document `
+            -Parent $envelope.Revision -FileName 'envelope.json'
+        try {
+            Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref `
+                -ExpectedRevision $envelope.Revision -Commit $commit | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -match 'Conditional Handoff revision conflict' -and $attempt -lt 5) { continue }
+            throw
+        }
+        $readback = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $envelope.ForkId
+        $claim = $readback.Record.branchCreationClaims[$targetDigest]
+        if ($readback.Revision -cne $commit -or [string]$claim.operationDigest -cne $operationDigest -or
+            [string]$claim.verifiedPrincipal -cne $claimPrincipal) {
+            throw 'The fork-recovery branch-creation claim was not read back.'
+        }
+        return $readback
+    }
+    throw 'The fork-recovery branch target could not be claimed after concurrent envelope changes.'
 }
 
 function New-GitHandoffForkRecovery {
@@ -426,17 +613,28 @@ function New-GitHandoffForkRecovery {
     $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:create' -TaskKey $TaskKey -ForkId $ForkId
     if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'Fork recovery creation requires a nonempty display actor label.' }
     Assert-HandoffForkRecoveryPayload -Payload $Payload
+    $envelopeEvidence = Get-HandoffForkRecoveryEnvelopeEvidence -Payload $Payload
     $recordId = Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $digest = Get-HandoffSha256 -Value (([ordered]@{authorityScope=[string]$Adapter.AuthorityScope;
         taskKey=$TaskKey;forkId=$ForkId;payload=$Payload;
         operationId=$OperationId;actor=$Actor}) | ConvertTo-Json -Compress -Depth 50)
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $envelope) {
+        $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+        $actualActive = if ($null -eq $common) { @() } else { @($common.ActiveBranches | Sort-Object -Unique) }
+        $declaredActive = @($Payload['Verified Active Branches'] | ForEach-Object { [string]$_ } | Sort-Object -Unique)
+        if (($actualActive | ConvertTo-Json -Compress) -cne ($declaredActive | ConvertTo-Json -Compress)) {
+            throw 'Fork recovery Verified Active Branches do not match the exact scoped common index.'
+        }
         $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
-            payloadDigest=$digest;creationOperationId=$OperationId;actor=$Actor;verifiedPrincipal=$verifiedPrincipal;
+            payloadDigest=$digest;branchCreationTargetDigests=@($envelopeEvidence.BranchCreationTargetDigests);
+            branchCreationOperationDigests=@($envelopeEvidence.BranchCreationOperationDigests);
+            branchCreationClaims=[ordered]@{};
+            creationOperationId=$OperationId;actor=$Actor;verifiedPrincipal=$verifiedPrincipal;
             createdAt=[DateTimeOffset]::UtcNow.ToString('o');completionOperationId=$null;
-            completionVerifiedPrincipal=$null;completedAt=$null}
+            completionVerifiedPrincipal=$null;completedAt=$null;abandonmentOperationId=$null;
+            abandonmentVerifiedPrincipal=$null;abandonmentReason=$null;abandonedAt=$null}
         $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeDocument -FileName 'envelope.json'
         Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef -ExpectedRevision '' -Commit $envelopeCommit | Out-Null
@@ -445,8 +643,15 @@ function New-GitHandoffForkRecovery {
             throw "Fork recovery '$ForkId' payload-free envelope was not read back."
         }
     }
+    if ($envelope.Status -ceq 'Abandoned') {
+        throw 'This fork-recovery envelope was abandoned and its Fork ID cannot be reused.'
+    }
     if ($envelope.Record.creationOperationId -cne $OperationId -or $envelope.Record.payloadDigest -cne $digest -or
-        [string]$envelope.Record.actor -cne $Actor) {
+        [string]$envelope.Record.actor -cne $Actor -or
+        (@($envelope.Record.branchCreationTargetDigests) | ConvertTo-Json -Compress) -cne
+            (@($envelopeEvidence.BranchCreationTargetDigests) | ConvertTo-Json -Compress) -or
+        (@($envelope.Record.branchCreationOperationDigests) | ConvertTo-Json -Compress) -cne
+            (@($envelopeEvidence.BranchCreationOperationDigests) | ConvertTo-Json -Compress)) {
         throw 'A different fork-recovery envelope operation already owns this Task Key and Fork ID.'
     }
     $originPrincipal = [string]$envelope.Record.verifiedPrincipal
@@ -524,6 +729,76 @@ function Complete-GitHandoffForkRecovery {
     if ($readback.Status -cne 'Completed' -or $readback.EnvelopeStatus -cne 'Completed' -or
         $readback.Record.completionOperationId -cne $OperationId) {
         throw "Fork recovery '$ForkId' completion and envelope were not read back."
+    }
+    return $readback
+}
+
+function Abandon-GitHandoffForkRecovery {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ForkId,[Parameter(Mandatory = $true)][string] $ExpectedEnvelopeRevision,
+        [Parameter(Mandatory = $true)][string] $OperationId,
+        [Parameter(Mandatory = $true)][string] $Reason)
+    Assert-HandoffOperationId -OperationId $OperationId
+    $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:abandon' `
+        -TaskKey $TaskKey -ForkId $ForkId
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Fork-recovery abandonment requires a concrete reason.' }
+    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $envelope) { throw 'The exact fork-recovery envelope was not found.' }
+    if ($envelope.Status -ceq 'Abandoned') {
+        if ($envelope.Record.abandonmentOperationId -cne $OperationId) {
+            throw 'Fork-recovery envelope is already abandoned by another operation.'
+        }
+        return $envelope
+    }
+    if ($envelope.Status -ceq 'Completed') { throw 'A completed fork-recovery envelope cannot be abandoned.' }
+    if ($envelope.Revision -cne $ExpectedEnvelopeRevision) {
+        throw 'Conditional fork-recovery envelope revision conflict.'
+    }
+    if ($envelope.Record.branchCreationClaims.Count -gt 0) {
+        throw 'Fork-recovery abandonment is unsafe because branch creation has already been claimed.'
+    }
+
+    $payloadRef = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -ne (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $payloadRef)) {
+        throw 'Fork-recovery abandonment is unsafe because the isolated payload exists.'
+    }
+    $targetDigests = @($envelope.Record.branchCreationTargetDigests)
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
+    foreach ($targetDigest in $targetDigests) {
+        $branchRef = "$($Adapter.RefPrefix)/records/$scopedTaskHash/branch/$targetDigest"
+        # Branch creation outcomes are embedded in and evented only after a durable branch record.
+        # This adapter never deletes record refs, so exact ref absence also proves no target outcome committed.
+        if ($null -ne (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $branchRef)) {
+            throw 'Fork-recovery abandonment is unsafe because a branch-creation target exists.'
+        }
+    }
+    $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+    if ($null -ne $common) {
+        foreach ($branchId in @($common.ActiveBranches)) {
+            if ($targetDigests -ccontains (Get-HandoffSha256 -Value ([string]$branchId))) {
+                throw 'Fork-recovery abandonment is unsafe because a branch-creation target is indexed.'
+            }
+        }
+    }
+
+    $document = $envelope.Record
+    $document.status = 'Abandoned'
+    $document.abandonmentOperationId = $OperationId
+    $document.abandonmentVerifiedPrincipal = $verifiedPrincipal
+    $document.abandonmentReason = $Reason
+    $document.abandonedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document `
+        -Parent $envelope.Revision -FileName 'envelope.json'
+    Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef `
+        -ExpectedRevision $envelope.Revision -Commit $commit | Out-Null
+    $readback = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($readback.Revision -cne $commit -or $readback.Status -cne 'Abandoned' -or
+        $readback.Record.abandonmentOperationId -cne $OperationId -or
+        $readback.Record.abandonmentVerifiedPrincipal -cne $verifiedPrincipal -or
+        $readback.Record.abandonmentReason -cne $Reason) {
+        throw "Fork recovery '$ForkId' abandonment was not read back."
     }
     return $readback
 }
@@ -1171,6 +1446,10 @@ function New-GitHandoffRecord {
         fields=$logicalFields;activeBranches=@();lastActivityAt=$operation.occurredAt;
         operations=[ordered]@{ $OperationId=$operation }
     }
+    if ($RecordKind -eq 'branch') {
+        Add-GitHandoffForkRecoveryBranchClaim -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId `
+            -OperationId $OperationId | Out-Null
+    }
     $ref = Get-HandoffRecordRef -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $record -FileName 'record.json'
     Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision '' -Commit $commit | Out-Null
@@ -1692,5 +1971,6 @@ function Start-GitHandoffBranchContinuation {
 
 Export-ModuleMember -Function New-GitHandoffAdapter,Get-GitHandoffCommon,Get-GitHandoffBranch,Get-GitHandoffEvent,
     Get-GitHandoffForkRecovery,Get-GitHandoffPendingForkRecoveries,New-GitHandoffForkRecovery,Complete-GitHandoffForkRecovery,
+    Abandon-GitHandoffForkRecovery,
     Get-GitHandoffBranchReviewBinding,New-GitHandoffCommon,New-GitHandoffBranch,Set-GitHandoffFields,Set-GitHandoffBranchLifecycle,
     Start-GitHandoffBranchContinuation

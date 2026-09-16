@@ -316,10 +316,10 @@ exit 0
         $payload = [ordered]@{
             'Fork Point' = 'shared-r1'
             'Source Branch ID' = 'thread:A'
-            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Intended Branch IDs' = @('thread:B')
             'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
             'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
-            'Verified Active Branches' = @('thread:A')
+            'Verified Active Branches' = @()
             'Step Operation IDs' = [ordered]@{createB='fork-envelope-b';indexB='fork-envelope-index'}
         }
         try {
@@ -340,6 +340,141 @@ exit 0
         $recovered.Status | Should -Be 'Pending'
         $recovered.EnvelopeStatus | Should -Be 'Pending'
         $recovered.Record.verifiedPrincipal | Should -Be 'synthetic-principal'
+    }
+
+    # Scenario: The payload never commits for an existing-A fork and none of the missing branch work starts.
+    # Purpose: Release singleton blocking through a reviewed terminal envelope without treating the existing source as new work.
+    It 'InterT29a_abandons_only_an_empty_envelope_and_never_reuses_its_fork_id' {
+        $root = Join-Path $TestDrive 'ae'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:abandon-empty' -Fields $script:InitialCommon `
+            -OperationId 'create-abandon-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-existing-a' -Actor 'writer-a' | Out-Null
+        $payload = [ordered]@{
+            'Fork Point' = 'shared-r1'
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current='existing A state';Source='existing A evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @('thread:A')
+            'Step Operation IDs' = [ordered]@{createB='create-missing-b';indexB='index-missing-b'}
+        }
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-recovery-payload'
+        Set-Content -LiteralPath $flag -Value 'reject isolated recovery payload' -Encoding ascii
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:abandon-empty' -ForkId 'fork-empty' `
+                -Payload $payload -OperationId 'create-empty-envelope' -Actor 'writer-a' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
+        $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:abandon-empty')
+        $pending.Count | Should -Be 1
+        $abandoned = Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:abandon-empty' `
+            -ForkId 'fork-empty' -ExpectedEnvelopeRevision $pending[0].Revision `
+            -OperationId 'abandon-empty-envelope' -Reason 'payload creation failed before missing branch work began'
+        $abandoned.Status | Should -Be 'Abandoned'
+        $abandoned.Record.abandonmentVerifiedPrincipal | Should -Be 'synthetic-principal'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:abandon-empty').Count | Should -Be 0
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A').Fields.Current | Should -Be $script:InitialBranch.Current
+        { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:abandon-empty' -ForkId 'fork-empty' `
+            -Payload $payload -OperationId 'create-empty-envelope' -Actor 'writer-a' } | Should -Throw '*cannot be reused*'
+        (Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:abandon-empty' `
+            -ForkId 'fork-empty' -ExpectedEnvelopeRevision $pending[0].Revision `
+            -OperationId 'abandon-empty-envelope' -Reason 'idempotent retry').Status | Should -Be 'Abandoned'
+    }
+
+    # Scenario: A recovery payload or a durable branch-creation claim exists when abandonment is attempted.
+    # Purpose: Keep any durable fork step Pending for exact reconciliation instead of hiding partial work.
+    It 'InterT29b_rejects_abandonment_after_payload_or_branch_creation_claim' {
+        $root = Join-Path $TestDrive 'ua'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:payload-exists' -Fields $script:InitialCommon `
+            -OperationId 'create-payload-common' -Actor 'writer-a' | Out-Null
+        $payload = [ordered]@{
+            'Fork Point' = 'shared-r1'
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='source state';Source='source evidence'}
+            'Shared Baseline' = [ordered]@{Current='shared state';Source='shared evidence'}
+            'Verified Active Branches' = @()
+            'Step Operation IDs' = [ordered]@{createB='create-payload-b'}
+        }
+        $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:payload-exists' -ForkId 'payload-present' `
+            -Payload $payload -OperationId 'create-payload-recovery' -Actor 'writer-a'
+        { Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:payload-exists' -ForkId 'payload-present' `
+            -ExpectedEnvelopeRevision $recovery.EnvelopeRevision -OperationId 'unsafe-payload-abandon' `
+            -Reason 'must remain pending' } | Should -Throw '*isolated payload exists*'
+        (Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:payload-exists' -ForkId 'payload-present').Status | Should -Be 'Pending'
+
+        $claimRoot = Join-Path $TestDrive 'uc'
+        [void](New-Item -ItemType Directory -Path $claimRoot)
+        $claimWriter = New-WriterFixture -Root $claimRoot -WriterId 'a'
+        New-GitHandoffCommon -Adapter $claimWriter -TaskKey 'demo:claim-exists' -Fields $script:InitialCommon `
+            -OperationId 'create-claim-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffForkRecovery -Adapter $claimWriter -TaskKey 'demo:claim-exists' -ForkId 'claim-present' `
+            -Payload $payload -OperationId 'create-claim-recovery' -Actor 'writer-a' | Out-Null
+        $remoteRoot = Join-Path $claimRoot 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-records'
+        Set-Content -LiteralPath $flag -Value 'reject branch after envelope claim' -Encoding ascii
+        $branchFailure = $null
+        try {
+            try { New-GitHandoffBranch -Adapter $claimWriter -TaskKey 'demo:claim-exists' -BranchId 'thread:B' `
+                -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-payload-b' `
+                -Actor 'writer-a' | Out-Null }
+            catch { $branchFailure = [string]$_.Exception.Message }
+        }
+        finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
+        $branchFailure | Should -Match 'selected Git Handoff storage write was not verified'
+        (Get-GitHandoffBranch -Adapter $claimWriter -TaskKey 'demo:claim-exists' -BranchId 'thread:B') | Should -BeNullOrEmpty
+        $payloadRefs = @(& git -C $claimWriter.RepositoryRoot ls-remote origin 'refs/heads/handoff-v1/recovery/*')
+        $payloadRefs.Count | Should -Be 1
+        $payloadRef = (([string]$payloadRefs[0]) -split "`t",2)[1]
+        & git -C $claimWriter.RepositoryRoot push --quiet origin ":$payloadRef"
+        $LASTEXITCODE | Should -Be 0
+        $claimPending = @(Get-GitHandoffPendingForkRecoveries -Adapter $claimWriter -TaskKey 'demo:claim-exists')
+        { Abandon-GitHandoffForkRecovery -Adapter $claimWriter -TaskKey 'demo:claim-exists' -ForkId 'claim-present' `
+            -ExpectedEnvelopeRevision $claimPending[0].Revision -OperationId 'unsafe-claim-abandon' `
+            -Reason 'must remain pending' } | Should -Throw '*branch creation has already been claimed*'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $claimWriter -TaskKey 'demo:claim-exists').Count | Should -Be 1
+    }
+
+    # Scenario: An untrusted principal tries to abandon a visible envelope.
+    # Purpose: Deny before any recovery or task record content is read.
+    It 'InterT29c_authorizes_abandonment_before_loading_recovery_state' {
+        $root = Join-Path $TestDrive 'da'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $payload = [ordered]@{
+            'Fork Point' = 'shared-r1'
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='source state';Source='source evidence'}
+            'Shared Baseline' = [ordered]@{Current='shared state';Source='shared evidence'}
+            'Verified Active Branches' = @()
+            'Step Operation IDs' = [ordered]@{createB='denied-create-b'}
+        }
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-recovery-payload'
+        Set-Content -LiteralPath $flag -Value 'reject isolated recovery payload' -Encoding ascii
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:deny-abandon' -ForkId 'deny-abandon' `
+                -Payload $payload -OperationId 'create-denied-envelope' -Actor 'writer-a' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
+        $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:deny-abandon')
+        $denied = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RemoteName origin `
+            -AuthorityScope $a.AuthorityScope -GetVerifiedPrincipal { 'denied-principal' } `
+            -Authorize { param($request) $false }
+        { Abandon-GitHandoffForkRecovery -Adapter $denied -TaskKey 'demo:deny-abandon' -ForkId 'deny-abandon' `
+            -ExpectedEnvelopeRevision $pending[0].Revision -OperationId 'denied-abandon-operation' `
+            -Reason 'caller is unauthorized' } | Should -Throw '*access was denied*'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:deny-abandon').Count | Should -Be 1
     }
 
     # A common-only conversation first materializes its own A branch, then B from the confirmed fork baseline.
@@ -451,6 +586,10 @@ exit 0
         $sourceA = [ordered]@{Current=$persisted['Source Snapshot'].Current;Source=$persisted['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
         $newB = [ordered]@{Current='B alternative not selected';Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
         New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
+        $recoveryRetry = New-GitHandoffForkRecovery -Adapter $b -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35' `
+            -Payload $recoveryPayload -OperationId 'fork-pending-35' -Actor 'writer-a'
+        $recoveryRetry.Status | Should -Be 'Pending'
+        $recoveryRetry.Revision | Should -Be $recovery.Revision
         $remoteRoot = Join-Path $root 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-index') -Value 'reject B index' -Encoding ascii
