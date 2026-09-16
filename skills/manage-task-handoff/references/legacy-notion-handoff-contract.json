@@ -7,6 +7,26 @@
       "main": "Context Handoffs",
       "changes": "Context Handoff Changes"
     },
+    "readOnlyReplay": {
+      "captureBeforeReconstruction": [
+        "main.id",
+        "main.last_edited_time",
+        "ordered-unmerged-change-fingerprint"
+      ],
+      "unmergedChangeFingerprintFields": [
+        "change.id",
+        "change.last_edited_time",
+        "change.merged",
+        "change.field",
+        "change.value",
+        "change.effective_native_time"
+      ],
+      "reReadMainAndCompleteUnmergedSetBeforeReturn": true,
+      "requireExactFingerprintMatch": true,
+      "maxReconstructionRetries": 2,
+      "onConcurrentMutation": "reconstruct-and-retry",
+      "onRetryLimit": "stop-and-report-unstable-snapshot"
+    },
     "snapshotFields": [
       "Intent",
       "Scope",
