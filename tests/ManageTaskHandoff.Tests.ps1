@@ -28,11 +28,15 @@ Describe 'manage-task-handoff Skill contract' {
     It 'InterT20_resolves_exact_common_and_peer_branch_identity' {
         @($script:Contract.common.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.common.requiredFields) | Should -Contain 'Task Key'
+        @($script:Contract.common.uniqueKey) | Should -Be @('Authority Scope','Task Key')
         @($script:Contract.branch.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Branch ID'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Fork Point'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Continuation Generation'
+        @($script:Contract.branch.uniqueKey) | Should -Be @('Authority Scope','Task Key','Branch ID')
         @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Authority Scope'
+        @($script:Contract.forkRecovery.uniqueKey) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.forkRecovery.statusValues) | Should -Be @('Pending','Completed','Abandoned')
         $script:Contract.forkRecovery.payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload | Should -BeTrue
         $script:Contract.forkRecovery.envelopeListNeverLoadsPayload | Should -BeTrue
         @($script:Contract.forkRecovery.creationOrder) | Should -Be @(
@@ -41,6 +45,17 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
             'isolated-snapshot-payload','payload-free-completed-envelope'
         )
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Intended Branch Identity Digests'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
+        @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
+            'isolated-payload-absent','all-intended-branch-records-absent',
+            'all-intended-branch-creation-outcomes-absent','all-intended-branch-index-entries-absent'
+        )
+        $script:Contract.forkRecovery.abandonmentRequiresExactAuthorization | Should -BeTrue
+        $script:Contract.forkRecovery.abandonmentUsesConditionalRevision | Should -BeTrue
+        $script:Contract.forkRecovery.unverifiableAbandonmentRemainsPending | Should -BeTrue
+        $script:Contract.forkRecovery.abandonedEnvelopeBlocksSingletonResume | Should -BeFalse
+        $script:Contract.forkRecovery.abandonedForkIdMayBeReused | Should -BeFalse
         $script:Contract.branch.uniquePrimaryBranch | Should -BeFalse
         $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
         $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
@@ -202,6 +217,19 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.adapter.authorizationCheckBeforeEveryLookupAndMutation | Should -BeTrue
         $script:Contract.adapter.recordAndEventBindAuthorityScope | Should -BeTrue
         $script:Contract.adapter.scopeIdentityUsesUnambiguousComponentEncoding | Should -BeTrue
+        $script:Contract.adapter.authorityScopeIsLogicalComponentOfEveryStorageKey | Should -BeTrue
+        @($script:Contract.adapter.logicalOperationKeys.getCommon) | Should -Be @('Authority Scope','Task Key')
+        @($script:Contract.adapter.logicalOperationKeys.getBranch) | Should -Be @('Authority Scope','Task Key','Branch ID')
+        @($script:Contract.adapter.logicalOperationKeys.listPendingForkRecovery) | Should -Be @('Authority Scope','Task Key')
+        @($script:Contract.adapter.logicalOperationKeys.getForkRecovery) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.adapter.logicalOperationKeys.createOrUpdateForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.adapter.logicalOperationKeys.abandonForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.adapter.logicalOperationKeys.listActiveBranches) | Should -Be @('Authority Scope','Task Key')
+        @($script:Contract.adapter.logicalOperationKeys.createCommonIfAbsent) | Should -Be @('Authority Scope','Task Key')
+        @($script:Contract.adapter.logicalOperationKeys.createBranchIfAbsent) | Should -Be @('Authority Scope','Task Key','Branch ID')
+        @($script:Contract.adapter.logicalOperationKeys.createForkRecoveryIfAbsent) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.adapter.logicalOperationKeys.stageEventIntentsIfAbsent) | Should -Be @('Authority Scope','Operation ID','Record ID')
+        @($script:Contract.adapter.logicalOperationKeys.appendEventIfAbsent) | Should -Be @('Authority Scope','Operation ID','Record ID','Field')
         $script:Contract.adapter.actorIsDisplayClaimNotAuthorization | Should -BeTrue
         $script:Contract.adapter.verifiedPrincipalPersistedInOperationIntentAndEvent | Should -BeTrue
         $script:Contract.adapter.verifiedPrincipalImmutableAcrossEventRecovery | Should -BeTrue
