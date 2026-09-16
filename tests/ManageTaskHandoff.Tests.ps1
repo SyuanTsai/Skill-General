@@ -46,6 +46,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
         $script:Contract.adapter.exactForkRecoveryLookup | Should -BeTrue
+        $script:Contract.adapter.atomicRecordAndEventIntentOrWriteAheadStage | Should -BeTrue
+        $script:Contract.adapter.eventIntentDurableBeforeExposedMutation | Should -BeTrue
+        $script:Contract.adapter.eventRecoveryDoesNotDependOnLostProcess | Should -BeTrue
         foreach ($case in $script:Cases.lookup) {
             $action = if ($case.mainCount -gt 1 -or $case.branchMatches -gt 1) { 'stop-integrity-conflict' }
                 elseif ($case.branchId -and $case.branchMatches -eq 1) { 'exact-branch' }
@@ -131,6 +134,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.adapter.conditionalMutation | Should -BeTrue
         $script:Contract.adapter.operationIdIdempotency | Should -BeTrue
         $script:Contract.adapter.eventAppendAfterRecordReadback | Should -BeTrue
+        @($script:Contract.adapter.durableEventIntentFields) | Should -Be @(
+            'Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
+        )
         $script:Contract.adapter.onRevisionConflict | Should -Be 'reread-and-reapply-gate'
         $script:Contract.adapter.onPartialFailure | Should -Be 'retain-retryable-state-and-report-each-record'
         $script:Contract.adapter.onAuthorityUnavailable | Should -Be 'do-not-promote-unverified-facts'
