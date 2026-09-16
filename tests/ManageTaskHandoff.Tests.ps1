@@ -83,16 +83,18 @@ Describe 'manage-task-handoff Skill contract' {
     # Purpose: Keep every related branch recoverable until the common decision is verified.
     It 'InterT40_preserves_order_and_append_only_status_history' {
         @($script:Contract.integration.selectionOrder) | Should -Be @(
-            'conditional-common-write',
+            'read-and-bind-reviewed-branch-revisions-content-identities-and-outcomes',
+            'reject-changed-reviewed-branches-before-common-write',
+            'conditional-common-write-with-branch-bindings',
             'common-readback-bind-origin-revision-and-decision-identity',
-            'per-branch-decision-identity-precheck',
+            'per-branch-common-and-reviewed-identity-precheck',
             'branch-outcomes',
-            'per-branch-decision-identity-postcheck',
-            'per-branch-decision-identity-precheck',
+            'per-branch-common-and-reviewed-identity-postcheck',
+            'per-branch-common-and-reviewed-identity-precheck',
             'archive-selected-and-superseded-branches',
-            'per-branch-decision-identity-postcheck',
-            'remove-archived-branches-from-active-index-using-latest-storage-revision',
-            'decision-identity-branch-and-active-index-readback'
+            'per-branch-common-and-reviewed-identity-postcheck',
+            'remove-archived-branches-from-active-index-using-latest-storage-revisions',
+            'common-decision-reviewed-branch-and-active-index-readback'
         )
         $script:Contract.integration.selectedBranchIndexRemovalRequired | Should -BeTrue
         $script:Contract.integration.indexRemovalRetainsStableOperationIds | Should -BeTrue
@@ -108,6 +110,18 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.integration.recheckCommonDecisionIdentityBeforeEachBranchMutation | Should -BeTrue
         $script:Contract.integration.recheckCommonDecisionIdentityAfterEachBranchMutation | Should -BeTrue
         $script:Contract.integration.onCommonDecisionIdentityChangeDuringFinalization | Should -Be 'stop-and-reconcile-from-current-decision'
+        $script:Contract.integration.finalizationBindsReviewedBranchOrigins | Should -BeTrue
+        $script:Contract.integration.decisionPersistsBranchRevisionContentIdentityAndOutcome | Should -BeTrue
+        $script:Contract.integration.reviewedBranchContentIdentityBasis | Should -Be 'canonical-user-reviewable-branch-fields-at-bound-origin-revision'
+        @($script:Contract.integration.reviewedBranchContentIdentityExcludes) | Should -Be @('Lifecycle','Branch Outcome','Last Activity At','operation-log')
+        $script:Contract.integration.decisionWriteRequiresExactReviewedBranchRevisionAndIdentity | Should -BeTrue
+        $script:Contract.integration.branchStorageRevisionCursorIndependentFromReviewedContentIdentity | Should -BeTrue
+        $script:Contract.integration.acceptedBranchRevisionMustDescendFromReviewedOrigin | Should -BeTrue
+        $script:Contract.integration.acceptedBranchRevisionMustPreserveReviewedContentIdentity | Should -BeTrue
+        $script:Contract.integration.recheckReviewedBranchIdentityBeforeEachFinalizationMutation | Should -BeTrue
+        $script:Contract.integration.recheckReviewedBranchIdentityAfterEachFinalizationMutation | Should -BeTrue
+        $script:Contract.integration.appliedOutcomeMustMatchDecisionBranchBinding | Should -BeTrue
+        $script:Contract.integration.onReviewedBranchChangeDuringFinalization | Should -Be 'stop-and-require-renewed-user-confirmation'
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
         $script:Contract.changes.appendOnly | Should -BeTrue
         @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')
