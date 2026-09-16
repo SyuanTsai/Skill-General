@@ -106,6 +106,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.archive.noOpRefreshesActivity | Should -BeFalse
         $script:Contract.archive.exactArchivedBranchOnlyRestored | Should -BeTrue
         $script:Contract.archive.otherPeersRemainArchived | Should -BeTrue
+        $script:Contract.archive.indexRemovalBindsArchivedBranchRevision | Should -BeTrue
+        $script:Contract.archive.schedulerRechecksLifecycleBeforeRemovalRetry | Should -BeTrue
+        $script:Contract.archive.activeBranchMissingFromIndexMustBeReadded | Should -BeTrue
         foreach ($case in $script:Cases.archive) {
             $now = [DateTimeOffset]$case.now
             $last = [DateTimeOffset]$case.lastActivity

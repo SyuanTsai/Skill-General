@@ -104,7 +104,10 @@
     "noContentDeletion": true,
     "explicitSameKeyContinuationOnlyRestoresArchive": true,
     "exactArchivedBranchOnlyRestored": true,
-    "otherPeersRemainArchived": true
+    "otherPeersRemainArchived": true,
+    "indexRemovalBindsArchivedBranchRevision": true,
+    "schedulerRechecksLifecycleBeforeRemovalRetry": true,
+    "activeBranchMissingFromIndexMustBeReadded": true
   },
   "adapter": {
     "fixedAuthorityPlatform": null,
