@@ -41,7 +41,9 @@ function Get-HandoffRecordId {
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($BranchId)) { throw 'Branch ID is required.' }
     Assert-HandoffIdentity -TaskKey $TaskKey
     if ($RecordKind -eq 'common') { return "common:$TaskKey" }
-    return "branch:${TaskKey}:${BranchId}"
+    $taskHash = Get-HandoffSha256 -Value $TaskKey
+    $branchHash = Get-HandoffSha256 -Value $BranchId
+    return "branch:${taskHash}:${branchHash}"
 }
 
 function Get-HandoffRecordRef {
@@ -382,8 +384,13 @@ function Get-GitHandoffBranch {
 
 function New-GitHandoffRecord {
     param($Adapter,[string] $RecordKind,[string] $TaskKey,[string] $BranchId,[string] $ForkPoint,
-        [Parameter(Mandatory = $true)] $Fields,[string] $OperationId)
+        [Parameter(Mandatory = $true)] $Fields,[string] $OperationId,
+        [Parameter(Mandatory = $true)][string] $Actor)
     Assert-HandoffFieldsSafe -Fields $Fields -RecordKind $RecordKind
+    if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff creation event requires the actual writer actor.' }
+    if (@($Fields.Keys | Where-Object { [string]$_ -ieq 'Active Branches' }).Count -gt 0) {
+        throw "Active Branches is a structural common index; create the record first, then use the branch index reconciliation operation."
+    }
     $recordId = Get-HandoffRecordId -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($ForkPoint)) { throw 'Fork Point is required.' }
     $logicalFields = [ordered]@{ 'Task Key'=$TaskKey }
@@ -402,7 +409,7 @@ function New-GitHandoffRecord {
     }
     if ($logicalFields.Lifecycle -cne 'Active') { throw 'A new Handoff record starts Active; exact Archived continuation uses restore.' }
     $payload = [ordered]@{ fields=$Fields;forkPoint=$ForkPoint }
-    $digest = Get-OperationPayloadDigest -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -Changes $payload
+    $digest = Get-OperationPayloadDigest -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -Changes $payload -Actor $Actor
     $old = Read-GitHandoffRecord -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($null -ne $old) {
         $existingOp = $old.Record.operations[$OperationId]
@@ -415,7 +422,7 @@ function New-GitHandoffRecord {
     $changes = @(
         foreach ($field in $logicalFields.Keys) { [ordered]@{field=[string]$field;previous=$null;new=$logicalFields[$field]} }
     )
-    $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $changes
+    $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $changes -Actor $Actor
     $record = [ordered]@{
         schemaVersion=1;recordKind=$RecordKind;recordId=$recordId;taskKey=$TaskKey;
         branchId= $(if ($RecordKind -eq 'branch') { $BranchId } else { $null });
@@ -437,8 +444,9 @@ function New-GitHandoffRecord {
 function New-GitHandoffCommon {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
-        [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId)
-    return New-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -Fields $Fields -OperationId $OperationId
+        [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId,
+        [Parameter(Mandatory = $true)][string] $Actor)
+    return New-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -Fields $Fields -OperationId $OperationId -Actor $Actor
 }
 
 function Set-GitHandoffFields {
@@ -514,9 +522,10 @@ function New-GitHandoffBranch {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
         [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)][string] $ForkPoint,
-        [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId)
+        [Parameter(Mandatory = $true)] $Fields,[Parameter(Mandatory = $true)][string] $OperationId,
+        [Parameter(Mandatory = $true)][string] $Actor)
     if ($null -eq (Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey)) { throw 'Branch creation requires the exact common Task Key.' }
-    $branch = New-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId
+    $branch = New-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ForkPoint $ForkPoint -Fields $Fields -OperationId $OperationId -Actor $Actor
     if ((Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId).Fields.Lifecycle -ceq 'Archived') {
         throw 'An archived branch must be restored by exact explicit continuation, not indexed as a new branch.'
     }
@@ -533,7 +542,7 @@ function New-GitHandoffBranch {
         try {
             $index = Set-GitHandoffFields -Adapter $Adapter -RecordKind common -TaskKey $TaskKey -ExpectedRevision $common.Revision `
                 -Changes ([ordered]@{'Active Branches'=$newIndex}) -OperationId "${OperationId}:index" -SuppressActivity `
-                -Reason 'index exact peer branch after creation'
+                -Actor $Actor -Reason 'index exact peer branch after creation'
             $rechecked = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
             if ($rechecked.ActiveBranches -ccontains $BranchId) {
                 return [pscustomobject]@{BranchId=$BranchId;BranchRevision=$branch.Revision;CommonRevision=$index.Revision;Indexed=$true}

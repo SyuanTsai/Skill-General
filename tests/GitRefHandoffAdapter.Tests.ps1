@@ -5,6 +5,10 @@ Describe 'Optional Git-ref Task Handoff adapter' {
     BeforeAll {
         $script:Root = Split-Path -Parent $PSScriptRoot
         Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -ErrorAction Stop
+        $script:PriorCommonCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffCommon:Actor']
+        $script:PriorBranchCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffBranch:Actor']
+        $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = 'synthetic-test-writer'
+        $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = 'synthetic-test-writer'
 
         function New-WriterFixture {
             param([string] $Root, [string] $WriterId)
@@ -62,6 +66,13 @@ exit 0
         }
     }
 
+    AfterAll {
+        if ($null -eq $script:PriorCommonCreationActorDefault) { $PSDefaultParameterValues.Remove('New-GitHandoffCommon:Actor') }
+        else { $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = $script:PriorCommonCreationActorDefault }
+        if ($null -eq $script:PriorBranchCreationActorDefault) { $PSDefaultParameterValues.Remove('New-GitHandoffBranch:Actor') }
+        else { $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = $script:PriorBranchCreationActorDefault }
+    }
+
     # A real bare remote, two independent clones, and an explicit expected ref prove the uniqueness boundary.
     It 'InterT10_creates_one_exact_common_and_rejects_another_operation' {
         $root = Join-Path $TestDrive 'one-common'
@@ -74,6 +85,57 @@ exit 0
         $retry = New-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-1' -Fields $script:InitialCommon -OperationId 'create-common-1'
         $retry.Revision | Should -Be $created.Revision
         { New-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-1' -Fields $script:InitialCommon -OperationId 'create-common-2' } | Should -Throw
+    }
+
+    # Scenario: An adopter creates a record with the identity of the process that performed the write.
+    # Purpose: Preserve attributable creation events instead of a hard-coded adapter placeholder.
+    It 'InterT15_requires_and_records_the_actual_creation_actor' {
+        $root = Join-Path $TestDrive 'creation-actor'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        (Get-Command New-GitHandoffCommon).Parameters.Actor.Attributes.Mandatory | Should -Contain $true
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:actor' -Fields $script:InitialCommon `
+            -OperationId 'create-with-actor' -Actor 'writer-a' | Out-Null
+        $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:actor' -RecordKind common `
+            -OperationId 'create-with-actor' -Field 'Current'
+        $event.Actor | Should -Be 'writer-a'
+    }
+
+    # Scenario: A caller supplies the structural Active Branches index while creating common.
+    # Purpose: Reject an unsupported creation payload before a durable record can diverge from its canonical index.
+    It 'InterT17_rejects_active_branches_before_record_creation' {
+        $root = Join-Path $TestDrive 'creation-active-branches'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $fields = [ordered]@{}
+        foreach ($name in $script:InitialCommon.Keys) { $fields[$name] = $script:InitialCommon[$name] }
+        $fields['Active Branches'] = @('thread:A')
+        { New-GitHandoffCommon -Adapter $a -TaskKey 'demo:active-branches' -Fields $fields `
+            -OperationId 'create-with-index' -Actor 'writer-a' } | Should -Throw
+        Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:active-branches' | Should -BeNullOrEmpty
+    }
+
+    # Scenario: Legal Task Key and Branch ID pairs contain colons but concatenate to the same text.
+    # Purpose: Keep branch record and event identities collision-free for every legal identifier pair.
+    It 'InterT18_encodes_task_and_branch_identity_without_delimiter_collisions' {
+        $root = Join-Path $TestDrive 'idc'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'a:b' -Fields $script:InitialCommon `
+            -OperationId 'create-common-ab' -Actor 'writer-a' | Out-Null
+        New-GitHandoffCommon -Adapter $a -TaskKey 'a' -Fields $script:InitialCommon `
+            -OperationId 'create-common-a' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'a:b' -BranchId 'c' -ForkPoint 'shared-r1' `
+            -Fields $script:InitialBranch -OperationId 'create-colliding-branch' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'a' -BranchId 'b:c' -ForkPoint 'shared-r1' `
+            -Fields $script:InitialBranch -OperationId 'create-colliding-branch' -Actor 'writer-a' | Out-Null
+        $first = Get-GitHandoffBranch -Adapter $a -TaskKey 'a:b' -BranchId 'c'
+        $second = Get-GitHandoffBranch -Adapter $a -TaskKey 'a' -BranchId 'b:c'
+        $first.RecordId | Should -Not -Be $second.RecordId
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'a:b' -BranchId 'c' -RecordKind branch `
+            -OperationId 'create-colliding-branch' -Field 'Current').RecordId | Should -Be $first.RecordId
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'a' -BranchId 'b:c' -RecordKind branch `
+            -OperationId 'create-colliding-branch' -Field 'Current').RecordId | Should -Be $second.RecordId
     }
 
     # Two writers start from the same SHA. A's success must make B's stale write fail without changing A's fields.
