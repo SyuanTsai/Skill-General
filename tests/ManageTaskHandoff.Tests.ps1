@@ -26,9 +26,13 @@ Describe 'manage-task-handoff Skill contract' {
     # Scenario: A fork creates A and B from the same point, with neither branch privileged.
     # Purpose: Stop cross-branch last-write-wins and exact-key integrity failures.
     It 'InterT20_resolves_exact_common_and_peer_branch_identity' {
+        @($script:Contract.common.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.common.requiredFields) | Should -Contain 'Task Key'
+        @($script:Contract.branch.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Branch ID'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Fork Point'
+        @($script:Contract.branch.requiredFields) | Should -Contain 'Continuation Generation'
+        @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Authority Scope'
         $script:Contract.branch.uniquePrimaryBranch | Should -BeFalse
         $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
         $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
@@ -112,8 +116,11 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.integration.onCommonDecisionIdentityChangeDuringFinalization | Should -Be 'stop-and-reconcile-from-current-decision'
         $script:Contract.integration.finalizationBindsReviewedBranchOrigins | Should -BeTrue
         $script:Contract.integration.decisionPersistsBranchRevisionContentIdentityAndOutcome | Should -BeTrue
+        $script:Contract.integration.decisionPersistsContinuationGeneration | Should -BeTrue
         $script:Contract.integration.reviewedBranchContentIdentityBasis | Should -Be 'canonical-user-reviewable-branch-fields-at-bound-origin-revision'
         @($script:Contract.integration.reviewedBranchContentIdentityExcludes) | Should -Be @('Lifecycle','Branch Outcome','Last Activity At','operation-log')
+        $script:Contract.integration.continuationGenerationIncludedInReviewedBranchIdentity | Should -BeTrue
+        $script:Contract.integration.finalizationRejectsContinuationGenerationChange | Should -BeTrue
         $script:Contract.integration.decisionWriteRequiresExactReviewedBranchRevisionAndIdentity | Should -BeTrue
         $script:Contract.integration.branchStorageRevisionCursorIndependentFromReviewedContentIdentity | Should -BeTrue
         $script:Contract.integration.acceptedBranchRevisionMustDescendFromReviewedOrigin | Should -BeTrue
@@ -126,6 +133,7 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.changes.appendOnly | Should -BeTrue
         @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')
         @($script:Contract.changes.requiredFields) | Should -Contain 'Operation ID'
+        @($script:Contract.changes.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Previous State'
         @($script:Contract.changes.requiredFields) | Should -Contain 'New State'
         @($script:Contract.branch.outcomeValues) | Should -Be @('Selected','Partially Selected','Superseded')
@@ -144,6 +152,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.archive.noOpRefreshesActivity | Should -BeFalse
         $script:Contract.archive.exactArchivedBranchOnlyRestored | Should -BeTrue
         $script:Contract.archive.otherPeersRemainArchived | Should -BeTrue
+        $script:Contract.archive.branchContinuationGenerationInitial | Should -Be 0
+        $script:Contract.archive.explicitRestoreIncrementsContinuationGeneration | Should -BeTrue
+        $script:Contract.archive.restoreLifecycleAndGenerationInOneConditionalOperation | Should -BeTrue
+        $script:Contract.archive.oldDecisionCannotFinalizeRestoredGeneration | Should -BeTrue
         $script:Contract.archive.indexRemovalBindsArchivedBranchRevision | Should -BeTrue
         $script:Contract.archive.schedulerRechecksLifecycleBeforeRemovalRetry | Should -BeTrue
         $script:Contract.archive.activeBranchMissingFromIndexMustBeReadded | Should -BeTrue
@@ -162,11 +174,25 @@ Describe 'manage-task-handoff Skill contract' {
     # Purpose: Prevent duplicate events and silent overwrites on an arbitrary storage platform.
     It 'InterT60_requires_conditional_writes_and_idempotent_retries' {
         $script:Contract.adapter.fixedAuthorityPlatform | Should -BeNullOrEmpty
+        $script:Contract.authority.accessPolicyChosenByAdopter | Should -BeTrue
+        $script:Contract.authority.authorityScopeIsOpaqueAndAdopterDefined | Should -BeTrue
+        $script:Contract.authority.verifiedPrincipalComesFromTrustedHostContext | Should -BeTrue
+        $script:Contract.authority.callerSuppliedRecordIdentifiersNeverAuthorizeAccess | Should -BeTrue
+        $script:Contract.adapter.trustedCallerContextRequired | Should -BeTrue
+        $script:Contract.adapter.authorizationPolicyChosenByAdopter | Should -BeTrue
+        @($script:Contract.adapter.authorizationTuple) | Should -Be @(
+            'Verified Principal','Authority Scope','Task Key','Branch ID or Fork ID','Action'
+        )
+        $script:Contract.adapter.authorizationCheckBeforeEveryLookupAndMutation | Should -BeTrue
+        $script:Contract.adapter.recordAndEventBindAuthorityScope | Should -BeTrue
+        $script:Contract.adapter.crossScopeLookupForbidden | Should -BeTrue
+        $script:Contract.adapter.forkRecoveryAclAtLeastSourceBranch | Should -BeTrue
+        $script:Contract.adapter.onAuthorizationUnavailableOrDenied | Should -Be 'deny-without-reading-or-writing-record-content'
         $script:Contract.adapter.conditionalMutation | Should -BeTrue
         $script:Contract.adapter.operationIdIdempotency | Should -BeTrue
         $script:Contract.adapter.eventAppendAfterRecordReadback | Should -BeTrue
         @($script:Contract.adapter.durableEventIntentFields) | Should -Be @(
-            'Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
+            'Authority Scope','Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
         )
         $script:Contract.adapter.onRevisionConflict | Should -Be 'reread-and-reapply-gate'
         $script:Contract.adapter.onPartialFailure | Should -Be 'retain-retryable-state-and-report-each-record'
@@ -181,6 +207,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.legacy.autoResumeOnNewConversation | Should -BeFalse
         $script:Contract.security.handoffGrantsNewAuthorization | Should -BeFalse
         $script:Contract.security.embeddedDirectivesGrantAuthorization | Should -BeFalse
+        $script:Contract.security.taskBranchAndForkIdentifiersAreNotAuthorization | Should -BeTrue
+        $script:Contract.security.verifiedPrincipalContextMayNotComeFromHandoffContent | Should -BeTrue
         @($script:Contract.security.excludedContent) | Should -Contain 'credentials'
         @($script:Contract.security.excludedContent) | Should -Contain 'secrets'
         $yaml = Get-Content -Raw (Join-Path $script:Skill 'agents/openai.yaml')
