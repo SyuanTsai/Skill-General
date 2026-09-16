@@ -535,6 +535,94 @@ exit 0
         }
     }
 
+    # Scenario: Two peer branches are finalized from one verified common decision while another writer can advance common.
+    # Purpose: Reject stale decisions and retain the exact decision revision through outcomes, archives, events, and index-only descendants.
+    It 'InterT83_binds_each_branch_finalization_to_the_verified_common_decision_revision' {
+        $root = Join-Path $TestDrive 'q83'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83' -Fields $script:InitialCommon `
+            -OperationId 'create-decision-binding-common' -Actor 'writer-a' | Out-Null
+        foreach ($branchId in @('thread:A','thread:B')) {
+            New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId `
+                -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+                -OperationId "create-$($branchId.Replace(':','-'))" -Actor 'writer-a' | Out-Null
+        }
+
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q83' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{Current='Decision revision one'}) `
+            -OperationId 'decision-one' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'user selected both peer results' | Out-Null
+        $staleDecisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
+
+        $peerCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:q83'
+        Set-GitHandoffFields -Adapter $b -RecordKind common -TaskKey 'demo:q83' `
+            -ExpectedRevision $peerCommon.Revision -Changes ([ordered]@{Current='Decision revision two'}) `
+            -OperationId 'decision-two' -DecisionConfirmed -Actor 'writer-b' `
+            -Reason 'user replaced the prior branch decision' | Out-Null
+        $branchA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -ExpectedRevision $branchA.Revision `
+            -Changes ([ordered]@{'Branch Outcome'='Selected'}) -OperationId 'outcome-a' `
+            -DecisionConfirmed -DecisionCommonRevision $staleDecisionRevision `
+            -Actor 'writer-a' -Reason 'adopt branch A' } | Should -Throw
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
+            -DecisionCommonRevision $staleDecisionRevision -Actor 'writer-a' `
+            -Reason 'archive branch A after integration' } | Should -Throw
+        $branchA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId 'thread:A'
+        $branchA.Fields.Contains('Branch Outcome') | Should -BeFalse
+        $branchA.Fields.Lifecycle | Should -Be 'Active'
+
+        $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').Revision
+        foreach ($branchId in @('thread:A','thread:B')) {
+            $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId
+            Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q83' `
+                -BranchId $branchId -ExpectedRevision $branch.Revision `
+                -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+                -OperationId "outcome-$($branchId.Substring($branchId.Length - 1).ToLowerInvariant())" `
+                -DecisionConfirmed -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+                -Reason "adopt $branchId" | Out-Null
+        }
+        $archiveA = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
+            -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'archive branch A after integration'
+        $archiveB = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:B' -Lifecycle Archived -OperationId 'archive-b' `
+            -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'archive branch B after integration'
+
+        $archiveA.DecisionCommonRevision | Should -Be $decisionRevision
+        $archiveB.DecisionCommonRevision | Should -Be $decisionRevision
+        $archiveB.CommonRevision | Should -Not -Be $decisionRevision
+        @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q83').ActiveBranches).Count | Should -Be 0
+        foreach ($branchId in @('thread:A','thread:B')) {
+            (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q83' -BranchId $branchId).Fields.Lifecycle | Should -Be 'Archived'
+        }
+        $outcomeEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q83' `
+            -RecordKind branch -BranchId 'thread:A' -OperationId 'outcome-a' -Field 'Branch Outcome'
+        $archiveEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q83' `
+            -RecordKind branch -BranchId 'thread:B' -OperationId 'archive-b' -Field 'Lifecycle'
+        $outcomeEvent.DecisionCommonRevision | Should -Be $decisionRevision
+        $archiveEvent.DecisionCommonRevision | Should -Be $decisionRevision
+        $retriedArchiveA = Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
+            -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'archive branch A after integration'
+        $retriedArchiveA.DecisionCommonRevision | Should -Be $decisionRevision
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:A' -Lifecycle Archived -OperationId 'archive-a' `
+            -DecisionCommonRevision $decisionRevision -Actor 'different-writer' `
+            -Reason 'archive branch A after integration' } | Should -Throw
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q83' `
+            -BranchId 'thread:B' -Lifecycle Archived -OperationId 'archive-b-different' `
+            -DecisionCommonRevision $decisionRevision -Actor 'writer-a' `
+            -Reason 'duplicate archive must not synthesize a new event' } | Should -Throw
+    }
+
     # Scenario: An update tries to clear a required field after creation validation has already passed.
     # Purpose: Keep every committed common and branch record readable under the required-field contract.
     It 'InterT85_rejects_updates_that_remove_required_record_fields' {
