@@ -191,21 +191,17 @@ exit 0
         }
         New-GitHandoffCommon -Adapter $originalWriter -TaskKey 'demo:ABC-28' -Fields $commonFields -OperationId 'create-common-28' | Out-Null
         $preFork = Get-GitHandoffCommon -Adapter $originalWriter -TaskKey 'demo:ABC-28'
-        $pendingCurrent = [ordered]@{
-            schema = 'task-handoff-first-fork-pending/v1'
-            status = 'pending'
-            taskKey = 'demo:ABC-28'
-            sourceHostId = 'thread:A'
-            forkPoint = $preFork.Revision
-            sourceCurrent = $preFork.Fields.Current
-            sourceSource = $preFork.Fields.Source
-            confirmedCurrent = 'Confirmed version 2 requirement; no parser selected'
-            confirmedSource = 'synthetic revision r2; confirmed requirement'
-            peerIds = @('thread:A','thread:B')
-            operations = [ordered]@{pending='fork-pending-28';createA='fork-a-28';createB='fork-b-28';finish='fork-finish-28'}
-        } | ConvertTo-Json -Compress -Depth 10
-        Set-GitHandoffFields -Adapter $originalWriter -RecordKind common -TaskKey 'demo:ABC-28' -ExpectedRevision $preFork.Revision `
-            -Changes ([ordered]@{Current=$pendingCurrent}) -OperationId 'fork-pending-28' | Out-Null
+        $recoveryPayload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$preFork.Fields.Current;Source=$preFork.Fields.Source;HostIdentity='thread:A'}
+            'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no parser selected';Source='synthetic revision r2; confirmed requirement'}
+            'Verified Active Branches' = @($preFork.ActiveBranches)
+            'Step Operation IDs' = [ordered]@{createA='fork-a-28';createB='fork-b-28';finish='fork-finish-28'}
+        }
+        New-GitHandoffForkRecovery -Adapter $originalWriter -TaskKey 'demo:ABC-28' -ForkId 'first-fork-28' `
+            -Payload $recoveryPayload -OperationId 'fork-pending-28' -Actor 'writer-a' | Out-Null
         $remoteRoot = Join-Path $root 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-records') -Value 'reject A branch' -Encoding ascii
@@ -213,23 +209,26 @@ exit 0
         { New-GitHandoffBranch -Adapter $originalWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A' -ForkPoint $preFork.Revision `
             -Fields $attemptedA -OperationId 'fork-a-28' } | Should -Throw
         (Get-GitHandoffBranch -Adapter $originalWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A') | Should -BeNullOrEmpty
-        (Get-GitHandoffCommon -Adapter $originalWriter -TaskKey 'demo:ABC-28').Fields.Current | Should -Be $pendingCurrent
+        (Get-GitHandoffCommon -Adapter $originalWriter -TaskKey 'demo:ABC-28').Fields.Current | Should -Be $commonFields.Current
         Remove-Item -LiteralPath (Join-Path $remoteRoot 'deny-records') -Force
 
         # No preFork/current/session values are passed to this new writer's construction path.
         $restartedWriter = New-WriterFixture -Root $root -WriterId 'r'
-        $persisted = (Get-GitHandoffCommon -Adapter $restartedWriter -TaskKey 'demo:ABC-28').Fields.Current | ConvertFrom-Json
-        $persisted.schema | Should -Be 'task-handoff-first-fork-pending/v1'
-        $persisted.status | Should -Be 'pending'
-        $persisted.sourceCurrent | Should -Be $commonFields.Current
-        $persisted.sourceSource | Should -Be $commonFields.Source
-        $persisted.confirmedCurrent | Should -Not -Match 'parser X'
-        $recoverA = [ordered]@{Current=$persisted.sourceCurrent;Source=$persisted.sourceSource;Lifecycle='Active';'Work State'='Running'}
-        $recoverB = [ordered]@{Current="B explores parser Y from $($persisted.confirmedCurrent)";Source=$persisted.confirmedSource;Lifecycle='Active';'Work State'='Running'}
-        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[0] `
-            -ForkPoint $persisted.forkPoint -Fields $recoverA -OperationId $persisted.operations.createA | Out-Null
-        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[1] `
-            -ForkPoint $persisted.forkPoint -Fields $recoverB -OperationId $persisted.operations.createB | Out-Null
+        $recovery = Get-GitHandoffForkRecovery -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -ForkId 'first-fork-28'
+        $persisted = $recovery.Payload
+        $recovery.Status | Should -Be 'Pending'
+        $persisted['Source Snapshot'].Current | Should -Be $commonFields.Current
+        $persisted['Source Snapshot'].Source | Should -Be $commonFields.Source
+        $persisted['Shared Baseline'].Current | Should -Not -Match 'parser X'
+        $envelope = @(Get-GitHandoffPendingForkRecoveries -Adapter $restartedWriter -TaskKey 'demo:ABC-28')
+        $envelope.Count | Should -Be 1
+        $envelope[0].PSObject.Properties.Name | Should -Not -Contain 'Payload'
+        $recoverA = [ordered]@{Current=$persisted['Source Snapshot'].Current;Source=$persisted['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
+        $recoverB = [ordered]@{Current="B explores parser Y from $($persisted['Shared Baseline'].Current)";Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][0] `
+            -ForkPoint $persisted['Fork Point'] -Fields $recoverA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
+        New-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId $persisted['Intended Branch IDs'][1] `
+            -ForkPoint $persisted['Fork Point'] -Fields $recoverB -OperationId $persisted['Step Operation IDs'].createB | Out-Null
         $readA = Get-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:A'
         $readB = Get-GitHandoffBranch -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -BranchId 'thread:B'
         $readA.Fields.Current | Should -Be $commonFields.Current
@@ -239,12 +238,15 @@ exit 0
         @((Get-GitHandoffCommon -Adapter $restartedWriter -TaskKey 'demo:ABC-28').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
         $indexedCommon = Get-GitHandoffCommon -Adapter $restartedWriter -TaskKey 'demo:ABC-28'
         Set-GitHandoffFields -Adapter $restartedWriter -RecordKind common -TaskKey 'demo:ABC-28' -ExpectedRevision $indexedCommon.Revision `
-            -Changes ([ordered]@{Current="$($persisted.confirmedCurrent); A/B active";Source=$persisted.confirmedSource}) `
-            -OperationId $persisted.operations.finish | Out-Null
+            -Changes ([ordered]@{Current="$($persisted['Shared Baseline'].Current); A/B active";Source=$persisted['Shared Baseline'].Source}) `
+            -OperationId $persisted['Step Operation IDs'].finish | Out-Null
         $finalCommon = Get-GitHandoffCommon -Adapter $restartedWriter -TaskKey 'demo:ABC-28'
-        $finalCommon.Fields.Current | Should -Be "$($persisted.confirmedCurrent); A/B active"
-        $finalCommon.Fields.Source | Should -Be $persisted.confirmedSource
+        $finalCommon.Fields.Current | Should -Be "$($persisted['Shared Baseline'].Current); A/B active"
+        $finalCommon.Fields.Source | Should -Be $persisted['Shared Baseline'].Source
         $finalCommon.Fields.Source | Should -Not -Match 'A evidence'
+        Complete-GitHandoffForkRecovery -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -ForkId 'first-fork-28' `
+            -ExpectedRevision $recovery.Revision -OperationId 'complete-fork-28' | Out-Null
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $restartedWriter -TaskKey 'demo:ABC-28').Count | Should -Be 0
     }
 
     # A common-only conversation first materializes its own A branch, then B from the confirmed fork baseline.
@@ -263,43 +265,38 @@ exit 0
         }
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3' -Fields $commonOnlyA -OperationId 'create-common-3' | Out-Null
         $forkSnapshot = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3'
-        $pendingCurrent = [ordered]@{
-            schema = 'task-handoff-first-fork-pending/v1'
-            status = 'pending'
-            taskKey = 'demo:ABC-3'
-            sourceHostId = 'thread:A'
-            forkPoint = $forkSnapshot.Revision
-            sourceCurrent = $forkSnapshot.Fields.Current
-            sourceSource = $forkSnapshot.Fields.Source
-            confirmedCurrent = 'Confirmed version 2 requirement; no parser selected'
-            confirmedSource = 'synthetic revision r2; confirmed requirement'
-            peerIds = @('thread:A','thread:B')
-            operations = [ordered]@{pending='fork-pending-3';createA='fork-a';createB='fork-b';finish='fork-finish-3'}
-        } | ConvertTo-Json -Compress -Depth 10
-        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-3' -ExpectedRevision $forkSnapshot.Revision `
-            -Changes ([ordered]@{Current=$pendingCurrent}) -OperationId 'fork-pending-3' | Out-Null
-        $durableCurrent = (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-3').Fields.Current
-        $durableCurrent | Should -Be $pendingCurrent
-        $persisted = $durableCurrent | ConvertFrom-Json
-        $persisted.status | Should -Be 'pending'
-        $persisted.taskKey | Should -Be 'demo:ABC-3'
-        $persisted.sourceCurrent | Should -Be $forkSnapshot.Fields.Current
-        $persisted.sourceSource | Should -Be $forkSnapshot.Fields.Source
-        $persisted.peerIds | Should -Be @('thread:A','thread:B')
+        $recoveryPayload = [ordered]@{
+            'Fork Point' = $forkSnapshot.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$forkSnapshot.Fields.Current;Source=$forkSnapshot.Fields.Source;HostIdentity='thread:A'}
+            'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no parser selected';Source='synthetic revision r2; confirmed requirement'}
+            'Verified Active Branches' = @($forkSnapshot.ActiveBranches)
+            'Step Operation IDs' = [ordered]@{createA='fork-a';createB='fork-b';finish='fork-finish-3'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:ABC-3' -ForkId 'first-fork-3' `
+            -Payload $recoveryPayload -OperationId 'fork-pending-3' -Actor 'writer-a' | Out-Null
+        (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-3').Fields.Current | Should -Be $commonOnlyA.Current
+        $recovery = Get-GitHandoffForkRecovery -Adapter $b -TaskKey 'demo:ABC-3' -ForkId 'first-fork-3'
+        $persisted = $recovery.Payload
+        $recovery.Status | Should -Be 'Pending'
+        $persisted['Source Snapshot'].Current | Should -Be $forkSnapshot.Fields.Current
+        $persisted['Source Snapshot'].Source | Should -Be $forkSnapshot.Fields.Source
+        $persisted['Intended Branch IDs'] | Should -Be @('thread:A','thread:B')
         $sourceA = [ordered]@{
-            Current = $persisted.sourceCurrent
-            Source = $persisted.sourceSource
+            Current = $persisted['Source Snapshot'].Current
+            Source = $persisted['Source Snapshot'].Source
             Lifecycle = 'Active'
             'Work State' = 'Running'
         }
         $newB = [ordered]@{
-            Current = "B explores parser Y from $($persisted.confirmedCurrent)"
-            Source = "$($persisted.confirmedSource); shared fork $($persisted.forkPoint); A evidence trace-only"
+            Current = "B explores parser Y from $($persisted['Shared Baseline'].Current)"
+            Source = "$($persisted['Shared Baseline'].Source); shared fork $($persisted['Fork Point']); A evidence trace-only"
             Lifecycle = 'Active'
             'Work State' = 'Running'
         }
-        New-GitHandoffBranch -Adapter $b -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[0] -ForkPoint $persisted.forkPoint -Fields $sourceA -OperationId $persisted.operations.createA | Out-Null
-        New-GitHandoffBranch -Adapter $a -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[1] -ForkPoint $persisted.forkPoint -Fields $newB -OperationId $persisted.operations.createB | Out-Null
+        New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB | Out-Null
         $readA = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:A'
         $readB = Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:B'
         $readA.ForkPoint | Should -Be $forkSnapshot.Revision
@@ -310,22 +307,24 @@ exit 0
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
         $indexedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3'
         Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-3' -ExpectedRevision $indexedCommon.Revision `
-            -Changes ([ordered]@{Current="$($persisted.confirmedCurrent); A/B active";Source=$persisted.confirmedSource}) `
-            -OperationId $persisted.operations.finish | Out-Null
+            -Changes ([ordered]@{Current="$($persisted['Shared Baseline'].Current); A/B active";Source=$persisted['Shared Baseline'].Source}) `
+            -OperationId $persisted['Step Operation IDs'].finish | Out-Null
         $finalCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-3'
-        $finalCommon.Fields.Current | Should -Be "$($persisted.confirmedCurrent); A/B active"
-        $finalCommon.Fields.Source | Should -Be $persisted.confirmedSource
+        $finalCommon.Fields.Current | Should -Be "$($persisted['Shared Baseline'].Current); A/B active"
+        $finalCommon.Fields.Source | Should -Be $persisted['Shared Baseline'].Source
         $finalCommon.Fields.Source | Should -Not -Match 'A candidate evidence'
+        Complete-GitHandoffForkRecovery -Adapter $b -TaskKey 'demo:ABC-3' -ForkId 'first-fork-3' `
+            -ExpectedRevision $recovery.Revision -OperationId 'complete-fork-3' | Out-Null
         Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:ABC-3' -BranchId 'thread:A' -ExpectedRevision $readA.Revision -Changes ([ordered]@{Current='A tested version 1'}) -OperationId 'branch-a-update' | Out-Null
         Set-GitHandoffFields -Adapter $b -RecordKind branch -TaskKey 'demo:ABC-3' -BranchId 'thread:B' -ExpectedRevision $readB.Revision -Changes ([ordered]@{Current='B tested version 2'}) -OperationId 'branch-b-update' | Out-Null
         (Get-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-3' -BranchId 'thread:A').Fields.Current | Should -Be 'A tested version 1'
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-3' -BranchId 'thread:B').Fields.Current | Should -Be 'B tested version 2'
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
-        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').Fields.Current | Should -Be "$($persisted.confirmedCurrent); A/B active"
-        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').Fields.Source | Should -Be $persisted.confirmedSource
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').Fields.Current | Should -Be "$($persisted['Shared Baseline'].Current); A/B active"
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-3').Fields.Source | Should -Be $persisted['Shared Baseline'].Source
     }
 
-    # A failed second index write leaves B exact-readable and common pending until the same operation is reconciled.
+    # A failed second index write leaves B exact-readable and fork recovery Pending until the same operation is reconciled.
     It 'InterT35_recovers_a_partial_first_fork_without_losing_A_or_promoting_B' {
         $root = Join-Path $TestDrive 'pf'
         [void](New-Item -ItemType Directory -Path $root)
@@ -341,47 +340,47 @@ exit 0
         }
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35' -Fields $commonFields -OperationId 'create-common-35' | Out-Null
         $forkSnapshot = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35'
-        $pendingCurrent = [ordered]@{
-            schema = 'task-handoff-first-fork-pending/v1'
-            status = 'pending'
-            taskKey = 'demo:ABC-35'
-            sourceHostId = 'thread:A'
-            forkPoint = $forkSnapshot.Revision
-            sourceCurrent = $forkSnapshot.Fields.Current
-            sourceSource = $forkSnapshot.Fields.Source
-            confirmedCurrent = 'Confirmed version 2 requirement; no option selected'
-            confirmedSource = 'synthetic revision r2; confirmed baseline only'
-            peerIds = @('thread:A','thread:B')
-            operations = [ordered]@{pending='fork-pending-35';createA='fork-a-35';createB='fork-b-35';finish='fork-finish-35'}
-        } | ConvertTo-Json -Compress -Depth 10
-        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-35' -ExpectedRevision $forkSnapshot.Revision `
-            -Changes ([ordered]@{Current=$pendingCurrent}) -OperationId 'fork-pending-35' | Out-Null
-        $persisted = (Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-35').Fields.Current | ConvertFrom-Json
-        $persisted.sourceCurrent | Should -Be $forkSnapshot.Fields.Current
-        $persisted.sourceSource | Should -Be $forkSnapshot.Fields.Source
-        $sourceA = [ordered]@{Current=$persisted.sourceCurrent;Source=$persisted.sourceSource;Lifecycle='Active';'Work State'='Running'}
-        $newB = [ordered]@{Current='B alternative not selected';Source=$persisted.confirmedSource;Lifecycle='Active';'Work State'='Running'}
-        New-GitHandoffBranch -Adapter $a -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[0] -ForkPoint $persisted.forkPoint -Fields $sourceA -OperationId $persisted.operations.createA | Out-Null
+        $recoveryPayload = [ordered]@{
+            'Fork Point' = $forkSnapshot.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$forkSnapshot.Fields.Current;Source=$forkSnapshot.Fields.Source;HostIdentity='thread:A'}
+            'Shared Baseline' = [ordered]@{Current='Confirmed version 2 requirement; no option selected';Source='synthetic revision r2; confirmed baseline only'}
+            'Verified Active Branches' = @($forkSnapshot.ActiveBranches)
+            'Step Operation IDs' = [ordered]@{createA='fork-a-35';createB='fork-b-35';finish='fork-finish-35'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35' `
+            -Payload $recoveryPayload -OperationId 'fork-pending-35' -Actor 'writer-a' | Out-Null
+        $recovery = Get-GitHandoffForkRecovery -Adapter $b -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35'
+        $persisted = $recovery.Payload
+        $persisted['Source Snapshot'].Current | Should -Be $forkSnapshot.Fields.Current
+        $persisted['Source Snapshot'].Source | Should -Be $forkSnapshot.Fields.Source
+        $sourceA = [ordered]@{Current=$persisted['Source Snapshot'].Current;Source=$persisted['Source Snapshot'].Source;Lifecycle='Active';'Work State'='Running'}
+        $newB = [ordered]@{Current='B alternative not selected';Source=$persisted['Shared Baseline'].Source;Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][0] -ForkPoint $persisted['Fork Point'] -Fields $sourceA -OperationId $persisted['Step Operation IDs'].createA | Out-Null
         $remoteRoot = Join-Path $root 'remote.git'
         Add-SelectiveRejectHook -RemoteRoot $remoteRoot
         Set-Content -LiteralPath (Join-Path $remoteRoot 'deny-index') -Value 'reject B index' -Encoding ascii
-        { New-GitHandoffBranch -Adapter $b -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[1] -ForkPoint $persisted.forkPoint -Fields $newB -OperationId $persisted.operations.createB } | Should -Throw
+        { New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB } | Should -Throw
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:A').Fields.Current | Should -Be $forkSnapshot.Fields.Current
         (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:ABC-35' -BranchId 'thread:B').Fields.Current | Should -Be 'B alternative not selected'
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches) | Should -Be @('thread:A')
-        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').Fields.Current | Should -Be $pendingCurrent
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').Fields.Current | Should -Be $commonFields.Current
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:ABC-35').Count | Should -Be 1
         Remove-Item -LiteralPath (Join-Path $remoteRoot 'deny-index') -Force
-        $recovered = New-GitHandoffBranch -Adapter $b -TaskKey $persisted.taskKey -BranchId $persisted.peerIds[1] -ForkPoint $persisted.forkPoint -Fields $newB -OperationId $persisted.operations.createB
+        $recovered = New-GitHandoffBranch -Adapter $b -TaskKey 'demo:ABC-35' -BranchId $persisted['Intended Branch IDs'][1] -ForkPoint $persisted['Fork Point'] -Fields $newB -OperationId $persisted['Step Operation IDs'].createB
         $recovered.Indexed | Should -BeTrue
         @((Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35').ActiveBranches | Sort-Object) | Should -Be @('thread:A','thread:B')
         $indexedCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-35'
         Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:ABC-35' -ExpectedRevision $indexedCommon.Revision `
-            -Changes ([ordered]@{Current="$($persisted.confirmedCurrent); A/B active";Source=$persisted.confirmedSource}) `
-            -OperationId $persisted.operations.finish | Out-Null
+            -Changes ([ordered]@{Current="$($persisted['Shared Baseline'].Current); A/B active";Source=$persisted['Shared Baseline'].Source}) `
+            -OperationId $persisted['Step Operation IDs'].finish | Out-Null
         $finalCommon = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-35'
-        $finalCommon.Fields.Current | Should -Be "$($persisted.confirmedCurrent); A/B active"
-        $finalCommon.Fields.Source | Should -Be $persisted.confirmedSource
+        $finalCommon.Fields.Current | Should -Be "$($persisted['Shared Baseline'].Current); A/B active"
+        $finalCommon.Fields.Source | Should -Be $persisted['Shared Baseline'].Source
         $finalCommon.Fields.Source | Should -Not -Match 'A evidence'
+        Complete-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:ABC-35' -ForkId 'first-fork-35' `
+            -ExpectedRevision $recovery.Revision -OperationId 'complete-fork-35' | Out-Null
     }
 
     # An uncertain response after a multi-field update must not duplicate or drop either field event on retry.
@@ -417,8 +416,21 @@ exit 0
         $committed = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-5'
         $committed.Revision | Should -Not -BeNullOrEmpty
         (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:ABC-5' -RecordKind common -OperationId 'create-common-5' -Field 'Current') | Should -BeNullOrEmpty
+        $rawRecord = (@(& git -C $a.RepositoryRoot show "$($committed.Revision):record.json") -join "`n") |
+            ConvertFrom-Json -AsHashtable -Depth 50
+        $intents = @($rawRecord.operations['create-common-5'].eventIntents)
+        $intents.Count | Should -Be $rawRecord.operations['create-common-5'].changedFields.Count
+        $currentIntent = @($intents | Where-Object { $_.field -ceq 'Current' })
+        $currentIntent.Count | Should -Be 1
+        $currentIntent[0].operationId | Should -Be 'create-common-5'
+        $currentIntent[0].recordId | Should -Be $rawRecord.recordId
+        $currentIntent[0].previousState | Should -BeNullOrEmpty
+        $currentIntent[0].newState | Should -Be $script:InitialCommon.Current
+        $currentIntent[0].source | Should -Be $script:InitialCommon.Source
+        $currentIntent[0].integrationStatus | Should -Be 'common-checkpoint'
         Remove-Item -LiteralPath $flag
-        $retried = New-GitHandoffCommon -Adapter $a -TaskKey 'demo:ABC-5' -Fields $script:InitialCommon -OperationId 'create-common-5'
+        $replacementWriter = New-WriterFixture -Root $root -WriterId 'writer-replacement'
+        $retried = New-GitHandoffCommon -Adapter $replacementWriter -TaskKey 'demo:ABC-5' -Fields $script:InitialCommon -OperationId 'create-common-5'
         $retried.Revision | Should -Be $committed.Revision
         (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:ABC-5' -RecordKind common -OperationId 'create-common-5' -Field 'Current').ReadbackResult | Should -Be 'verified'
     }
