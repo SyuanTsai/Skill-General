@@ -49,6 +49,7 @@
     "sourceBranchAlreadyExistsIsReused": true,
     "pendingBeforeEveryMissingBranchCreation": true,
     "existingPeerPendingCarriesBranchAndIndexOperations": true,
+    "existingPeerPendingPreservesReplacedCommonCurrent": true,
     "existingPeerPendingClearsAfterBranchAndIndexReadback": true,
     "bothPeersShareTaskKeyAndForkPoint": true,
     "sourcePeerPreservesPreForkCurrentAndSource": true,
