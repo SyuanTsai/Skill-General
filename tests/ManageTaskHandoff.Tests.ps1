@@ -84,15 +84,23 @@ Describe 'manage-task-handoff Skill contract' {
     It 'InterT40_preserves_order_and_append_only_status_history' {
         @($script:Contract.integration.selectionOrder) | Should -Be @(
             'conditional-common-write',
-            'common-readback',
+            'common-readback-and-bind-revision',
+            'per-branch-common-revision-precheck',
             'branch-outcomes',
+            'per-branch-common-revision-postcheck',
+            'per-branch-common-revision-precheck',
             'archive-selected-and-superseded-branches',
+            'per-branch-common-revision-postcheck',
             'remove-archived-branches-from-active-index',
-            'active-index-readback'
+            'common-branch-and-active-index-readback'
         )
         $script:Contract.integration.selectedBranchIndexRemovalRequired | Should -BeTrue
         $script:Contract.integration.indexRemovalRetainsStableOperationIds | Should -BeTrue
         $script:Contract.integration.indexRemovalFailureIsPartialReconciliation | Should -BeTrue
+        $script:Contract.integration.finalizationBindsVerifiedCommonRevision | Should -BeTrue
+        $script:Contract.integration.recheckCommonRevisionBeforeEachBranchMutation | Should -BeTrue
+        $script:Contract.integration.recheckCommonRevisionAfterEachBranchMutation | Should -BeTrue
+        $script:Contract.integration.onCommonRevisionChangeDuringFinalization | Should -Be 'stop-and-reconcile-from-current-decision'
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
         $script:Contract.changes.appendOnly | Should -BeTrue
         @($script:Contract.changes.eventUniqueKey) | Should -Be @('Operation ID','Record ID','Field')
