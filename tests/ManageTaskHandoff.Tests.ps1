@@ -33,6 +33,14 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.branch.requiredFields) | Should -Contain 'Fork Point'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Continuation Generation'
         @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Authority Scope'
+        $script:Contract.forkRecovery.payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload | Should -BeTrue
+        $script:Contract.forkRecovery.envelopeListNeverLoadsPayload | Should -BeTrue
+        @($script:Contract.forkRecovery.creationOrder) | Should -Be @(
+            'payload-free-pending-envelope','isolated-snapshot-payload'
+        )
+        @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
+            'isolated-snapshot-payload','payload-free-completed-envelope'
+        )
         $script:Contract.branch.uniquePrimaryBranch | Should -BeFalse
         $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
         $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
@@ -193,14 +201,19 @@ Describe 'manage-task-handoff Skill contract' {
         )
         $script:Contract.adapter.authorizationCheckBeforeEveryLookupAndMutation | Should -BeTrue
         $script:Contract.adapter.recordAndEventBindAuthorityScope | Should -BeTrue
+        $script:Contract.adapter.scopeIdentityUsesUnambiguousComponentEncoding | Should -BeTrue
+        $script:Contract.adapter.actorIsDisplayClaimNotAuthorization | Should -BeTrue
+        $script:Contract.adapter.verifiedPrincipalPersistedInOperationIntentAndEvent | Should -BeTrue
+        $script:Contract.adapter.verifiedPrincipalImmutableAcrossEventRecovery | Should -BeTrue
         $script:Contract.adapter.crossScopeLookupForbidden | Should -BeTrue
         $script:Contract.adapter.forkRecoveryAclAtLeastSourceBranch | Should -BeTrue
         $script:Contract.adapter.onAuthorizationUnavailableOrDenied | Should -Be 'deny-without-reading-or-writing-record-content'
         $script:Contract.adapter.conditionalMutation | Should -BeTrue
         $script:Contract.adapter.operationIdIdempotency | Should -BeTrue
         $script:Contract.adapter.eventAppendAfterRecordReadback | Should -BeTrue
+        @($script:Contract.changes.requiredFields) | Should -Contain 'Verified Principal'
         @($script:Contract.adapter.durableEventIntentFields) | Should -Be @(
-            'Authority Scope','Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
+            'Authority Scope','Verified Principal','Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
         )
         $script:Contract.adapter.onRevisionConflict | Should -Be 'reread-and-reapply-gate'
         $script:Contract.adapter.onPartialFailure | Should -Be 'retain-retryable-state-and-report-each-record'
