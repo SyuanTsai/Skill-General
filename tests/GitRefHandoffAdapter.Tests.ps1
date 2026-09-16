@@ -89,6 +89,9 @@ while read old new ref; do
   if [ -f "$GIT_DIR/deny-recovery-payload" ]; then
     case "$ref" in refs/heads/handoff-v1/recovery/*) exit 1 ;; esac
   fi
+  if [ -f "$GIT_DIR/deny-recovery-control" ]; then
+    case "$ref" in refs/heads/handoff-v1/recovery-controls/*) exit 1 ;; esac
+  fi
 done
 exit 0
 '@
@@ -400,6 +403,50 @@ exit 0
         $recovered.Status | Should -Be 'Pending'
         $recovered.EnvelopeStatus | Should -Be 'Pending'
         $recovered.Record.verifiedPrincipal | Should -Be 'synthetic-principal'
+    }
+
+    # Scenario: The remote rejects one member of the initial recovery bootstrap set.
+    # Purpose: An atomic failure must not expose an envelope or index without its protected control record.
+    It 'InterT29c_creates_envelope_control_and_pending_index_atomically' {
+        $root = Join-Path $TestDrive 'atomic-recovery-bootstrap'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-bootstrap' -Fields $script:InitialCommon `
+            -OperationId 'create-atomic-bootstrap-common' -Actor 'display-writer' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-bootstrap'
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-recovery-control'
+        Set-Content -LiteralPath $flag -Value 'reject protected recovery control' -Encoding ascii
+        $payload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-atomic-bootstrap-b'}
+            'Step Operation IDs' = [ordered]@{createB='create-atomic-bootstrap-b';indexB='index-atomic-bootstrap-b'}
+        }
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-bootstrap' `
+                -ForkId 'fork-atomic-bootstrap' -Payload $payload `
+                -OperationId 'prepare-atomic-bootstrap' -Actor 'display-writer' } | Should -Throw
+            @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-bootstrap').Count | Should -Be 0
+            $bootstrapRefs = @(& git --git-dir=$remoteRoot for-each-ref --format='%(refname)' `
+                refs/heads/handoff-v1/recovery-envelopes `
+                refs/heads/handoff-v1/recovery-controls `
+                refs/heads/handoff-v1/recovery-index)
+            $bootstrapRefs.Count | Should -Be 0
+        }
+        finally {
+            Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue
+        }
+        $recovered = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-bootstrap' `
+            -ForkId 'fork-atomic-bootstrap' -Payload $payload `
+            -OperationId 'prepare-atomic-bootstrap' -Actor 'display-writer'
+        $recovered.Status | Should -Be 'Pending'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-bootstrap').Count | Should -Be 1
     }
 
     # Scenario: A common-only envelope is durable without its payload, then the common record advances.

@@ -813,10 +813,10 @@ function New-GitHandoffForkRecovery {
         operationId=$OperationId;actor=$Actor}) | ConvertTo-Json -Compress -Depth 50)
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $envelope) {
-        $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+        $common = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
         if ($null -eq $common) { throw 'Fork recovery requires the exact common Task Key.' }
         $verifiedCommonRevision = [string]$common.Revision
-        $actualActive = @($common.ActiveBranches | Sort-Object -Unique)
+        $actualActive = @($common.Record.activeBranches | Sort-Object -Unique)
         $declaredActive = @($Payload['Verified Active Branches'] | ForEach-Object { [string]$_ } | Sort-Object -Unique)
         if (($actualActive | ConvertTo-Json -Compress) -cne ($declaredActive | ConvertTo-Json -Compress)) {
             throw 'Fork recovery Verified Active Branches do not match the exact scoped common index.'
@@ -824,6 +824,7 @@ function New-GitHandoffForkRecovery {
         if ($actualActive.Count -eq 0 -and [string]$Payload['Fork Point'] -cne $verifiedCommonRevision) {
             throw 'A common-only fork recovery Fork Point must equal the exact verified common revision.'
         }
+        $createdAt = [DateTimeOffset]::UtcNow.ToString('o')
         $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
             payloadDigest=$digest;verifiedCommonRevisionAtCreation=$verifiedCommonRevision;
@@ -832,26 +833,46 @@ function New-GitHandoffForkRecovery {
             branchCreationBindings=$envelopeEvidence.BranchCreationBindings;
             branchCreationClaims=[ordered]@{};
             creationOperationId=$OperationId;actor=$Actor;verifiedPrincipal=$verifiedPrincipal;
-            createdAt=[DateTimeOffset]::UtcNow.ToString('o');completionOperationId=$null;
+            createdAt=$createdAt;completionOperationId=$null;
             completionVerifiedPrincipal=$null;completedAt=$null;abandonmentOperationId=$null;
             abandonmentVerifiedPrincipal=$null;abandonmentReason=$null;abandonedAt=$null}
         $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeDocument -FileName 'envelope.json'
+        $controlDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-control';recordId=$recordId;
+            authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;
+            sourceBranchId=[string]$Payload['Source Branch ID'];sourceAclLocator=[string]$Payload['Source Branch ID'];
+            branchCreationOperations=$envelopeEvidence.BranchCreationOperations;
+            expectedBranchPayloadDigests=$envelopeEvidence.ExpectedBranchPayloadDigests;
+            payloadObjectRef=(Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId);
+            payloadDigest=$digest;verifiedCommonRevisionAtCreation=$verifiedCommonRevision;
+            commonSemanticDigest=(Get-HandoffCommonSemanticDigest -CommonRecord $common.Record);
+            creationOperationId=$OperationId;verifiedPrincipal=$verifiedPrincipal;createdAt=$createdAt}
+        $controlRef = Get-HandoffForkRecoveryControlRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $controlCommit = New-GitHandoffCommit -Adapter $Adapter -Document $controlDocument -FileName 'control.json'
         $indexDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-index';authorityScope=[string]$Adapter.AuthorityScope;
             taskKey=$TaskKey;forkId=$ForkId;status='Pending';envelopeRevision=$envelopeCommit;
-            updatedAt=[DateTimeOffset]::UtcNow.ToString('o')}
+            updatedAt=$createdAt}
         $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument -FileName 'index.json'
         $pushOutput = @(& git -C $Adapter.RepositoryRoot push --quiet --atomic `
-            "--force-with-lease=${envelopeRef}:" "--force-with-lease=${indexRef}:" $Adapter.RemoteName `
-            "${envelopeCommit}:${envelopeRef}" "${indexCommit}:${indexRef}" 2>&1)
+            "--force-with-lease=${envelopeRef}:" "--force-with-lease=${controlRef}:" `
+            "--force-with-lease=${indexRef}:" $Adapter.RemoteName `
+            "${envelopeCommit}:${envelopeRef}" "${controlCommit}:${controlRef}" "${indexCommit}:${indexRef}" 2>&1)
         if ($LASTEXITCODE -ne 0) {
-            throw "Fork recovery envelope and pending index were not atomically created: $($pushOutput -join ' ')"
+            throw "Fork recovery envelope, protected control, and pending index were not atomically created: $($pushOutput -join ' ')"
         }
         $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $indexRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef
+        $indexReadback = if ($null -eq $indexRevision) { $null } else {
+            Read-GitHandoffDocument -Adapter $Adapter -Ref $indexRef -Revision $indexRevision -FileName 'index.json'
+        }
         if ($null -eq $envelope -or $envelope.Revision -cne $envelopeCommit -or
-            (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef) -cne $indexCommit) {
-            throw "Fork recovery '$ForkId' payload-free envelope was not read back."
+            $null -eq $control -or $control.Revision -cne $controlCommit -or
+            $indexRevision -cne $indexCommit -or $null -eq $indexReadback -or
+            [string]$indexReadback.status -cne 'Pending' -or
+            [string]$indexReadback.envelopeRevision -cne $envelopeCommit) {
+            throw "Fork recovery '$ForkId' atomic envelope, control, and pending index were not read back."
         }
     }
     if ($envelope.Status -ceq 'Abandoned') {
@@ -870,39 +891,38 @@ function New-GitHandoffForkRecovery {
     $originPrincipal = [string]$envelope.Record.verifiedPrincipal
     if ([string]::IsNullOrWhiteSpace($originPrincipal)) { throw 'Fork-recovery envelope lacks its verified principal.' }
     $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    if ($null -eq $control) {
-        $commonForControl = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
-        if ($null -eq $commonForControl -or
-            [string]$commonForControl.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
-            throw 'The exact common revision changed before the protected recovery control became durable.'
-        }
-        $controlDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-control';recordId=$recordId;
-            authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;
-            sourceBranchId=[string]$Payload['Source Branch ID'];sourceAclLocator=[string]$Payload['Source Branch ID'];
-            branchCreationOperations=$envelopeEvidence.BranchCreationOperations;
-            expectedBranchPayloadDigests=$envelopeEvidence.ExpectedBranchPayloadDigests;
-            payloadObjectRef=(Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId);
-            payloadDigest=$digest;verifiedCommonRevisionAtCreation=[string]$envelope.Record.verifiedCommonRevisionAtCreation;
-            commonSemanticDigest=(Get-HandoffCommonSemanticDigest -CommonRecord $commonForControl.Record);
-            creationOperationId=$OperationId;verifiedPrincipal=$originPrincipal;createdAt=[DateTimeOffset]::UtcNow.ToString('o')}
-        $controlRef = Get-HandoffForkRecoveryControlRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-        $controlCommit = New-GitHandoffCommit -Adapter $Adapter -Document $controlDocument -FileName 'control.json'
-        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $controlRef -ExpectedRevision '' -Commit $controlCommit | Out-Null
-        $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-        if ($null -eq $control -or $control.Revision -cne $controlCommit) {
-            throw "Fork recovery '$ForkId' protected control was not read back."
+    $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $indexRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef
+    if ($null -eq $control -or $null -eq $indexRevision) {
+        throw "Fork recovery '$ForkId' has an incomplete initial atomic recovery set."
+    }
+    $indexDocument = Read-GitHandoffDocument -Adapter $Adapter -Ref $indexRef -Revision $indexRevision -FileName 'index.json'
+    if ($indexDocument.schemaVersion -ne 1 -or $indexDocument.recordKind -cne 'fork-recovery-index' -or
+        $indexDocument.authorityScope -cne [string]$Adapter.AuthorityScope -or $indexDocument.taskKey -cne $TaskKey -or
+        $indexDocument.forkId -cne $ForkId -or [string]$indexDocument.status -cne [string]$envelope.Status -or
+        [string]$indexDocument.envelopeRevision -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw "Fork recovery '$ForkId' pending index does not match its atomic envelope."
+    }
+    if ($envelope.Status -ceq 'Pending') {
+        & git -C $Adapter.RepositoryRoot merge-base --is-ancestor `
+            ([string]$indexDocument.envelopeRevision) ([string]$envelope.Revision) 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Fork recovery '$ForkId' pending index does not descend to the live envelope."
         }
     }
+    elseif ([string]$indexDocument.envelopeRevision -cne [string]$envelope.Revision) {
+        throw "Fork recovery '$ForkId' terminal index does not match the live envelope."
+    }
     if ($control.Record.payloadDigest -cne $digest -or
+        [string]$control.Record.creationOperationId -cne $OperationId -or
+        [string]$control.Record.verifiedPrincipal -cne $originPrincipal -or
+        [string]$control.Record.verifiedCommonRevisionAtCreation -cne
+            [string]$envelope.Record.verifiedCommonRevisionAtCreation -or
         ($control.Record.branchCreationOperations | ConvertTo-Json -Compress) -cne
             ($envelopeEvidence.BranchCreationOperations | ConvertTo-Json -Compress) -or
         ($control.Record.expectedBranchPayloadDigests | ConvertTo-Json -Compress) -cne
             ($envelopeEvidence.ExpectedBranchPayloadDigests | ConvertTo-Json -Compress)) {
         throw 'A different protected recovery control already owns this Fork ID.'
-    }
-    $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    if ($null -eq (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef)) {
-        [void](Write-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId -Status Pending)
     }
     $existing = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -ne $existing) {
