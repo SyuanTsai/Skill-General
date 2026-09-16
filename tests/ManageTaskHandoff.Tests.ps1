@@ -36,6 +36,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.firstFork.pendingBeforeEveryMissingBranchCreation | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingPreservesReplacedCommonCurrent | Should -BeTrue
+        $script:Contract.firstFork.existingPeerPendingPreservesBranchCurrentAndSource | Should -BeTrue
+        $script:Contract.firstFork.existingPeerPendingCarriesVerifiedSharedBaseline | Should -BeTrue
+        $script:Contract.firstFork.existingPeerAdvanceUsesPersistedSnapshot | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingClearsAfterBranchAndIndexReadback | Should -BeTrue
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
