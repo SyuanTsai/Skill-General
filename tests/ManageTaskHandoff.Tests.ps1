@@ -47,12 +47,17 @@ Describe 'manage-task-handoff Skill contract' {
         )
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Claims'
         @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
             'isolated-payload-absent','all-branch-creation-target-records-absent',
             'all-branch-creation-target-outcomes-absent','all-branch-creation-target-index-entries-absent'
         )
         $script:Contract.forkRecovery.abandonmentRequiresExactAuthorization | Should -BeTrue
         $script:Contract.forkRecovery.abandonmentUsesConditionalRevision | Should -BeTrue
+        $script:Contract.forkRecovery.branchCreationClaimUsesSameEnvelopeRevisionBoundary | Should -BeTrue
+        $script:Contract.forkRecovery.branchCreationClaimPrecedesTargetWrite | Should -BeTrue
+        $script:Contract.forkRecovery.abandonmentRequiresNoBranchCreationClaims | Should -BeTrue
+        $script:Contract.forkRecovery.concurrentClaimAndAbandonmentCannotBothSucceed | Should -BeTrue
         $script:Contract.forkRecovery.unverifiableAbandonmentRemainsPending | Should -BeTrue
         $script:Contract.forkRecovery.abandonedEnvelopeBlocksSingletonResume | Should -BeFalse
         $script:Contract.forkRecovery.abandonedForkIdMayBeReused | Should -BeFalse
@@ -223,6 +228,7 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.adapter.logicalOperationKeys.listPendingForkRecovery) | Should -Be @('Authority Scope','Task Key')
         @($script:Contract.adapter.logicalOperationKeys.getForkRecovery) | Should -Be @('Authority Scope','Task Key','Fork ID')
         @($script:Contract.adapter.logicalOperationKeys.createOrUpdateForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
+        @($script:Contract.adapter.logicalOperationKeys.claimForkRecoveryTargetIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID','Branch ID Digest','Operation ID Digest')
         @($script:Contract.adapter.logicalOperationKeys.abandonForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
         @($script:Contract.adapter.logicalOperationKeys.listActiveBranches) | Should -Be @('Authority Scope','Task Key')
         @($script:Contract.adapter.logicalOperationKeys.createCommonIfAbsent) | Should -Be @('Authority Scope','Task Key')
