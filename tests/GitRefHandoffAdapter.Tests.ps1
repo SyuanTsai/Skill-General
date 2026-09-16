@@ -42,6 +42,9 @@ while read old new ref; do
   if [ -f "$GIT_DIR/deny-records" ]; then
     case "$ref" in refs/heads/handoff-v1/records/*) exit 1 ;; esac
   fi
+  if [ -f "$GIT_DIR/deny-recovery-payload" ]; then
+    case "$ref" in refs/heads/handoff-v1/recovery/*) exit 1 ;; esac
+  fi
 done
 exit 0
 '@
@@ -106,6 +109,21 @@ exit 0
             -AuthorityScope 'scope:alpha' -GetVerifiedPrincipal { $null } `
             -Authorize { param($request) $true }
         { Get-GitHandoffCommon -Adapter $unverified -TaskKey 'demo:same-key' } | Should -Throw '*authorization is unavailable*'
+
+        # These tuples produced the same `scope + NUL + task` byte sequence in the earlier mapping.
+        $scopeWithNul = 'a' + [char]0 + 'b'
+        $taskWithNul = 'b' + [char]0 + 'c'
+        $tupleOne = New-WriterFixture -Root $root -WriterId 'tuple-one' -AuthorityScope $scopeWithNul
+        $tupleTwo = New-WriterFixture -Root $root -WriterId 'tuple-two' -AuthorityScope 'a'
+        New-GitHandoffCommon -Adapter $tupleOne -TaskKey 'c' -Fields $script:InitialCommon `
+            -OperationId 'create-nul-tuple-one' -Actor 'tuple-one-label' | Out-Null
+        $tupleTwoFields = [ordered]@{}
+        foreach ($name in $script:InitialCommon.Keys) { $tupleTwoFields[$name] = $script:InitialCommon[$name] }
+        $tupleTwoFields.Current = 'Independent NUL-collision tuple'
+        New-GitHandoffCommon -Adapter $tupleTwo -TaskKey $taskWithNul -Fields $tupleTwoFields `
+            -OperationId 'create-nul-tuple-two' -Actor 'tuple-two-label' | Out-Null
+        (Get-GitHandoffCommon -Adapter $tupleOne -TaskKey 'c').Fields.Current | Should -Be $script:InitialCommon.Current
+        (Get-GitHandoffCommon -Adapter $tupleTwo -TaskKey $taskWithNul).Fields.Current | Should -Be 'Independent NUL-collision tuple'
     }
 
     # A real bare remote, two independent clones, and an explicit expected ref prove the uniqueness boundary.
@@ -122,18 +140,19 @@ exit 0
         { New-GitHandoffCommon -Adapter $b -TaskKey 'demo:ABC-1' -Fields $script:InitialCommon -OperationId 'create-common-2' } | Should -Throw
     }
 
-    # Scenario: An adopter creates a record with the identity of the process that performed the write.
-    # Purpose: Preserve attributable creation events instead of a hard-coded adapter placeholder.
-    It 'InterT15_requires_and_records_the_actual_creation_actor' {
+    # Scenario: An adopter supplies a display actor label that could name someone other than the authenticated caller.
+    # Purpose: Preserve the label while binding immutable provenance to the trusted principal resolver.
+    It 'InterT15_records_the_actor_label_and_the_verified_creation_principal' {
         $root = Join-Path $TestDrive 'creation-actor'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
         (Get-Command New-GitHandoffCommon).Parameters.Actor.Attributes.Mandatory | Should -Contain $true
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:actor' -Fields $script:InitialCommon `
-            -OperationId 'create-with-actor' -Actor 'writer-a' | Out-Null
+            -OperationId 'create-with-actor' -Actor 'claimed-admin' | Out-Null
         $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:actor' -RecordKind common `
             -OperationId 'create-with-actor' -Field 'Current'
-        $event.Actor | Should -Be 'writer-a'
+        $event.Actor | Should -Be 'claimed-admin'
+        $event.VerifiedPrincipal | Should -Be 'synthetic-principal'
     }
 
     # Scenario: A caller supplies the structural Active Branches index while creating common.
@@ -282,6 +301,45 @@ exit 0
         Complete-GitHandoffForkRecovery -Adapter $restartedWriter -TaskKey 'demo:ABC-28' -ForkId 'first-fork-28' `
             -ExpectedRevision $recovery.Revision -OperationId 'complete-fork-28' | Out-Null
         @(Get-GitHandoffPendingForkRecoveries -Adapter $restartedWriter -TaskKey 'demo:ABC-28').Count | Should -Be 0
+    }
+
+    # Scenario: The payload-free Pending envelope commits, then the isolated snapshot payload write fails.
+    # Purpose: Normal pending-list authorization must still block unsafe resume without loading or requiring the payload ref.
+    It 'InterT29_lists_a_pending_envelope_without_loading_a_failed_recovery_payload' {
+        $root = Join-Path $TestDrive 'payload-free-envelope'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-recovery-payload'
+        Set-Content -LiteralPath $flag -Value 'reject isolated recovery payload' -Encoding ascii
+        $payload = [ordered]@{
+            'Fork Point' = 'shared-r1'
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current='private A candidate';Source='private A evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @('thread:A')
+            'Step Operation IDs' = [ordered]@{createB='fork-envelope-b';indexB='fork-envelope-index'}
+        }
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:envelope-only' -ForkId 'fork-envelope-only' `
+                -Payload $payload -OperationId 'create-envelope-only' -Actor 'display-writer' } | Should -Throw
+            $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:envelope-only')
+            $pending.Count | Should -Be 1
+            $pending[0].ForkId | Should -Be 'fork-envelope-only'
+            $pending[0].PSObject.Properties.Name | Should -Not -Contain 'Payload'
+            Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:envelope-only' `
+                -ForkId 'fork-envelope-only' | Should -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue
+        }
+        $recovered = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:envelope-only' `
+            -ForkId 'fork-envelope-only' -Payload $payload -OperationId 'create-envelope-only' -Actor 'display-writer'
+        $recovered.Status | Should -Be 'Pending'
+        $recovered.EnvelopeStatus | Should -Be 'Pending'
+        $recovered.Record.verifiedPrincipal | Should -Be 'synthetic-principal'
     }
 
     # A common-only conversation first materializes its own A branch, then B from the confirmed fork baseline.
@@ -455,6 +513,7 @@ exit 0
             ConvertFrom-Json -AsHashtable -Depth 50
         $intents = @($rawRecord.operations['create-common-5'].eventIntents)
         $intents.Count | Should -Be $rawRecord.operations['create-common-5'].changedFields.Count
+        $rawRecord.operations['create-common-5'].verifiedPrincipal | Should -Be 'synthetic-principal'
         $currentIntent = @($intents | Where-Object { $_.field -ceq 'Current' })
         $currentIntent.Count | Should -Be 1
         $currentIntent[0].operationId | Should -Be 'create-common-5'
@@ -463,11 +522,19 @@ exit 0
         $currentIntent[0].newState | Should -Be $script:InitialCommon.Current
         $currentIntent[0].source | Should -Be $script:InitialCommon.Source
         $currentIntent[0].integrationStatus | Should -Be 'common-checkpoint'
+        $currentIntent[0].verifiedPrincipal | Should -Be 'synthetic-principal'
         Remove-Item -LiteralPath $flag
-        $replacementWriter = New-WriterFixture -Root $root -WriterId 'writer-replacement'
+        $replacementFixture = New-WriterFixture -Root $root -WriterId 'writer-replacement'
+        $replacementWriter = New-GitHandoffAdapter -RepositoryRoot $replacementFixture.RepositoryRoot `
+            -RemoteName $replacementFixture.RemoteName -RefPrefix $replacementFixture.RefPrefix `
+            -AuthorityScope $replacementFixture.AuthorityScope `
+            -GetVerifiedPrincipal { 'replacement-principal' } -Authorize { param($request) $true }
         $retried = New-GitHandoffCommon -Adapter $replacementWriter -TaskKey 'demo:ABC-5' -Fields $script:InitialCommon -OperationId 'create-common-5'
         $retried.Revision | Should -Be $committed.Revision
-        (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:ABC-5' -RecordKind common -OperationId 'create-common-5' -Field 'Current').ReadbackResult | Should -Be 'verified'
+        $recoveredEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:ABC-5' -RecordKind common `
+            -OperationId 'create-common-5' -Field 'Current'
+        $recoveredEvent.ReadbackResult | Should -Be 'verified'
+        $recoveredEvent.VerifiedPrincipal | Should -Be 'synthetic-principal'
     }
 
     # A branch exists but an index push fails. Its exact Branch ID remains recoverable before Task Key-only lookup works.
@@ -785,6 +852,60 @@ exit 0
         $continued = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84' -BranchId 'thread:A'
         $continued.Fields.Lifecycle | Should -Be 'Active'
         $continued.ContinuationGeneration | Should -Be ([int64]$newBinding.continuationGeneration + 1)
+    }
+
+    # Scenario: A confirmed decision exists while its reviewed branch is still Active and the user resumes that branch.
+    # Purpose: Fence stale finalization before resumed work or a new fork can begin.
+    It 'InterT84a_advances_generation_when_an_active_branch_is_explicitly_continued' {
+        $root = Join-Path $TestDrive 'q84a'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84a' -Fields $script:InitialCommon `
+            -OperationId 'create-q84a-common' -Actor 'writer-a' | Out-Null
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+            -OperationId 'create-q84a-a' -Actor 'writer-a' | Out-Null
+
+        $binding = Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84a' `
+            -BranchId 'thread:A' -Outcome Selected
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84a'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84a' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision before active continuation';'Decision Branch Bindings'=@($binding)
+            }) -OperationId 'q84a-decision' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'user selected reviewed active branch A' | Out-Null
+        $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84a').Revision
+
+        $continued = Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:q84a' `
+            -BranchId 'thread:A' -OperationId 'continue-active-q84a' -Actor 'writer-a' `
+            -Reason 'resume exact active branch before new work'
+        $continued.Lifecycle | Should -Be 'Active'
+        $continued.Indexed | Should -BeTrue
+        $continued.ContinuationGeneration | Should -Be ([int64]$binding.continuationGeneration + 1)
+
+        $retried = Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:q84a' `
+            -BranchId 'thread:A' -OperationId 'continue-active-q84a' -Actor 'writer-a' `
+            -Reason 'resume exact active branch before new work'
+        $retried.ContinuationGeneration | Should -Be $continued.ContinuationGeneration
+        $retried.BranchRevision | Should -Be $continued.BranchRevision
+        { Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:q84a' `
+            -BranchId 'thread:A' -OperationId 'continue-active-q84a' -Actor 'different-writer' `
+            -Reason 'resume exact active branch before new work' } | Should -Throw
+
+        $current = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84a' -BranchId 'thread:A' `
+            -ExpectedRevision $current.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+            -OperationId 'q84a-stale-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'old decision cannot finalize active continuation' } | Should -Throw
+        { Set-GitHandoffBranchLifecycle -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A' `
+            -Lifecycle Archived -OperationId 'q84a-stale-archive' -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'old decision cannot archive active continuation' } | Should -Throw
+
+        $generationEvent = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84a' -RecordKind branch `
+            -BranchId 'thread:A' -OperationId 'continue-active-q84a' -Field 'Continuation Generation'
+        $generationEvent.PreviousState | Should -Be ([int64]$binding.continuationGeneration)
+        $generationEvent.NewState | Should -Be ([int64]$binding.continuationGeneration + 1)
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84a' -BranchId 'thread:A').Fields.Lifecycle | Should -Be 'Active'
     }
 
     # Scenario: An update tries to clear a required field after creation validation has already passed.
@@ -1178,7 +1299,7 @@ exit 0
     }
 
     # Scenario: One actor archives a branch and the adapter mutates both the branch and common index.
-    # Purpose: Preserve the same actual writer identity across the complete lifecycle operation.
+    # Purpose: Preserve the same display Actor label across the complete lifecycle operation.
     It 'InterT125_forwards_the_lifecycle_actor_to_the_common_index_event' {
         $root = Join-Path $TestDrive 'q125'
         [void](New-Item -ItemType Directory -Path $root)

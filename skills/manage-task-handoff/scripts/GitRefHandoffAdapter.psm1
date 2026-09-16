@@ -72,6 +72,14 @@ function Assert-GitAdapter {
     }
 }
 
+function Get-HandoffScopedTaskHash {
+    param([Parameter(Mandatory = $true)][string] $AuthorityScope,
+        [Parameter(Mandatory = $true)][string] $TaskKey)
+    $scopeHash = Get-HandoffSha256 -Value $AuthorityScope
+    $taskHash = Get-HandoffSha256 -Value $TaskKey
+    return Get-HandoffSha256 -Value ($scopeHash + $taskHash)
+}
+
 function Assert-GitHandoffAuthorized {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $Action,
         [Parameter(Mandatory = $true)][string] $TaskKey,[string] $BranchId,[string] $ForkId)
@@ -83,9 +91,10 @@ function Assert-GitHandoffAuthorized {
         throw 'Git Handoff authorization is unavailable; no record content was read or written.'
     }
     $principal = $principalItems[0]
-    if ($null -eq $principal -or ($principal -is [string] -and [string]::IsNullOrWhiteSpace($principal))) {
+    if ($principal -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$principal)) {
         throw 'Git Handoff authorization is unavailable; no record content was read or written.'
     }
+    $principal = [string]$principal
     $request = [pscustomobject]@{
         Principal=$principal;AuthorityScope=[string]$Adapter.AuthorityScope;TaskKey=$TaskKey;
         BranchId=$BranchId;ForkId=$ForkId;Action=$Action
@@ -115,8 +124,7 @@ function Get-HandoffRecordId {
 function Get-HandoffRecordRef {
     param($Adapter,[string] $RecordKind,[string] $TaskKey,[string] $BranchId)
     Assert-GitAdapter -Adapter $Adapter
-    $scopedTaskIdentity = [string]$Adapter.AuthorityScope + [char]0 + $TaskKey
-    $scopedTaskHash = Get-HandoffSha256 -Value $scopedTaskIdentity
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
     if ($RecordKind -eq 'common') { return "$($Adapter.RefPrefix)/records/$scopedTaskHash/common" }
     if ($RecordKind -eq 'branch') { return "$($Adapter.RefPrefix)/records/$scopedTaskHash/branch/$(Get-HandoffSha256 -Value $BranchId)" }
     throw 'Unknown Handoff record kind.'
@@ -134,17 +142,25 @@ function Get-HandoffForkRecoveryRef {
     param($Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,[Parameter(Mandatory = $true)][string] $ForkId)
     Assert-GitAdapter -Adapter $Adapter
     [void](Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId)
-    $scopedTaskIdentity = [string]$Adapter.AuthorityScope + [char]0 + $TaskKey
-    $scopedTaskHash = Get-HandoffSha256 -Value $scopedTaskIdentity
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
     return "$($Adapter.RefPrefix)/recovery/$scopedTaskHash/$(Get-HandoffSha256 -Value $ForkId)"
+}
+
+function Get-HandoffForkRecoveryEnvelopeRef {
+    param($Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,[Parameter(Mandatory = $true)][string] $ForkId)
+    Assert-GitAdapter -Adapter $Adapter
+    [void](Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId)
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
+    return "$($Adapter.RefPrefix)/recovery-envelopes/$scopedTaskHash/$(Get-HandoffSha256 -Value $ForkId)"
 }
 
 function Get-HandoffEventRef {
     param($Adapter,[string] $RecordKind,[string] $TaskKey,[string] $BranchId,[string] $OperationId,[string] $Field)
     if ([string]::IsNullOrWhiteSpace($OperationId) -or [string]::IsNullOrWhiteSpace($Field)) { throw 'Event identity is incomplete.' }
     $recordId = Get-HandoffRecordId -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
-    # One full digest retains the composite identity without creating a long Windows ref path.
-    $composite = "${OperationId}`0${recordId}`0${Field}"
+    # Fixed-width component hashes retain the composite identity without delimiter ambiguity or long Windows refs.
+    $composite = (Get-HandoffSha256 -Value $OperationId) + (Get-HandoffSha256 -Value $recordId) +
+        (Get-HandoffSha256 -Value $Field)
     $digest = Get-HandoffSha256 -Value $composite
     return "$($Adapter.RefPrefix)/events/$digest"
 }
@@ -179,7 +195,7 @@ function Read-GitHandoffDocument {
 }
 
 function New-GitHandoffCommit {
-    param($Adapter,[Parameter(Mandatory = $true)] $Document,[string] $Parent,[ValidateSet('record.json','event.json','recovery.json')][string] $FileName)
+    param($Adapter,[Parameter(Mandatory = $true)] $Document,[string] $Parent,[ValidateSet('record.json','event.json','recovery.json','envelope.json')][string] $FileName)
     Assert-GitAdapter -Adapter $Adapter
     $json = $Document | ConvertTo-Json -Compress -Depth 50
     $blob = ($json | & git -C $Adapter.RepositoryRoot hash-object -w --stdin 2>$null)
@@ -275,6 +291,35 @@ function Assert-HandoffForkRecoveryPayload {
     }
 }
 
+function Read-GitHandoffForkRecoveryEnvelope {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ForkId)
+    $ref = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $revision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $ref
+    if ($null -eq $revision) { return $null }
+    $document = Read-GitHandoffDocument -Adapter $Adapter -Ref $ref -Revision $revision -FileName 'envelope.json'
+    $recordId = Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery-envelope' -or
+        $document.authorityScope -cne [string]$Adapter.AuthorityScope -or $document.taskKey -cne $TaskKey -or
+        $document.forkId -cne $ForkId -or $document.recordId -cne $recordId -or
+        [string]$document.status -cnotin @('Pending','Completed') -or
+        [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+        [string]::IsNullOrWhiteSpace([string]$document.creationOperationId) -or
+        [string]::IsNullOrWhiteSpace([string]$document.actor) -or
+        [string]::IsNullOrWhiteSpace([string]$document.verifiedPrincipal) -or
+        $document.Contains('payload')) {
+        throw 'The exact fork-recovery envelope contains a mismatched identity, status, or payload.'
+    }
+    if ([string]$document.status -ceq 'Completed' -and
+        ([string]::IsNullOrWhiteSpace([string]$document.completionOperationId) -or
+         [string]::IsNullOrWhiteSpace([string]$document.completionVerifiedPrincipal) -or
+         [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
+        throw 'The completed fork-recovery envelope lacks immutable completion evidence.'
+    }
+    return [pscustomobject]@{AuthorityScope=[string]$document.authorityScope;TaskKey=$TaskKey;
+        ForkId=$ForkId;Status=[string]$document.status;Revision=$revision;Record=$document}
+}
+
 function Get-GitHandoffForkRecovery {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
@@ -288,13 +333,45 @@ function Get-GitHandoffForkRecovery {
     if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery' -or
         $document.authorityScope -cne [string]$Adapter.AuthorityScope -or
         $document.taskKey -cne $TaskKey -or $document.forkId -cne $ForkId -or $document.recordId -cne $recordId -or
-        [string]$document.status -cnotin @('Pending','Completed')) {
+        [string]$document.status -cnotin @('Pending','Completed') -or
+        [string]::IsNullOrWhiteSpace([string]$document.creationOperationId) -or
+        [string]::IsNullOrWhiteSpace([string]$document.actor) -or
+        [string]::IsNullOrWhiteSpace([string]$document.verifiedPrincipal)) {
         throw 'The exact fork-recovery ref contains a mismatched identity or status.'
     }
     Assert-HandoffForkRecoveryPayload -Payload $document.payload
+    $expectedDigest = Get-HandoffSha256 -Value (([ordered]@{authorityScope=[string]$Adapter.AuthorityScope;
+        taskKey=$TaskKey;forkId=$ForkId;payload=$document.payload;
+        operationId=[string]$document.creationOperationId;actor=[string]$document.actor}) |
+        ConvertTo-Json -Compress -Depth 50)
+    if ([string]$document.payloadDigest -cne $expectedDigest) {
+        throw 'The exact fork-recovery payload digest is invalid.'
+    }
+    if ([string]$document.status -ceq 'Completed' -and
+        ([string]::IsNullOrWhiteSpace([string]$document.completionOperationId) -or
+         [string]::IsNullOrWhiteSpace([string]$document.completionVerifiedPrincipal) -or
+         [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
+        throw 'The completed fork-recovery payload lacks immutable completion evidence.'
+    }
+    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $statusConsistent = ($null -ne $envelope -and ($envelope.Status -ceq [string]$document.status -or
+        ([string]$document.status -ceq 'Completed' -and $envelope.Status -ceq 'Pending')))
+    $completionConsistent = ($null -ne $envelope -and
+        ([string]$document.status -ceq 'Pending' -or $envelope.Status -ceq 'Pending' -or
+         ($envelope.Record.completionOperationId -ceq $document.completionOperationId -and
+          $envelope.Record.completionVerifiedPrincipal -ceq $document.completionVerifiedPrincipal -and
+          $envelope.Record.completedAt -ceq $document.completedAt)))
+    if (-not $statusConsistent -or -not $completionConsistent -or
+        $envelope.Record.payloadDigest -cne $document.payloadDigest -or
+        $envelope.Record.creationOperationId -cne $document.creationOperationId -or
+        $envelope.Record.actor -cne $document.actor -or
+        $envelope.Record.verifiedPrincipal -cne $document.verifiedPrincipal) {
+        throw 'The fork-recovery payload and payload-free envelope do not match.'
+    }
     return [pscustomobject]@{AuthorityScope=[string]$document.authorityScope;
         TaskKey=$TaskKey;ForkId=$ForkId;Status=[string]$document.status;
-        Revision=$revision;Payload=$document.payload;Record=$document}
+        Revision=$revision;EnvelopeStatus=$envelope.Status;EnvelopeRevision=$envelope.Revision;
+        Payload=$document.payload;Record=$document}
 }
 
 function Get-GitHandoffPendingForkRecoveries {
@@ -302,9 +379,8 @@ function Get-GitHandoffPendingForkRecoveries {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey)
     Assert-HandoffIdentity -TaskKey $TaskKey
     Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:list' -TaskKey $TaskKey | Out-Null
-    $scopedTaskIdentity = [string]$Adapter.AuthorityScope + [char]0 + $TaskKey
-    $scopedTaskHash = Get-HandoffSha256 -Value $scopedTaskIdentity
-    $prefix = "$($Adapter.RefPrefix)/recovery/$scopedTaskHash/"
+    $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
+    $prefix = "$($Adapter.RefPrefix)/recovery-envelopes/$scopedTaskHash/"
     $lines = @(& git -C $Adapter.RepositoryRoot ls-remote $Adapter.RemoteName "$prefix*" 2>$null)
     if ($LASTEXITCODE -ne 0) { throw 'Pending fork-recovery envelopes could not be listed.' }
     $envelopes = [Collections.Generic.List[object]]::new()
@@ -314,10 +390,23 @@ function Get-GitHandoffPendingForkRecoveries {
             -not ([string]$parts[1]).StartsWith($prefix,[StringComparison]::Ordinal)) {
             throw 'Fork-recovery envelope listing returned an invalid ref.'
         }
-        $document = Read-GitHandoffDocument -Adapter $Adapter -Ref ([string]$parts[1]) -Revision ([string]$parts[0]) -FileName 'recovery.json'
-        if ($document.authorityScope -cne [string]$Adapter.AuthorityScope -or
-            $document.taskKey -cne $TaskKey -or $document.recordKind -cne 'fork-recovery') {
+        $document = Read-GitHandoffDocument -Adapter $Adapter -Ref ([string]$parts[1]) -Revision ([string]$parts[0]) -FileName 'envelope.json'
+        if ($document.schemaVersion -ne 1 -or $document.authorityScope -cne [string]$Adapter.AuthorityScope -or
+            $document.taskKey -cne $TaskKey -or $document.recordKind -cne 'fork-recovery-envelope' -or
+            [string]::IsNullOrWhiteSpace([string]$document.forkId) -or $document.Contains('payload') -or
+            [string]$document.status -cnotin @('Pending','Completed') -or
+            [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+            [string]::IsNullOrWhiteSpace([string]$document.creationOperationId) -or
+            [string]::IsNullOrWhiteSpace([string]$document.actor) -or
+            [string]::IsNullOrWhiteSpace([string]$document.verifiedPrincipal) -or
+            (Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId ([string]$document.forkId)) -cne [string]$parts[1]) {
             throw 'Fork-recovery envelope does not match its Task Key.'
+        }
+        if ([string]$document.status -ceq 'Completed' -and
+            ([string]::IsNullOrWhiteSpace([string]$document.completionOperationId) -or
+             [string]::IsNullOrWhiteSpace([string]$document.completionVerifiedPrincipal) -or
+             [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
+            throw 'A completed fork-recovery envelope lacks immutable completion evidence.'
         }
         if ([string]$document.status -ceq 'Pending') {
             $envelopes.Add([pscustomobject]@{AuthorityScope=[string]$document.authorityScope;
@@ -334,13 +423,34 @@ function New-GitHandoffForkRecovery {
         [Parameter(Mandatory = $true)][string] $ForkId,[Parameter(Mandatory = $true)] $Payload,
         [Parameter(Mandatory = $true)][string] $OperationId,[string] $Actor='configured-adapter')
     Assert-HandoffOperationId -OperationId $OperationId
-    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:create' -TaskKey $TaskKey -ForkId $ForkId | Out-Null
-    if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'Fork recovery creation requires the actual writer actor.' }
+    $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:create' -TaskKey $TaskKey -ForkId $ForkId
+    if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'Fork recovery creation requires a nonempty display actor label.' }
     Assert-HandoffForkRecoveryPayload -Payload $Payload
     $recordId = Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $digest = Get-HandoffSha256 -Value (([ordered]@{authorityScope=[string]$Adapter.AuthorityScope;
         taskKey=$TaskKey;forkId=$ForkId;payload=$Payload;
         operationId=$OperationId;actor=$Actor}) | ConvertTo-Json -Compress -Depth 50)
+    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $envelope) {
+        $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
+            authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
+            payloadDigest=$digest;creationOperationId=$OperationId;actor=$Actor;verifiedPrincipal=$verifiedPrincipal;
+            createdAt=[DateTimeOffset]::UtcNow.ToString('o');completionOperationId=$null;
+            completionVerifiedPrincipal=$null;completedAt=$null}
+        $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeDocument -FileName 'envelope.json'
+        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef -ExpectedRevision '' -Commit $envelopeCommit | Out-Null
+        $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        if ($null -eq $envelope -or $envelope.Revision -cne $envelopeCommit) {
+            throw "Fork recovery '$ForkId' payload-free envelope was not read back."
+        }
+    }
+    if ($envelope.Record.creationOperationId -cne $OperationId -or $envelope.Record.payloadDigest -cne $digest -or
+        [string]$envelope.Record.actor -cne $Actor) {
+        throw 'A different fork-recovery envelope operation already owns this Task Key and Fork ID.'
+    }
+    $originPrincipal = [string]$envelope.Record.verifiedPrincipal
+    if ([string]::IsNullOrWhiteSpace($originPrincipal)) { throw 'Fork-recovery envelope lacks its verified principal.' }
     $existing = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -ne $existing) {
         if ($existing.Record.creationOperationId -cne $OperationId -or $existing.Record.payloadDigest -cne $digest) {
@@ -351,12 +461,14 @@ function New-GitHandoffForkRecovery {
     $document = [ordered]@{schemaVersion=1;recordKind='fork-recovery';recordId=$recordId;
         authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;
         forkId=$ForkId;status='Pending';payload=$Payload;creationOperationId=$OperationId;payloadDigest=$digest;
-        actor=$Actor;createdAt=[DateTimeOffset]::UtcNow.ToString('o');completionOperationId=$null;completedAt=$null}
+        actor=$Actor;verifiedPrincipal=$originPrincipal;createdAt=[DateTimeOffset]::UtcNow.ToString('o');
+        completionOperationId=$null;completionVerifiedPrincipal=$null;completedAt=$null}
     $ref = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document -FileName 'recovery.json'
     Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision '' -Commit $commit | Out-Null
     $readback = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    if ($null -eq $readback -or $readback.Revision -cne $commit -or $readback.Record.payloadDigest -cne $digest) {
+    if ($null -eq $readback -or $readback.Revision -cne $commit -or
+        $readback.Record.payloadDigest -cne $digest -or $readback.Record.verifiedPrincipal -cne $originPrincipal) {
         throw "Fork recovery '$ForkId' creation was not read back."
     }
     return $readback
@@ -368,24 +480,51 @@ function Complete-GitHandoffForkRecovery {
         [Parameter(Mandatory = $true)][string] $ForkId,[Parameter(Mandatory = $true)][string] $ExpectedRevision,
         [Parameter(Mandatory = $true)][string] $OperationId)
     Assert-HandoffOperationId -OperationId $OperationId
-    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:complete' -TaskKey $TaskKey -ForkId $ForkId | Out-Null
+    $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:complete' -TaskKey $TaskKey -ForkId $ForkId
     $current = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $current) { throw 'The exact fork-recovery record was not found.' }
     if ($current.Status -ceq 'Completed') {
         if ($current.Record.completionOperationId -cne $OperationId) { throw 'Fork recovery is already completed by another operation.' }
-        return $current
     }
-    if ($current.Revision -cne $ExpectedRevision) { throw 'Conditional fork-recovery revision conflict.' }
-    $document = $current.Record
-    $document.status = 'Completed'
-    $document.completionOperationId = $OperationId
-    $document.completedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    $ref = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document -Parent $current.Revision -FileName 'recovery.json'
-    Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision $current.Revision -Commit $commit | Out-Null
+    else {
+        if ($current.Revision -cne $ExpectedRevision) { throw 'Conditional fork-recovery revision conflict.' }
+        $document = $current.Record
+        $document.status = 'Completed'
+        $document.completionOperationId = $OperationId
+        $document.completionVerifiedPrincipal = $verifiedPrincipal
+        $document.completedAt = [DateTimeOffset]::UtcNow.ToString('o')
+        $ref = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document -Parent $current.Revision -FileName 'recovery.json'
+        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision $current.Revision -Commit $commit | Out-Null
+        $current = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        if ($current.Revision -cne $commit -or $current.Status -cne 'Completed' -or
+            $current.Record.completionOperationId -cne $OperationId -or
+            $current.Record.completionVerifiedPrincipal -cne $verifiedPrincipal) {
+            throw "Fork recovery '$ForkId' payload completion was not read back."
+        }
+    }
+    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $envelope) { throw "Fork recovery '$ForkId' payload-free envelope is missing." }
+    if ($envelope.Status -ceq 'Pending') {
+        $envelopeDocument = $envelope.Record
+        $envelopeDocument.status = 'Completed'
+        $envelopeDocument.completionOperationId = $OperationId
+        $envelopeDocument.completionVerifiedPrincipal = [string]$current.Record.completionVerifiedPrincipal
+        $envelopeDocument.completedAt = [string]$current.Record.completedAt
+        $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeDocument `
+            -Parent $envelope.Revision -FileName 'envelope.json'
+        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef `
+            -ExpectedRevision $envelope.Revision -Commit $envelopeCommit | Out-Null
+    }
+    elseif ($envelope.Record.completionOperationId -cne $OperationId) {
+        throw 'Fork-recovery envelope is already completed by another operation.'
+    }
     $readback = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    if ($readback.Revision -cne $commit -or $readback.Status -cne 'Completed' -or
-        $readback.Record.completionOperationId -cne $OperationId) { throw "Fork recovery '$ForkId' completion was not read back." }
+    if ($readback.Status -cne 'Completed' -or $readback.EnvelopeStatus -cne 'Completed' -or
+        $readback.Record.completionOperationId -cne $OperationId) {
+        throw "Fork recovery '$ForkId' completion and envelope were not read back."
+    }
     return $readback
 }
 
@@ -441,6 +580,7 @@ function Get-HandoffIntegrationStatus {
 function New-HandoffOperation {
     param([string] $PayloadDigest,[string] $OperationId,[Parameter(Mandatory = $true)][array] $ChangedFields,
         [Parameter(Mandatory = $true)][string] $AuthorityScope,
+        [Parameter(Mandatory = $true)][string] $VerifiedPrincipal,
         [Parameter(Mandatory = $true)][string] $RecordKind,[Parameter(Mandatory = $true)][string] $RecordId,
         [Parameter(Mandatory = $true)] $Source,[string] $Actor='configured-adapter',
         [string] $Reason='initial checkpoint',[bool] $DecisionConfirmed=$false,[string] $DecisionCommonRevision,
@@ -454,6 +594,7 @@ function New-HandoffOperation {
             $field = [string]$change.field
             $intent = [ordered]@{
                 authorityScope = $AuthorityScope
+                verifiedPrincipal = $VerifiedPrincipal
                 operationId = $OperationId
                 recordId = $RecordId
                 field = $field
@@ -479,6 +620,7 @@ function New-HandoffOperation {
     )
     $operation = [ordered]@{
         authorityScope = $AuthorityScope
+        verifiedPrincipal = $VerifiedPrincipal
         id = $OperationId
         payloadDigest = $PayloadDigest
         changedFields = $ChangedFields
@@ -621,7 +763,8 @@ function Get-GitHandoffEvent {
     if ($event.schemaVersion -ne 1 -or $event.AuthorityScope -cne [string]$Adapter.AuthorityScope -or
         $event.TaskKey -cne $TaskKey -or $event.RecordId -cne $recordId -or
         $event.RecordKind -cne $RecordKind -or $event.BranchId -cne $BranchId -or
-        $event.OperationId -cne $OperationId -or $event.Field -cne $Field) {
+        $event.OperationId -cne $OperationId -or $event.Field -cne $Field -or
+        [string]::IsNullOrWhiteSpace([string]$event.VerifiedPrincipal)) {
         throw 'The exact event ref contains a mismatched immutable field identity.'
     }
     return [pscustomobject]$event
@@ -636,10 +779,14 @@ function Write-GitHandoffEventIfAbsent {
     if ([string]$Intent.authorityScope -cne [string]$Adapter.AuthorityScope) {
         throw 'The durable event intent has a mismatched Authority Scope.'
     }
+    if ([string]::IsNullOrWhiteSpace([string]$Intent.verifiedPrincipal)) {
+        throw 'The durable event intent is missing its verified principal.'
+    }
     $ref = Get-HandoffEventRef -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -OperationId $OperationId -Field $field
     $expected = [ordered]@{
         schemaVersion = 1
         AuthorityScope = [string]$Intent.authorityScope
+        VerifiedPrincipal = [string]$Intent.verifiedPrincipal
         TaskKey = $TaskKey
         RecordKind = $RecordKind
         RecordId = $recordId
@@ -670,7 +817,7 @@ function Write-GitHandoffEventIfAbsent {
     $existing = Get-GitHandoffEvent -Adapter $Adapter -TaskKey $TaskKey -RecordKind $RecordKind -BranchId $BranchId -OperationId $OperationId -Field $field
     if ($null -ne $existing) {
         $existingComparable = [ordered]@{
-            schemaVersion=$existing.schemaVersion;AuthorityScope=$existing.AuthorityScope;
+            schemaVersion=$existing.schemaVersion;AuthorityScope=$existing.AuthorityScope;VerifiedPrincipal=$existing.VerifiedPrincipal;
             TaskKey=$existing.TaskKey;RecordKind=$existing.RecordKind;RecordId=$existing.RecordId;
             BranchId=$existing.BranchId;OperationId=$existing.OperationId;Field=$existing.Field;PreviousState=$existing.PreviousState;
             NewState=$existing.NewState;OccurredAt=$existing.OccurredAt;Actor=$existing.Actor;Reason=$existing.Reason;
@@ -709,6 +856,9 @@ function Complete-GitHandoffEvents {
     if ($operation.authorityScope -cne [string]$Adapter.AuthorityScope) {
         throw "Operation ID '$OperationId' has a mismatched Authority Scope."
     }
+    if ([string]::IsNullOrWhiteSpace([string]$operation.verifiedPrincipal)) {
+        throw "Operation ID '$OperationId' lacks its immutable verified principal."
+    }
     $recordId = Get-HandoffRecordId -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     $changes = @($operation.changedFields)
     $intents = @($operation.eventIntents)
@@ -719,6 +869,7 @@ function Complete-GitHandoffEvents {
         if ($matchingIntents.Count -ne 1) { throw "Operation ID '$OperationId' has an ambiguous durable event intent for field '$field'." }
         $intent = $matchingIntents[0]
         if ([string]$intent.operationId -cne $OperationId -or [string]$intent.recordId -cne $recordId -or
+            [string]$intent.verifiedPrincipal -cne [string]$operation.verifiedPrincipal -or
             -not (Test-HandoffValueEqual -Left $intent.previousState -Right $change.previous) -or
             -not (Test-HandoffValueEqual -Left $intent.newState -Right $change.new)) {
             throw "Operation ID '$OperationId' durable event intent does not match field '$field'."
@@ -969,9 +1120,9 @@ function New-GitHandoffRecord {
         [Parameter(Mandatory = $true)] $Fields,[string] $OperationId,
         [Parameter(Mandatory = $true)][string] $Actor)
     Assert-HandoffOperationId -OperationId $OperationId
-    Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:create" -TaskKey $TaskKey -BranchId $BranchId | Out-Null
+    $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:create" -TaskKey $TaskKey -BranchId $BranchId
     Assert-HandoffFieldsSafe -Fields $Fields -RecordKind $RecordKind
-    if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff creation event requires the actual writer actor.' }
+    if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff creation event requires a nonempty display actor label.' }
     $creationManagedFields = @($Fields.Keys | Where-Object {
         [string]$_ -ieq 'Authority Scope' -or [string]$_ -ieq 'Continuation Generation' -or
         [string]$_ -ieq 'Active Branches' -or [string]$_ -ieq 'Last Activity At'
@@ -1009,7 +1160,8 @@ function New-GitHandoffRecord {
         foreach ($field in $logicalFields.Keys) { [ordered]@{field=[string]$field;previous=$null;new=$logicalFields[$field]} }
     )
     $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $changes `
-        -AuthorityScope ([string]$Adapter.AuthorityScope) -RecordKind $RecordKind -RecordId $recordId `
+        -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal `
+        -RecordKind $RecordKind -RecordId $recordId `
         -Source $logicalFields.Source -Actor $Actor
     $record = [ordered]@{
         schemaVersion=1;recordKind=$RecordKind;recordId=$recordId;
@@ -1046,7 +1198,7 @@ function Invoke-GitHandoffFieldsMutation {
         [string] $DecisionCommonRevision,[switch] $ExplicitContinuation,[string] $Actor='configured-adapter',
         [string] $Reason,[switch] $InternalOperation)
     Assert-HandoffOperationId -OperationId $OperationId -Internal:$InternalOperation
-    Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:update" -TaskKey $TaskKey -BranchId $BranchId | Out-Null
+    $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:update" -TaskKey $TaskKey -BranchId $BranchId
     Assert-HandoffFieldsSafe -Fields $Changes -RecordKind $RecordKind -DecisionConfirmed:$DecisionConfirmed
     if (@($Changes.Keys | Where-Object { $_ -cin @('Lifecycle','Work State','Branch Outcome') }).Count -gt 0 -and
         [string]::IsNullOrWhiteSpace($Reason)) {
@@ -1068,16 +1220,25 @@ function Invoke-GitHandoffFieldsMutation {
     }
     $old = Read-GitHandoffRecord -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($null -eq $old) { throw 'The exact Handoff record could not be found; no replacement was created.' }
-    $isBranchRestore = ($RecordKind -eq 'branch' -and $Changes.Contains('Lifecycle') -and
-        [string]$Changes['Lifecycle'] -ceq 'Active' -and [string]$old.Record.fields.Lifecycle -ceq 'Archived')
-    if ($isBranchRestore) {
-        if (-not $ExplicitContinuation -or -not $Changes.Contains('Continuation Generation') -or
+    if ($RecordKind -eq 'branch' -and $ExplicitContinuation) {
+        if (-not $Changes.Contains('Continuation Generation') -or
             [int64]$Changes['Continuation Generation'] -ne ([int64]$old.Record.fields['Continuation Generation'] + 1)) {
-            throw 'Explicit branch restoration must atomically increment Continuation Generation.'
+            throw 'Explicit branch continuation must increment Continuation Generation exactly once.'
+        }
+        $unexpectedContinuationFields = @($Changes.Keys | Where-Object {
+            [string]$_ -cne 'Continuation Generation' -and [string]$_ -cne 'Lifecycle'
+        })
+        if ($unexpectedContinuationFields.Count -gt 0 -or
+            ($Changes.Contains('Lifecycle') -and [string]$Changes['Lifecycle'] -cne 'Active')) {
+            throw 'Explicit branch continuation may change only Continuation Generation and optional Lifecycle Active.'
+        }
+        if ([string]$old.Record.fields.Lifecycle -ceq 'Archived' -and
+            (-not $Changes.Contains('Lifecycle') -or [string]$Changes['Lifecycle'] -cne 'Active')) {
+            throw 'Explicit continuation of an Archived branch must atomically restore Lifecycle Active.'
         }
     }
-    elseif ($Changes.Contains('Continuation Generation')) {
-        throw 'Continuation Generation changes only during exact explicit restoration of an Archived branch.'
+    elseif ($RecordKind -eq 'branch' -and $Changes.Contains('Continuation Generation')) {
+        throw 'Continuation Generation changes only during exact explicit continuation of that branch.'
     }
     $existingOp = $old.Record.operations[$OperationId]
     if ($hasDecisionBranchBindings) {
@@ -1174,7 +1335,7 @@ function Invoke-GitHandoffFieldsMutation {
             DecisionBranchContinuationGeneration=$decisionBranchContinuationGeneration}
     }
     $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray() `
-        -AuthorityScope ([string]$Adapter.AuthorityScope) -RecordKind $RecordKind `
+        -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal -RecordKind $RecordKind `
         -RecordId ([string]$old.Record.recordId) -Source $newRecord.fields.Source `
         -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed) `
         -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision `
@@ -1308,7 +1469,7 @@ function Set-GitHandoffBranchLifecycle {
         throw 'A common decision revision may bind only branch archival, not restoration.'
     }
     if ($Lifecycle -ceq 'Active' -and -not $ExplicitContinuation) {
-        throw 'Only exact explicit continuation can restore an archived branch.'
+        throw 'Only exact explicit continuation can begin or restore an Active branch generation.'
     }
     if ([string]::IsNullOrWhiteSpace($Reason)) {
         $Reason = if ($Lifecycle -ceq 'Archived') { 'archive the exact peer after the validated Gate' }
@@ -1338,7 +1499,10 @@ function Set-GitHandoffBranchLifecycle {
         $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
         if ($common.Fields.Lifecycle -cne 'Active') { throw 'The exact common restore was not read back; retain the operation ID.' }
     }
-    if ($branch.Fields.Lifecycle -cne $Lifecycle) {
+    $existing = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
+    $existingOperation = $existing.Record.operations[$OperationId]
+    $needsActiveContinuationWrite = ($Lifecycle -ceq 'Active' -and $ExplicitContinuation -and $null -eq $existingOperation)
+    if ($branch.Fields.Lifecycle -cne $Lifecycle -or $needsActiveContinuationWrite) {
         $lifecycleChanges = if ($Lifecycle -ceq 'Active') {
             [ordered]@{Lifecycle='Active';'Continuation Generation'=([int64]$branch.Fields['Continuation Generation'] + 1)}
         }
@@ -1349,8 +1513,6 @@ function Set-GitHandoffBranchLifecycle {
             -Actor $Actor -Reason $Reason | Out-Null
     }
     else {
-        $existing = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
-        $existingOperation = $existing.Record.operations[$OperationId]
         if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision) -and $null -eq $existingOperation) {
             throw 'The branch already has the requested lifecycle but no matching decision-bound operation; reconcile explicitly.'
         }
@@ -1358,17 +1520,24 @@ function Set-GitHandoffBranchLifecycle {
             $lifecycleChanges = @($existingOperation.changedFields | Where-Object {
                 [string]$_.field -ceq 'Lifecycle' -and [string]$_.new -ceq $Lifecycle
             })
-            if ($lifecycleChanges.Count -ne 1) {
+            if ($Lifecycle -ceq 'Archived' -and $lifecycleChanges.Count -ne 1) {
                 throw 'The supplied lifecycle Operation ID does not own this branch lifecycle transition.'
             }
             if ($Lifecycle -ceq 'Active') {
+                if ($lifecycleChanges.Count -gt 1) {
+                    throw 'The supplied continuation Operation ID has ambiguous Lifecycle changes.'
+                }
                 $generationChanges = @($existingOperation.changedFields | Where-Object {
                     [string]$_.field -ceq 'Continuation Generation'
                 })
+                $unexpectedContinuationChanges = @($existingOperation.changedFields | Where-Object {
+                    [string]$_.field -cne 'Continuation Generation' -and [string]$_.field -cne 'Lifecycle'
+                })
                 if ($generationChanges.Count -ne 1 -or
+                    $unexpectedContinuationChanges.Count -gt 0 -or
                     [int64]$generationChanges[0].new -ne ([int64]$generationChanges[0].previous + 1) -or
                     [int64]$existing.Record.fields['Continuation Generation'] -ne [int64]$generationChanges[0].new) {
-                    throw 'The supplied restore Operation ID does not own one exact Continuation Generation increment.'
+                    throw 'The supplied continuation Operation ID does not own one exact Continuation Generation increment.'
                 }
                 $expectedRestoreChanges = [ordered]@{
                     Lifecycle='Active';'Continuation Generation'=[int64]$generationChanges[0].new
@@ -1511,6 +1680,17 @@ function Set-GitHandoffBranchLifecycle {
     throw "Branch '$BranchId' common Active index was not verified; retain Operation ID '$OperationId'."
 }
 
+function Start-GitHandoffBranchContinuation {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId,
+        [Parameter(Mandatory = $true)][string] $OperationId,
+        [string] $Actor='configured-adapter',[string] $Reason='begin explicit continuation of the exact branch')
+    return Set-GitHandoffBranchLifecycle -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId `
+        -Lifecycle Active -OperationId $OperationId -ExplicitContinuation -Actor $Actor -Reason $Reason
+}
+
 Export-ModuleMember -Function New-GitHandoffAdapter,Get-GitHandoffCommon,Get-GitHandoffBranch,Get-GitHandoffEvent,
     Get-GitHandoffForkRecovery,Get-GitHandoffPendingForkRecoveries,New-GitHandoffForkRecovery,Complete-GitHandoffForkRecovery,
-    Get-GitHandoffBranchReviewBinding,New-GitHandoffCommon,New-GitHandoffBranch,Set-GitHandoffFields,Set-GitHandoffBranchLifecycle
+    Get-GitHandoffBranchReviewBinding,New-GitHandoffCommon,New-GitHandoffBranch,Set-GitHandoffFields,Set-GitHandoffBranchLifecycle,
+    Start-GitHandoffBranchContinuation
