@@ -757,6 +757,123 @@ exit 0
             -ForkId 'source-read-auth-fork' } | Should -Throw '*access was denied*'
     }
 
+    It 'InterT29j_blocks_exact_branch_mutation_while_fork_recovery_is_pending' {
+        $root = Join-Path $TestDrive 'pending-branch-mutation'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $commonFields = [ordered]@{
+            Intent = 'Compare options without selecting one'
+            Scope = 'Confirmed version 2 requirement'
+            Current = 'Confirmed baseline before branch exploration'
+            Source = 'synthetic revision pending-branch-mutation'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-branch-mutation' `
+            -Fields $commonFields -OperationId 'create-common-pending-branch-mutation' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-branch-mutation'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source}
+            'Shared Baseline' = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-pending-A';'thread:B'='create-pending-B'}
+            'Step Operation IDs' = [ordered]@{createA='create-pending-A';createB='create-pending-B';finish='finish-pending-branch-mutation'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:pending-branch-mutation' -ForkId 'pending-branch-mutation-fork' `
+            -Payload $payload -OperationId 'prepare-pending-branch-mutation' -Actor 'writer-a' | Out-Null
+        $branchFields = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source;Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -ForkPoint $common.Revision -Fields $branchFields -OperationId 'create-pending-A' -Actor 'writer-a' | Out-Null
+        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -ExpectedRevision $branch.Revision -Changes ([ordered]@{Current='unsafe branch continuation'}) `
+            -OperationId 'unsafe-pending-branch-update' } | Should -Throw '*Pending fork recovery blocks branch mutation*'
+        { Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -OperationId 'unsafe-pending-branch-continuation' } | Should -Throw '*Pending fork recovery blocks branch lifecycle mutation*'
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A').Fields.Current |
+            Should -Be $common.Fields.Current
+    }
+
+    It 'InterT85_isolates_existing_peer_snapshot_and_revalidates_common_before_new_branch_claim' {
+        $root = Join-Path $TestDrive 'epf'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        $commonFields = [ordered]@{
+            Intent = 'Compare options without selecting one'
+            Scope = 'Confirmed shared requirement before the existing-peer fork'
+            Current = 'Confirmed shared baseline before the existing-peer fork'
+            Source = 'synthetic shared evidence before the existing-peer fork'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        $sourceFields = [ordered]@{
+            Current = 'A private candidate before the existing-peer fork'
+            Source = 'A private evidence before the existing-peer fork'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence' -Fields $commonFields `
+            -OperationId 'existing-peer-create-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A' `
+            -ForkPoint 'ignored-by-fixture' -Fields $sourceFields -OperationId 'existing-peer-create-A' -Actor 'writer-a' | Out-Null
+
+        $commonBefore = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence'
+        $sourceBefore = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A'
+        $payload = [ordered]@{
+            'Fork Point' = $commonBefore.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current=$sourceBefore.Fields.Current;Source=$sourceBefore.Fields.Source}
+            'Shared Baseline' = [ordered]@{Current=$commonBefore.Fields.Current;Source=$commonBefore.Fields.Source}
+            'Verified Active Branches' = @('thread:A')
+            'Branch Creation Operations' = [ordered]@{'thread:B'='existing-peer-create-B'}
+            'Step Operation IDs' = [ordered]@{createB='existing-peer-create-B';finish='existing-peer-finish'}
+        }
+        $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -ForkId 'existing-peer-fence-fork' -Payload $payload -OperationId 'existing-peer-prepare' -Actor 'writer-a'
+        $persisted = (Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -ForkId 'existing-peer-fence-fork').Payload
+        $recovery.Status | Should -Be 'Pending'
+        $persisted['Source Snapshot'].Current | Should -Be $sourceBefore.Fields.Current
+        $persisted['Source Snapshot'].Source | Should -Be $sourceBefore.Fields.Source
+        $persisted['Shared Baseline'].Current | Should -Be $commonBefore.Fields.Current
+        $persisted['Shared Baseline'].Source | Should -Be $commonBefore.Fields.Source
+        $recovery.Control.sourceBranchRevision | Should -Be $sourceBefore.Revision
+
+        $commonAfterAdmission = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence'
+        $commonAfterAdmission.Fields.Current | Should -Be $commonBefore.Fields.Current
+        $commonAfterAdmission.Fields.Source | Should -Be $commonBefore.Fields.Source
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:existing-peer-fence' -RecordKind common `
+            -OperationId 'existing-peer-prepare' -Field 'Current') | Should -BeNullOrEmpty
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A' `
+            -ExpectedRevision $sourceBefore.Revision -Changes ([ordered]@{Current='A advanced while B was pending'}) `
+            -OperationId 'existing-peer-unsafe-A-update' } | Should -Throw '*Pending fork recovery blocks branch mutation*'
+
+        $commonPeer = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:existing-peer-fence'
+        Set-GitHandoffFields -Adapter $b -RecordKind common -TaskKey 'demo:existing-peer-fence' `
+            -ExpectedRevision $commonPeer.Revision -Changes ([ordered]@{
+                Current='Superseding shared state before B creation'
+                Source='new shared evidence before B creation'
+            }) -OperationId 'existing-peer-advance-common' -Actor 'writer-b' `
+            -Reason 'supersede the shared state before the pending peer is claimed' | Out-Null
+        $sharedBaselineFields = [ordered]@{
+            Current=$persisted['Shared Baseline'].Current
+            Source=$persisted['Shared Baseline'].Source
+            Lifecycle='Active'
+            'Work State'='Running'
+        }
+        { GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -BranchId 'thread:B' -ForkPoint $persisted['Fork Point'] -Fields $sharedBaselineFields `
+            -OperationId 'existing-peer-create-B' -Actor 'writer-a' } | Should -Throw '*verified common recovery fence changed*'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:B' | Should -BeNullOrEmpty
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence').Fields.Current |
+            Should -Be 'Superseding shared state before B creation'
+    }
+
     # Scenario: A recovery admission and common archival both read the same Active common revision.
     # Purpose: The admission must fence the common revision before either writer can commit its decision.
     It 'InterT2_serializes_recovery_admission_against_common_archival' {
@@ -1615,6 +1732,161 @@ exit 0
             -BranchId 'thread:A' -Lifecycle Archived -OperationId 'reject-inherited-decision' `
             -DecisionCommonRevision $inheritedRevision -Actor 'writer-a' `
             -Reason 'an ordinary descendant cannot authorize finalization' } | Should -Throw '*did not originate*'
+    }
+
+    It 'InterT84c_fences_decision_bound_branch_write_against_a_live_common_decision_change' {
+        $root = Join-Path $TestDrive 'q84c'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c' -Fields $script:InitialCommon `
+            -OperationId 'create-q84c-common' -Actor 'writer-a' | Out-Null
+        foreach ($branchId in @('thread:A','thread:B')) {
+            New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId $branchId `
+                -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+                -OperationId "create-$($branchId.Replace(':','-'))" -Actor 'writer-a' | Out-Null
+        }
+        $bindingOne = @(
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A' -Outcome Superseded
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:B' -Outcome Superseded
+        )
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84c' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision one';'Decision Branch Bindings'=$bindingOne
+            }) -OperationId 'q84c-decision-one' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'first confirmed branch decision' | Out-Null
+        $decisionOneRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c').Revision
+
+        $bin = Join-Path $root 'git-barrier-bin'
+        [void](New-Item -ItemType Directory -Path $bin)
+        $gitWrapper = Join-Path $bin 'git.cmd'
+        $gitWrapperText = @'
+@echo off
+setlocal EnableDelayedExpansion
+if /I "%SYP_TEST_BARRIER_ROLE%"=="decision-finalize" (
+  set "HANDOFF_IS_COMMIT_TREE=0"
+  for %%A in (%*) do if /I "%%~A"=="commit-tree" set "HANDOFF_IS_COMMIT_TREE=1"
+  if "!HANDOFF_IS_COMMIT_TREE!"=="1" (
+    if not exist "%SYP_TEST_BARRIER_FIRST%" (
+      >"%SYP_TEST_BARRIER_FIRST%" echo common fence commit created
+    ) else (
+      >"%SYP_TEST_BARRIER_ENTERED%" echo decision-bound branch commit created
+      :wait_for_release
+      if exist "%SYP_TEST_BARRIER_BLOCK%" (
+        %SystemRoot%\System32\ping.exe -n 2 -w 100 127.0.0.1 >nul
+        goto wait_for_release
+      )
+    )
+  )
+)
+"%SYP_TEST_REAL_GIT%" %*
+exit /b %ERRORLEVEL%
+'@
+        Set-Content -LiteralPath $gitWrapper -Value $gitWrapperText -Encoding ascii
+        $remote = Join-Path $root 'remote.git'
+        $blockFinalizePush = Join-Path $remote 'block-finalize-push'
+        $finalizePushEntered = Join-Path $remote 'finalize-push-entered'
+        $commitTreeFirst = Join-Path $remote 'commit-tree-first'
+        Set-Content -LiteralPath $blockFinalizePush -Value 'hold decision-bound branch push' -Encoding ascii
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $realGit = (Get-Command git.exe -ErrorAction Stop).Source
+        $priorGitFunction = Get-Command git -CommandType Function -ErrorAction SilentlyContinue
+        function global:git {
+            $gitArguments = @($args)
+            if ($env:SYP_TEST_BARRIER_ROLE -eq 'decision-finalize' -and $gitArguments -contains 'commit-tree') {
+                if (-not (Test-Path -LiteralPath $env:SYP_TEST_BARRIER_FIRST)) {
+                    Set-Content -LiteralPath $env:SYP_TEST_BARRIER_FIRST -Value 'common fence commit created' -Encoding ascii
+                }
+                else {
+                    Set-Content -LiteralPath $env:SYP_TEST_BARRIER_ENTERED -Value 'decision-bound branch commit created' -Encoding ascii
+                    while (Test-Path -LiteralPath $env:SYP_TEST_BARRIER_BLOCK) {
+                        Start-Sleep -Milliseconds 50
+                    }
+                }
+            }
+            & $env:SYP_TEST_REAL_GIT @gitArguments
+        }
+        $decisionJob = $null
+        $originalPath = $env:Path
+        $originalBarrierRole = $env:SYP_TEST_BARRIER_ROLE
+        $originalBarrierEntered = $env:SYP_TEST_BARRIER_ENTERED
+        $originalBarrierBlock = $env:SYP_TEST_BARRIER_BLOCK
+        $originalBarrierFirst = $env:SYP_TEST_BARRIER_FIRST
+        $originalRealGit = $env:SYP_TEST_REAL_GIT
+        try {
+            $decisionJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$GitWrapperDir,$BarrierEntered,$BarrierBlock)
+                $env:Path = (($env:Path -split ';') | Where-Object { $_ -and $_ -ne $GitWrapperDir }) -join ';'
+                $env:SYP_TEST_BARRIER_ROLE = ''
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+                while (-not (Test-Path -LiteralPath $BarrierEntered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 50
+                }
+                if (-not (Test-Path -LiteralPath $BarrierEntered)) { throw 'The branch writer did not reach the push barrier.' }
+                $commonB = Get-GitHandoffCommon -Adapter $adapter -TaskKey 'demo:q84c'
+                $bindingTwo = @(
+                    Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey 'demo:q84c' -BranchId 'thread:A' -Outcome Selected
+                    Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey 'demo:q84c' -BranchId 'thread:B' -Outcome Selected
+                )
+                Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey 'demo:q84c' `
+                    -ExpectedRevision $commonB.Revision -Changes ([ordered]@{
+                        Current='Decision two';'Decision Branch Bindings'=$bindingTwo
+                    }) -OperationId 'q84c-decision-two' -DecisionConfirmed -Actor 'writer-b' `
+                    -Reason 'user replaced the prior branch decision' | Out-Null
+                Remove-Item -LiteralPath $BarrierBlock -Force -ErrorAction SilentlyContinue
+                [pscustomobject]@{status='succeeded'}
+            } -ArgumentList $modulePath,$b.RepositoryRoot,$bin,$finalizePushEntered,$blockFinalizePush
+
+            $env:Path = "$bin;$env:Path"
+            $env:SYP_TEST_BARRIER_ROLE = 'decision-finalize'
+            $env:SYP_TEST_BARRIER_ENTERED = $finalizePushEntered
+            $env:SYP_TEST_BARRIER_BLOCK = $blockFinalizePush
+            $env:SYP_TEST_BARRIER_FIRST = $commitTreeFirst
+            $env:SYP_TEST_REAL_GIT = $realGit
+            $finalizeFailure = $null
+            try {
+                $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A'
+                Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84c' -BranchId 'thread:A' `
+                    -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Superseded'}) `
+                    -OperationId 'q84c-race-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionOneRevision `
+                    -Actor 'writer-a' -Reason 'archive the reviewed branch after decision' | Out-Null
+            }
+            catch { $finalizeFailure = [string]$_.Exception.Message }
+            $finalizePushEntered | Should -Exist
+            $finalizeFailure | Should -Match 'live common decision|decision-bound branch|atomic|Conditional|supplied common revision'
+            $decisionResult = Receive-Job -Job $decisionJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $decisionJob = $null
+            $decisionResult.status | Should -Be 'succeeded'
+            $afterRace = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A'
+            $afterRace.Fields.Contains('Branch Outcome') | Should -BeFalse
+            (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84c' -RecordKind branch `
+                -BranchId 'thread:A' -OperationId 'q84c-race-outcome' -Field 'Branch Outcome') | Should -BeNullOrEmpty
+            (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c').Fields.Current | Should -Be 'Decision two'
+        }
+        finally {
+            $env:Path = $originalPath
+            $env:SYP_TEST_BARRIER_ROLE = $originalBarrierRole
+            $env:SYP_TEST_BARRIER_ENTERED = $originalBarrierEntered
+            $env:SYP_TEST_BARRIER_BLOCK = $originalBarrierBlock
+            $env:SYP_TEST_BARRIER_FIRST = $originalBarrierFirst
+            $env:SYP_TEST_REAL_GIT = $originalRealGit
+            if ($null -ne $priorGitFunction) {
+                Set-Item -Path Function:\git -Value $priorGitFunction.ScriptBlock
+            }
+            else {
+                Remove-Item -Path Function:\git -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $blockFinalizePush -Force -ErrorAction SilentlyContinue
+            if ($null -ne $decisionJob) {
+                Stop-Job -Job $decisionJob -ErrorAction SilentlyContinue
+                Remove-Job -Job $decisionJob -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     # Scenario: A peer changes reviewed branch content after a common decision but before its finalization.
