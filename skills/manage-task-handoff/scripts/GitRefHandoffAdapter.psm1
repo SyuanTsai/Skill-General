@@ -301,6 +301,37 @@ function Push-GitHandoffForkBranchIfCommonRevision {
     return [pscustomobject]@{BranchRevision=$verifiedBranch;CommonRevision=$verifiedCommon}
 }
 
+function Push-GitHandoffForkRecoveryTerminalIfRevisions {
+    param([Parameter(Mandatory = $true)] $Adapter,
+        [Parameter(Mandatory = $true)][string] $EnvelopeRef,
+        [Parameter(Mandatory = $true)][string] $ExpectedEnvelopeRevision,
+        [Parameter(Mandatory = $true)][string] $EnvelopeCommit,
+        [Parameter(Mandatory = $true)][string] $IndexRef,
+        [Parameter(Mandatory = $true)][string] $ExpectedIndexRevision,
+        [Parameter(Mandatory = $true)][string] $IndexCommit)
+    $arguments = @('-C',[string]$Adapter.RepositoryRoot,'push','--quiet','--atomic',
+        "--force-with-lease=${EnvelopeRef}:${ExpectedEnvelopeRevision}",
+        "--force-with-lease=${IndexRef}:${ExpectedIndexRevision}",[string]$Adapter.RemoteName,
+        "${EnvelopeCommit}:${EnvelopeRef}","${IndexCommit}:${IndexRef}")
+    $pushOutput = @(& git @arguments 2>&1)
+    $status = $LASTEXITCODE
+    $observedEnvelope = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $EnvelopeRef
+    $observedIndex = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $IndexRef
+    if ($observedEnvelope -ceq $EnvelopeCommit -and $observedIndex -ceq $IndexCommit) {
+        return [pscustomobject]@{EnvelopeRevision=$observedEnvelope;IndexRevision=$observedIndex}
+    }
+    if (($observedEnvelope -ceq $EnvelopeCommit) -xor ($observedIndex -ceq $IndexCommit)) {
+        throw 'The remote violated atomic terminal recovery updates; stop and preserve both observed revisions.'
+    }
+    if ($observedEnvelope -cne $ExpectedEnvelopeRevision -or $observedIndex -cne $ExpectedIndexRevision) {
+        throw 'Conditional terminal recovery revision conflict; re-read the envelope and protected index.'
+    }
+    if ($status -ne 0) {
+        throw "The terminal recovery envelope and protected index were rejected atomically; both remain nonterminal: $($pushOutput -join ' ')"
+    }
+    throw 'The terminal recovery envelope and protected index were not atomically read back.'
+}
+
 function Read-GitHandoffRecord {
     param($Adapter,[string] $RecordKind,[string] $TaskKey,[string] $BranchId)
     Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:read" -TaskKey $TaskKey -BranchId $BranchId | Out-Null
@@ -588,6 +619,22 @@ function Write-GitHandoffForkRecoveryIndex {
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document -Parent $ExpectedRevision -FileName 'index.json'
     Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision $ExpectedRevision -Commit $commit | Out-Null
     return $commit
+}
+
+function Read-GitHandoffForkRecoveryIndex {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ForkId)
+    $ref = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $revision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $ref
+    if ($null -eq $revision) { return $null }
+    $document = Read-GitHandoffDocument -Adapter $Adapter -Ref $ref -Revision $revision -FileName 'index.json'
+    if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery-index' -or
+        $document.authorityScope -cne [string]$Adapter.AuthorityScope -or $document.taskKey -cne $TaskKey -or
+        $document.forkId -cne $ForkId -or [string]$document.status -cnotin @('Pending','Completed','Abandoned') -or
+        [string]$document.envelopeRevision -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'The protected fork-recovery index has a mismatched identity, status, or envelope revision.'
+    }
+    return [pscustomobject]@{Revision=$revision;Status=[string]$document.status;Record=$document}
 }
 
 function Get-GitHandoffForkRecovery {
@@ -1017,7 +1064,17 @@ function Complete-GitHandoffForkRecovery {
     }
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $envelope) { throw "Fork recovery '$ForkId' payload-free envelope is missing." }
+    $index = Read-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $index) { throw "Fork recovery '$ForkId' protected pending index is missing." }
     if ($envelope.Status -ceq 'Pending') {
+        if ($index.Status -cne 'Pending') {
+            throw "Fork recovery '$ForkId' has a terminal index while its envelope is still Pending."
+        }
+        & git -C $Adapter.RepositoryRoot merge-base --is-ancestor `
+            ([string]$index.Record.envelopeRevision) ([string]$envelope.Revision) 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Fork recovery '$ForkId' pending index does not descend to the live envelope."
+        }
         $envelopeDocument = $envelope.Record
         $envelopeDocument.status = 'Completed'
         $envelopeDocument.completionOperationId = $OperationId
@@ -1026,22 +1083,30 @@ function Complete-GitHandoffForkRecovery {
         $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeDocument `
             -Parent $envelope.Revision -FileName 'envelope.json'
-        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef `
-            -ExpectedRevision $envelope.Revision -Commit $envelopeCommit | Out-Null
+        $indexDocument = $index.Record
+        $indexDocument.status = 'Completed'
+        $indexDocument.envelopeRevision = $envelopeCommit
+        $indexDocument.updatedAt = [string]$current.Record.completedAt
+        $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+        $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument `
+            -Parent $index.Revision -FileName 'index.json'
+        # The Git adapter's common revision fence is an optimistic atomic compare-and-swap, not a durable lock.
+        # Target/common readbacks above therefore prove no separate fence ref remains to release.
+        Push-GitHandoffForkRecoveryTerminalIfRevisions -Adapter $Adapter `
+            -EnvelopeRef $envelopeRef -ExpectedEnvelopeRevision $envelope.Revision -EnvelopeCommit $envelopeCommit `
+            -IndexRef $indexRef -ExpectedIndexRevision $index.Revision -IndexCommit $indexCommit | Out-Null
     }
     elseif ($envelope.Record.completionOperationId -cne $OperationId) {
         throw 'Fork-recovery envelope is already completed by another operation.'
     }
     $readback = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $indexReadback = Read-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($readback.Status -cne 'Completed' -or $readback.EnvelopeStatus -cne 'Completed' -or
-        $readback.Record.completionOperationId -cne $OperationId) {
-        throw "Fork recovery '$ForkId' completion and envelope were not read back."
+        $readback.Record.completionOperationId -cne $OperationId -or $null -eq $indexReadback -or
+        $indexReadback.Status -cne 'Completed' -or
+        [string]$indexReadback.Record.envelopeRevision -cne [string]$readback.EnvelopeRevision) {
+        throw "Fork recovery '$ForkId' completed payload, envelope, and protected index were not read back."
     }
-    $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    $indexRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef
-    if ($null -eq $indexRevision) { throw "Fork recovery '$ForkId' pending index is missing." }
-    [void](Write-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId `
-        -Status Completed -EnvelopeRevision $readback.EnvelopeRevision -ExpectedRevision $indexRevision)
     return $readback
 }
 
@@ -1057,9 +1122,15 @@ function Abandon-GitHandoffForkRecovery {
     if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Fork-recovery abandonment requires a concrete reason.' }
     $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $envelope) { throw 'The exact fork-recovery envelope was not found.' }
+    $index = Read-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $index) { throw "Fork recovery '$ForkId' protected pending index is missing." }
     if ($envelope.Status -ceq 'Abandoned') {
         if ($envelope.Record.abandonmentOperationId -cne $OperationId) {
             throw 'Fork-recovery envelope is already abandoned by another operation.'
+        }
+        if ($index.Status -cne 'Abandoned' -or
+            [string]$index.Record.envelopeRevision -cne [string]$envelope.Revision) {
+            throw 'Fork-recovery abandonment is incomplete because its protected index is not atomically terminal.'
         }
         return $envelope
     }
@@ -1069,6 +1140,14 @@ function Abandon-GitHandoffForkRecovery {
     }
     if ($envelope.Revision -cne $ExpectedEnvelopeRevision) {
         throw 'Conditional fork-recovery envelope revision conflict.'
+    }
+    if ($index.Status -cne 'Pending') {
+        throw 'Fork-recovery abandonment requires the protected index to remain Pending until the atomic terminal step.'
+    }
+    & git -C $Adapter.RepositoryRoot merge-base --is-ancestor `
+        ([string]$index.Record.envelopeRevision) ([string]$envelope.Revision) 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Fork recovery '$ForkId' pending index does not descend to the live envelope."
     }
 
     $payloadRef = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
@@ -1108,20 +1187,26 @@ function Abandon-GitHandoffForkRecovery {
     $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document `
         -Parent $envelope.Revision -FileName 'envelope.json'
-    Push-GitHandoffIfRevision -Adapter $Adapter -Ref $envelopeRef `
-        -ExpectedRevision $envelope.Revision -Commit $commit | Out-Null
+    $indexDocument = $index.Record
+    $indexDocument.status = 'Abandoned'
+    $indexDocument.envelopeRevision = $commit
+    $indexDocument.updatedAt = [string]$document.abandonedAt
+    $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument `
+        -Parent $index.Revision -FileName 'index.json'
+    Push-GitHandoffForkRecoveryTerminalIfRevisions -Adapter $Adapter `
+        -EnvelopeRef $envelopeRef -ExpectedEnvelopeRevision $envelope.Revision -EnvelopeCommit $commit `
+        -IndexRef $indexRef -ExpectedIndexRevision $index.Revision -IndexCommit $indexCommit | Out-Null
     $readback = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $indexReadback = Read-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($readback.Revision -cne $commit -or $readback.Status -cne 'Abandoned' -or
         $readback.Record.abandonmentOperationId -cne $OperationId -or
         $readback.Record.abandonmentVerifiedPrincipal -cne $verifiedPrincipal -or
-        $readback.Record.abandonmentReason -cne $Reason) {
+        $readback.Record.abandonmentReason -cne $Reason -or $null -eq $indexReadback -or
+        $indexReadback.Revision -cne $indexCommit -or $indexReadback.Status -cne 'Abandoned' -or
+        [string]$indexReadback.Record.envelopeRevision -cne [string]$readback.Revision) {
         throw "Fork recovery '$ForkId' abandonment was not read back."
     }
-    $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
-    $indexRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $indexRef
-    if ($null -eq $indexRevision) { throw "Fork recovery '$ForkId' pending index is missing." }
-    [void](Write-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId `
-        -Status Abandoned -EnvelopeRevision $readback.Revision -ExpectedRevision $indexRevision)
     return $readback
 }
 

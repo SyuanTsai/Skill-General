@@ -92,6 +92,12 @@ while read old new ref; do
   if [ -f "$GIT_DIR/deny-recovery-control" ]; then
     case "$ref" in refs/heads/handoff-v1/recovery-controls/*) exit 1 ;; esac
   fi
+  if [ -f "$GIT_DIR/deny-terminal-recovery-envelope" ]; then
+    case "$ref" in refs/heads/handoff-v1/recovery-envelopes/*) exit 1 ;; esac
+  fi
+  if [ -f "$GIT_DIR/deny-terminal-recovery-index" ]; then
+    case "$ref" in refs/heads/handoff-v1/recovery-index/*) exit 1 ;; esac
+  fi
 done
 exit 0
 '@
@@ -449,6 +455,54 @@ exit 0
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-bootstrap').Count | Should -Be 1
     }
 
+    # Scenario: The remote rejects the index half of a terminal completion update.
+    # Purpose: The payload may complete first, but envelope and index must remain Pending together until one retry commits both.
+    It 'InterT29ca_completes_envelope_and_pending_index_atomically' {
+        $root = Join-Path $TestDrive 'atc'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-completion' -Fields $script:InitialCommon `
+            -OperationId 'create-atomic-completion-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-completion'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:B'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='confirmed state';Source='confirmed evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed state';Source='confirmed evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-atomic-completion-b'}
+            'Step Operation IDs' = [ordered]@{createB='create-atomic-completion-b'}
+        }
+        $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
+            -ForkId 'fork-atomic-completion' -Payload $payload `
+            -OperationId 'prepare-atomic-completion' -Actor 'writer-a'
+        $branchFields = [ordered]@{Current='confirmed state';Source='confirmed evidence';Lifecycle='Active';'Work State'='Running'}
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:atomic-completion' -BranchId 'thread:B' `
+            -ForkPoint $common.Revision -Fields $branchFields -OperationId 'create-atomic-completion-b' | Out-Null
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $flag = Join-Path $remoteRoot 'deny-terminal-recovery-index'
+        Set-Content -LiteralPath $flag -Value 'reject terminal index' -Encoding ascii
+        try {
+            { Complete-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
+                -ForkId 'fork-atomic-completion' -ExpectedRevision $recovery.Revision `
+                -OperationId 'complete-atomic-completion' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue }
+        $partial = Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
+            -ForkId 'fork-atomic-completion'
+        $partial.Status | Should -Be 'Completed'
+        $partial.EnvelopeStatus | Should -Be 'Pending'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 1
+        $completed = Complete-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
+            -ForkId 'fork-atomic-completion' -ExpectedRevision $recovery.Revision `
+            -OperationId 'complete-atomic-completion'
+        $completed.Status | Should -Be 'Completed'
+        $completed.EnvelopeStatus | Should -Be 'Completed'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 0
+    }
+
     # Scenario: A common-only envelope is durable without its payload, then the common record advances.
     # Purpose: Reject the stale pre-fork snapshot instead of attaching it to a newer common revision.
     It 'InterT29d_rejects_a_stale_common_only_payload_after_envelope_creation' {
@@ -638,6 +692,55 @@ exit 0
         (Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:abandon-empty' `
             -ForkId 'fork-empty' -ExpectedEnvelopeRevision $pending[0].Revision `
             -OperationId 'abandon-empty-envelope' -Reason 'idempotent retry').Status | Should -Be 'Abandoned'
+    }
+
+    # Scenario: The remote rejects the envelope half of terminal abandonment.
+    # Purpose: Atomic push must leave both envelope and index Pending so the same operation can retry safely.
+    It 'InterT29aa_abandons_envelope_and_pending_index_atomically' {
+        $root = Join-Path $TestDrive 'ata'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-abandonment' -Fields $script:InitialCommon `
+            -OperationId 'create-atomic-abandonment-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-abandonment'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='private candidate';Source='private evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed state';Source='confirmed evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='create-atomic-abandonment-b'}
+            'Step Operation IDs' = [ordered]@{createB='create-atomic-abandonment-b'}
+        }
+        $remoteRoot = Join-Path $root 'remote.git'
+        Add-SelectiveRejectHook -RemoteRoot $remoteRoot
+        $payloadFlag = Join-Path $remoteRoot 'deny-recovery-payload'
+        Set-Content -LiteralPath $payloadFlag -Value 'reject isolated payload' -Encoding ascii
+        try {
+            { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-abandonment' `
+                -ForkId 'fork-atomic-abandonment' -Payload $payload `
+                -OperationId 'prepare-atomic-abandonment' -Actor 'writer-a' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $payloadFlag -Force -ErrorAction SilentlyContinue }
+        $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-abandonment')
+        $pending.Count | Should -Be 1
+        $terminalFlag = Join-Path $remoteRoot 'deny-terminal-recovery-envelope'
+        Set-Content -LiteralPath $terminalFlag -Value 'reject terminal envelope' -Encoding ascii
+        try {
+            { Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-abandonment' `
+                -ForkId 'fork-atomic-abandonment' -ExpectedEnvelopeRevision $pending[0].Revision `
+                -OperationId 'abandon-atomic-abandonment' -Reason 'payload creation failed' } | Should -Throw
+        }
+        finally { Remove-Item -LiteralPath $terminalFlag -Force -ErrorAction SilentlyContinue }
+        $stillPending = @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-abandonment')
+        $stillPending.Count | Should -Be 1
+        $stillPending[0].Revision | Should -Be $pending[0].Revision
+        $abandoned = Abandon-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-abandonment' `
+            -ForkId 'fork-atomic-abandonment' -ExpectedEnvelopeRevision $pending[0].Revision `
+            -OperationId 'abandon-atomic-abandonment' -Reason 'payload creation failed'
+        $abandoned.Status | Should -Be 'Abandoned'
+        @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-abandonment').Count | Should -Be 0
     }
 
     # Scenario: A recovery payload or a durable branch-creation claim exists when abandonment is attempted.
