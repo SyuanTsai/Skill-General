@@ -1876,10 +1876,10 @@ exit /b %ERRORLEVEL%
             $env:SYP_TEST_BARRIER_FIRST = $originalBarrierFirst
             $env:SYP_TEST_REAL_GIT = $originalRealGit
             if ($null -ne $priorGitFunction) {
-                Set-Item -Path Function:\global:git -Value $priorGitFunction.ScriptBlock
+                Set-Item -Path Function:\git -Value $priorGitFunction.ScriptBlock
             }
             else {
-                Remove-Item -Path Function:\global:git -ErrorAction SilentlyContinue
+                Remove-Item -Path Function:\git -ErrorAction SilentlyContinue
             }
             Remove-Item -LiteralPath $blockFinalizePush -Force -ErrorAction SilentlyContinue
             if ($null -ne $decisionJob) {
