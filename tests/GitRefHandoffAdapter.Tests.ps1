@@ -501,6 +501,8 @@ exit 0
         $partial.EnvelopeStatus | Should -Be 'Pending'
         $partial.PayloadRevision | Should -Be $recovery.PayloadRevision
         $partial.Revision | Should -Not -Be $partial.PayloadRevision
+        $partial.Record.payloadDigest | Should -Be $recovery.Record.payloadDigest
+        ($partial.Payload | ConvertTo-Json -Compress -Depth 50) | Should -Be ($recovery.Payload | ConvertTo-Json -Compress -Depth 50)
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 1
         $completed = Complete-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
             -ForkId 'fork-atomic-completion' -ExpectedRevision $recovery.Revision `
@@ -508,6 +510,8 @@ exit 0
         $completed.Status | Should -Be 'Completed'
         $completed.EnvelopeStatus | Should -Be 'Completed'
         $completed.PayloadRevision | Should -Be $recovery.PayloadRevision
+        $completed.Record.payloadDigest | Should -Be $recovery.Record.payloadDigest
+        ($completed.Payload | ConvertTo-Json -Compress -Depth 50) | Should -Be ($recovery.Payload | ConvertTo-Json -Compress -Depth 50)
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 0
     }
 
