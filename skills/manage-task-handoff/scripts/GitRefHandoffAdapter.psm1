@@ -301,6 +301,55 @@ function Push-GitHandoffForkBranchIfCommonRevision {
     return [pscustomobject]@{BranchRevision=$verifiedBranch;CommonRevision=$verifiedCommon}
 }
 
+function Assert-GitHandoffForkRecoveryCommonFence {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ExpectedRevision,[Parameter(Mandatory = $true)][string] $FailureMessage)
+    $current = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+    if ($null -eq $current) { throw $FailureMessage }
+    if ([string]$current.Revision -ceq $ExpectedRevision) { return $current }
+    try {
+        $expectedDocument = Read-GitHandoffDocument -Adapter $Adapter -Ref $current.Ref `
+            -Revision $ExpectedRevision -FileName 'record.json'
+        $expectedJson = $expectedDocument | ConvertTo-Json -Compress -Depth 50
+        $currentJson = $current.Record | ConvertTo-Json -Compress -Depth 50
+        if ([string]$expectedJson -ceq [string]$currentJson) { return $current }
+    }
+    catch { }
+    throw $FailureMessage
+}
+
+function Push-GitHandoffForkRecoveryPayloadIfRevisions {
+    param([Parameter(Mandatory = $true)] $Adapter,
+        [Parameter(Mandatory = $true)][string] $PayloadRef,
+        [AllowEmptyString()][string] $ExpectedPayloadRevision,
+        [Parameter(Mandatory = $true)][string] $PayloadCommit,
+        [Parameter(Mandatory = $true)][string] $EnvelopeRef,
+        [Parameter(Mandatory = $true)][string] $ExpectedEnvelopeRevision,
+        [Parameter(Mandatory = $true)][string] $EnvelopeCommit)
+    $arguments = @('-C',[string]$Adapter.RepositoryRoot,'push','--quiet','--atomic',
+        "--force-with-lease=$($PayloadRef):$ExpectedPayloadRevision",
+        "--force-with-lease=$($EnvelopeRef):$ExpectedEnvelopeRevision",[string]$Adapter.RemoteName,
+        "${PayloadCommit}:$PayloadRef","${EnvelopeCommit}:$EnvelopeRef")
+    $pushOutput = @(& git @arguments 2>&1)
+    $status = $LASTEXITCODE
+    $observedPayload = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $PayloadRef
+    $observedEnvelope = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $EnvelopeRef
+    if ($observedPayload -ceq $PayloadCommit -and $observedEnvelope -ceq $EnvelopeCommit) {
+        return [pscustomobject]@{PayloadRevision=$observedPayload;EnvelopeRevision=$observedEnvelope}
+    }
+    if (($observedPayload -ceq $PayloadCommit) -xor ($observedEnvelope -ceq $EnvelopeCommit)) {
+        throw 'The remote violated atomic fork-recovery payload and envelope updates; preserve both observed revisions.'
+    }
+    $expectedPayload = if ([string]::IsNullOrEmpty($ExpectedPayloadRevision)) { $null } else { $ExpectedPayloadRevision }
+    if ($observedPayload -cne $expectedPayload -or $observedEnvelope -cne $ExpectedEnvelopeRevision) {
+        throw 'Conditional fork-recovery payload/envelope revision conflict; re-read the recovery state.'
+    }
+    if ($status -ne 0) {
+        throw "The fork-recovery payload and envelope were rejected atomically; neither advanced: $($pushOutput -join ' ')"
+    }
+    throw 'The fork-recovery payload and envelope were not atomically read back.'
+}
+
 function Push-GitHandoffForkRecoveryTerminalIfRevisions {
     param([Parameter(Mandatory = $true)] $Adapter,
         [Parameter(Mandatory = $true)][string] $EnvelopeRef,
@@ -544,6 +593,8 @@ function Read-GitHandoffForkRecoveryEnvelope {
         $document.forkId -cne $ForkId -or $document.recordId -cne $recordId -or
         [string]$document.status -cnotin @('Pending','Completed','Abandoned') -or
         [string]::IsNullOrWhiteSpace([string]$document.payloadDigest) -or
+        ($document.Contains('payloadRevision') -and $null -ne $document.payloadRevision -and
+         [string]$document.payloadRevision -cnotmatch '^[0-9a-f]{40,64}$') -or
         [string]$document.verifiedCommonRevisionAtCreation -cnotmatch '^[0-9a-f]{40,64}$' -or
         -not (Test-HandoffSha256Array -Value $document.branchCreationTargetDigests) -or
         -not (Test-HandoffSha256Array -Value $document.branchCreationOperationDigests `
@@ -644,8 +695,27 @@ function Get-GitHandoffForkRecovery {
     Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:read' -TaskKey $TaskKey -ForkId $ForkId | Out-Null
     $ref = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $revision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $ref
-    if ($null -eq $revision) { return $null }
+    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $revision) {
+        if ($null -ne $envelope -and $envelope.Record.Contains('payloadRevision') -and
+            $null -ne $envelope.Record.payloadRevision) {
+            throw 'The fork-recovery envelope records a payload revision that is missing from its isolated ref.'
+        }
+        return $null
+    }
+    if ($null -eq $envelope) {
+        throw 'The fork-recovery payload exists without its payload-free envelope.'
+    }
     $document = Read-GitHandoffDocument -Adapter $Adapter -Ref $ref -Revision $revision -FileName 'recovery.json'
+    if (-not $envelope.Record.Contains('payloadRevision') -or
+        [string]$envelope.Record.payloadRevision -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'The fork-recovery payload revision is not atomically bound by its envelope.'
+    }
+    & git -C $Adapter.RepositoryRoot merge-base --is-ancestor `
+        ([string]$envelope.Record.payloadRevision) ([string]$revision) 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The fork-recovery payload ref no longer descends from its atomically bound envelope revision.'
+    }
     $recordId = Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($document.schemaVersion -ne 1 -or $document.recordKind -cne 'fork-recovery' -or
         $document.authorityScope -cne [string]$Adapter.AuthorityScope -or
@@ -670,7 +740,6 @@ function Get-GitHandoffForkRecovery {
          [string]::IsNullOrWhiteSpace([string]$document.completedAt))) {
         throw 'The completed fork-recovery payload lacks immutable completion evidence.'
     }
-    $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $payloadEvidence = Get-HandoffForkRecoveryEnvelopeEvidence -Payload $document.payload
     $statusConsistent = ($null -ne $envelope -and $null -ne $control -and ($envelope.Status -ceq [string]$document.status -or
@@ -704,6 +773,7 @@ function Get-GitHandoffForkRecovery {
     return [pscustomobject]@{AuthorityScope=[string]$document.authorityScope;
         TaskKey=$TaskKey;ForkId=$ForkId;Status=[string]$document.status;
         Revision=$revision;EnvelopeStatus=$envelope.Status;EnvelopeRevision=$envelope.Revision;
+        PayloadRevision=[string]$envelope.Record.payloadRevision;
         ControlRevision=$control.Revision;Control=$control.Record;
         Payload=$document.payload;Record=$document}
 }
@@ -874,7 +944,7 @@ function New-GitHandoffForkRecovery {
         $createdAt = [DateTimeOffset]::UtcNow.ToString('o')
         $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
-            payloadDigest=$digest;verifiedCommonRevisionAtCreation=$verifiedCommonRevision;
+            payloadDigest=$digest;payloadRevision=$null;verifiedCommonRevisionAtCreation=$verifiedCommonRevision;
             branchCreationTargetDigests=@($envelopeEvidence.BranchCreationTargetDigests);
             branchCreationOperationDigests=@($envelopeEvidence.BranchCreationOperationDigests);
             branchCreationBindings=$envelopeEvidence.BranchCreationBindings;
@@ -901,12 +971,15 @@ function New-GitHandoffForkRecovery {
             updatedAt=$createdAt}
         $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument -FileName 'index.json'
+        $commonFenceCommit = New-GitHandoffCommit -Adapter $Adapter -Document $common.Record `
+            -Parent $verifiedCommonRevision -FileName 'record.json'
         $pushOutput = @(& git -C $Adapter.RepositoryRoot push --quiet --atomic `
             "--force-with-lease=${envelopeRef}:" "--force-with-lease=${controlRef}:" `
-            "--force-with-lease=${indexRef}:" $Adapter.RemoteName `
-            "${envelopeCommit}:${envelopeRef}" "${controlCommit}:${controlRef}" "${indexCommit}:${indexRef}" 2>&1)
+            "--force-with-lease=${indexRef}:" "--force-with-lease=$($common.Ref):${verifiedCommonRevision}" `
+            $Adapter.RemoteName "${envelopeCommit}:${envelopeRef}" "${controlCommit}:${controlRef}" `
+            "${indexCommit}:${indexRef}" "${commonFenceCommit}:$($common.Ref)" 2>&1)
         if ($LASTEXITCODE -ne 0) {
-            throw "Fork recovery envelope, protected control, and pending index were not atomically created: $($pushOutput -join ' ')"
+            throw "Fork recovery envelope, protected control, pending index, and common revision fence were not atomically created: $($pushOutput -join ' ')"
         }
         $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
@@ -914,12 +987,14 @@ function New-GitHandoffForkRecovery {
         $indexReadback = if ($null -eq $indexRevision) { $null } else {
             Read-GitHandoffDocument -Adapter $Adapter -Ref $indexRef -Revision $indexRevision -FileName 'index.json'
         }
+        $commonReadback = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
         if ($null -eq $envelope -or $envelope.Revision -cne $envelopeCommit -or
             $null -eq $control -or $control.Revision -cne $controlCommit -or
             $indexRevision -cne $indexCommit -or $null -eq $indexReadback -or
             [string]$indexReadback.status -cne 'Pending' -or
-            [string]$indexReadback.envelopeRevision -cne $envelopeCommit) {
-            throw "Fork recovery '$ForkId' atomic envelope, control, and pending index were not read back."
+            [string]$indexReadback.envelopeRevision -cne $envelopeCommit -or
+            $null -eq $commonReadback -or [string]$commonReadback.Revision -cne $commonFenceCommit) {
+            throw "Fork recovery '$ForkId' atomic envelope, control, pending index, and common revision fence were not read back."
         }
     }
     if ($envelope.Status -ceq 'Abandoned') {
@@ -977,19 +1052,15 @@ function New-GitHandoffForkRecovery {
             throw 'A different fork-recovery operation already owns this Task Key and Fork ID.'
         }
         if ($envelope.Record.branchCreationClaims.Count -eq 0) {
-            $currentCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-            if ($null -eq $currentCommon -or
-                [string]$currentCommon.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
-                throw 'The verified pre-fork common revision changed before branch creation began.'
-            }
+            Assert-GitHandoffForkRecoveryCommonFence -Adapter $Adapter -TaskKey $TaskKey `
+                -ExpectedRevision ([string]$envelope.Record.verifiedCommonRevisionAtCreation) `
+                -FailureMessage 'The verified pre-fork common revision changed before branch creation began.' | Out-Null
         }
         return $existing
     }
-    $currentCommon = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-    if ($null -eq $currentCommon -or
-        [string]$currentCommon.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
-        throw 'The verified pre-fork common revision changed before the recovery payload became durable.'
-    }
+    Assert-GitHandoffForkRecoveryCommonFence -Adapter $Adapter -TaskKey $TaskKey `
+        -ExpectedRevision ([string]$envelope.Record.verifiedCommonRevisionAtCreation) `
+        -FailureMessage 'The verified pre-fork common revision changed before the recovery payload became durable.' | Out-Null
     $document = [ordered]@{schemaVersion=1;recordKind='fork-recovery';recordId=$recordId;
         authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;
         forkId=$ForkId;status='Pending';payload=$Payload;creationOperationId=$OperationId;payloadDigest=$digest;
@@ -997,17 +1068,26 @@ function New-GitHandoffForkRecovery {
         completionOperationId=$null;completionVerifiedPrincipal=$null;completedAt=$null}
     $ref = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $document -FileName 'recovery.json'
-    Push-GitHandoffIfRevision -Adapter $Adapter -Ref $ref -ExpectedRevision '' -Commit $commit | Out-Null
+    $envelopeAfterPayload = $envelope.Record
+    $envelopeAfterPayload.payloadRevision = $commit
+    $envelopeRef = Get-HandoffForkRecoveryEnvelopeRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $envelopeCommit = New-GitHandoffCommit -Adapter $Adapter -Document $envelopeAfterPayload `
+        -Parent $envelope.Revision -FileName 'envelope.json'
+    Push-GitHandoffForkRecoveryPayloadIfRevisions -Adapter $Adapter `
+        -PayloadRef $ref -ExpectedPayloadRevision '' -PayloadCommit $commit `
+        -EnvelopeRef $envelopeRef -ExpectedEnvelopeRevision $envelope.Revision -EnvelopeCommit $envelopeCommit | Out-Null
     $readback = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $envelopeReadback = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $readback -or $readback.Revision -cne $commit -or
-        $readback.Record.payloadDigest -cne $digest -or $readback.Record.verifiedPrincipal -cne $originPrincipal) {
+        $readback.Record.payloadDigest -cne $digest -or $readback.Record.verifiedPrincipal -cne $originPrincipal -or
+        $readback.EnvelopeRevision -cne $envelopeCommit -or
+        $null -eq $envelopeReadback -or $envelopeReadback.Revision -cne $envelopeCommit -or
+        [string]$envelopeReadback.Record.payloadRevision -cne [string]$commit) {
         throw "Fork recovery '$ForkId' creation was not read back."
     }
-    $commonAfterPayload = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
-    if ($null -eq $commonAfterPayload -or
-        [string]$commonAfterPayload.Revision -cne [string]$envelope.Record.verifiedCommonRevisionAtCreation) {
-        throw 'The verified pre-fork common revision changed while the recovery payload was being written.'
-    }
+    Assert-GitHandoffForkRecoveryCommonFence -Adapter $Adapter -TaskKey $TaskKey `
+        -ExpectedRevision ([string]$envelope.Record.verifiedCommonRevisionAtCreation) `
+        -FailureMessage 'The verified pre-fork common revision changed while the recovery payload was being written.' | Out-Null
     return $readback
 }
 
@@ -1090,8 +1170,8 @@ function Complete-GitHandoffForkRecovery {
         $indexRef = Get-HandoffForkRecoveryIndexRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument `
             -Parent $index.Revision -FileName 'index.json'
-        # The Git adapter's common revision fence is an optimistic atomic compare-and-swap, not a durable lock.
-        # Target/common readbacks above therefore prove no separate fence ref remains to release.
+        # The common fence is the common ref's payload-free no-op storage cursor, not a separate lock ref.
+        # Target/common readbacks above prove the durable cursor can advance through normal reconciliation.
         Push-GitHandoffForkRecoveryTerminalIfRevisions -Adapter $Adapter `
             -EnvelopeRef $envelopeRef -ExpectedEnvelopeRevision $envelope.Revision -EnvelopeCommit $envelopeCommit `
             -IndexRef $indexRef -ExpectedIndexRevision $index.Revision -IndexCommit $indexCommit | Out-Null
@@ -1151,6 +1231,9 @@ function Abandon-GitHandoffForkRecovery {
     }
 
     $payloadRef = Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($envelope.Record.Contains('payloadRevision') -and $null -ne $envelope.Record.payloadRevision) {
+        throw 'Fork-recovery abandonment is unsafe because the isolated payload exists and the envelope already binds it.'
+    }
     if ($null -ne (Get-RemoteHandoffRevision -Adapter $Adapter -Ref $payloadRef)) {
         throw 'Fork-recovery abandonment is unsafe because the isolated payload exists.'
     }

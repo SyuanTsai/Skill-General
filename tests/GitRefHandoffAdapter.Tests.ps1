@@ -408,7 +408,12 @@ exit 0
             -ForkId 'fork-envelope-only' -Payload $payload -OperationId 'create-envelope-only' -Actor 'display-writer'
         $recovered.Status | Should -Be 'Pending'
         $recovered.EnvelopeStatus | Should -Be 'Pending'
+        $recovered.PayloadRevision | Should -Be $recovered.Revision
         $recovered.Record.verifiedPrincipal | Should -Be 'synthetic-principal'
+        $envelopeRefs = @(& git --git-dir=$remoteRoot for-each-ref --format='%(objectname)' 'refs/heads/handoff-v1/recovery-envelopes')
+        $envelopeRefs.Count | Should -Be 1
+        $envelopeJson = ((& git --git-dir=$remoteRoot show "$($envelopeRefs[0]):envelope.json") -join "`n") | ConvertFrom-Json
+        $envelopeJson.payloadRevision | Should -Be $recovered.Revision
     }
 
     # Scenario: The remote rejects one member of the initial recovery bootstrap set.
@@ -494,12 +499,15 @@ exit 0
             -ForkId 'fork-atomic-completion'
         $partial.Status | Should -Be 'Completed'
         $partial.EnvelopeStatus | Should -Be 'Pending'
+        $partial.PayloadRevision | Should -Be $recovery.PayloadRevision
+        $partial.Revision | Should -Not -Be $partial.PayloadRevision
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 1
         $completed = Complete-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:atomic-completion' `
             -ForkId 'fork-atomic-completion' -ExpectedRevision $recovery.Revision `
             -OperationId 'complete-atomic-completion'
         $completed.Status | Should -Be 'Completed'
         $completed.EnvelopeStatus | Should -Be 'Completed'
+        $completed.PayloadRevision | Should -Be $recovery.PayloadRevision
         @(Get-GitHandoffPendingForkRecoveries -Adapter $a -TaskKey 'demo:atomic-completion').Count | Should -Be 0
     }
 
@@ -633,8 +641,9 @@ exit 0
         }
         New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:pending-auth' -ForkId 'pending-auth-fork' `
             -Payload $payload -OperationId 'prepare-pending-auth' -Actor 'writer-a' | Out-Null
+        $commonAfterRecovery = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-auth'
         { Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:pending-auth' `
-            -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
+            -ExpectedRevision $commonAfterRecovery.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
             -OperationId 'archive-with-pending' -Actor 'writer-a' -Reason 'must remain protected' } |
             Should -Throw '*Pending fork recovery protects common*'
 
@@ -647,6 +656,243 @@ exit 0
                 return $true
             }
         @(Get-GitHandoffPendingForkRecoveries -Adapter $filtered -TaskKey 'demo:pending-auth').Count | Should -Be 0
+    }
+
+    # Scenario: A recovery admission and common archival both read the same Active common revision.
+    # Purpose: The admission must fence the common revision before either writer can commit its decision.
+    It 'InterT2_serializes_recovery_admission_against_common_archival' {
+        $root = Join-Path $TestDrive 't2-common-fence'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $b = New-WriterFixture -Root $root -WriterId 'writer-b'
+        $remote = Join-Path $root 'remote.git'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:t2-common-fence' -Fields $script:InitialCommon `
+            -OperationId 't2-create-common' -Actor 'writer-a' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:t2-common-fence'
+        $payload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='source A';Source='source evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared';Source='confirmed evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='t2-create-b'}
+            'Step Operation IDs' = [ordered]@{createB='t2-create-b'}
+        }
+        $bin = Join-Path $root 'git-barrier-bin'
+        [void](New-Item -ItemType Directory -Path $bin)
+        $gitWrapper = Join-Path $bin 'git.cmd'
+        $gitWrapperText = @'
+@echo off
+setlocal EnableDelayedExpansion
+if /I "%SYP_TEST_BARRIER_ROLE%"=="archive" (
+  set "HANDOFF_IS_PUSH=0"
+  for %%A in (%*) do if /I "%%~A"=="push" set "HANDOFF_IS_PUSH=1"
+  if "!HANDOFF_IS_PUSH!"=="1" (
+    >"%SYP_TEST_BARRIER_ENTERED%" echo archive push invoked
+    :wait_for_release
+    if exist "%SYP_TEST_BARRIER_BLOCK%" (
+      %SystemRoot%\System32\ping.exe -n 2 -w 100 127.0.0.1 >nul
+      goto wait_for_release
+    )
+  )
+)
+"%SYP_TEST_REAL_GIT%" %*
+exit /b %ERRORLEVEL%
+'@
+        Set-Content -LiteralPath $gitWrapper -Value $gitWrapperText -Encoding ascii
+        $blockArchivePush = Join-Path $remote 'block-archive-push'
+        $archivePushEntered = Join-Path $remote 'archive-push-entered'
+        Set-Content -LiteralPath $blockArchivePush -Value 'hold archive push' -Encoding ascii
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $realGit = (Get-Command git.exe -ErrorAction Stop).Source
+        $recoveryJob = $null
+        $archiveJob = $null
+        try {
+            $archiveJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$GitWrapperDir,$GitWrapperEntered,$GitWrapperBlock,$RealGit)
+                $env:Path = "$GitWrapperDir;$env:Path"
+                $env:SYP_TEST_BARRIER_ROLE = 'archive'
+                $env:SYP_TEST_BARRIER_ENTERED = $GitWrapperEntered
+                $env:SYP_TEST_BARRIER_BLOCK = $GitWrapperBlock
+                $env:SYP_TEST_REAL_GIT = $RealGit
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                try {
+                    $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey 'demo:t2-common-fence'
+                    Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey 'demo:t2-common-fence' `
+                        -ExpectedRevision $common.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
+                        -OperationId 't2-archive-common' -Actor 'writer-b' -Reason 'archive after exact inactivity check' | Out-Null
+                    [pscustomobject]@{status='succeeded'}
+                }
+                catch { [pscustomobject]@{status='failed';error=$_.Exception.Message} }
+            } -ArgumentList $modulePath,$b.RepositoryRoot,$bin,$archivePushEntered,$blockArchivePush,$realGit
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+            while (-not (Test-Path -LiteralPath $archivePushEntered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 50
+            }
+            Test-Path -LiteralPath $archivePushEntered | Should -BeTrue
+
+            $recoveryJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$Payload)
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                try {
+                    $result = New-GitHandoffForkRecovery -Adapter $adapter -TaskKey 'demo:t2-common-fence' `
+                        -ForkId 't2-fork' -Payload $Payload -OperationId 't2-prepare-fork' -Actor 'writer-a'
+                    [pscustomobject]@{status='succeeded';result=$result}
+                }
+                catch { [pscustomobject]@{status='failed';error=$_.Exception.Message} }
+            } -ArgumentList $modulePath,$a.RepositoryRoot,$payload
+            $recoveryResult = Receive-Job -Job $recoveryJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $recoveryJob = $null
+            if ($recoveryResult.status -ne 'succeeded') { throw "T2 recovery writer failed before the race was established: $($recoveryResult.error)" }
+            Remove-Item -LiteralPath $blockArchivePush -Force
+
+            $archiveResult = Receive-Job -Job $archiveJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $archiveJob = $null
+            $archiveResult.status | Should -Be 'failed'
+            $archiveResult.error | Should -Match 'Conditional Handoff revision conflict|Pending fork recovery protects common'
+            $commonAfterRace = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:t2-common-fence'
+            $commonAfterRace.Revision | Should -Not -Be $preFork.Revision
+            $commonAfterRace.Fields.Lifecycle | Should -Be 'Active'
+            @(Get-GitHandoffPendingForkRecoveries -Adapter $b -TaskKey 'demo:t2-common-fence').Count | Should -Be 1
+        }
+        finally {
+            Remove-Item -LiteralPath $blockArchivePush -Force -ErrorAction SilentlyContinue
+            if ($null -ne $recoveryJob) { Stop-Job -Job $recoveryJob -ErrorAction SilentlyContinue; Remove-Job -Job $recoveryJob -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $archiveJob) { Stop-Job -Job $archiveJob -ErrorAction SilentlyContinue; Remove-Job -Job $archiveJob -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # Scenario: A payload writer and an authorized abandonment both observe an empty payload.
+    # Purpose: Payload creation and terminal abandonment must compete on one envelope revision.
+    It 'InterT6_serializes_payload_creation_against_abandonment' {
+        $root = Join-Path $TestDrive 't6-payload-abandon'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer-a'
+        $b = New-WriterFixture -Root $root -WriterId 'writer-b'
+        $remote = Join-Path $root 'remote.git'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:t6-payload-abandon' -Fields $script:InitialCommon `
+            -OperationId 't6-create-common' -Actor 'writer-a' | Out-Null
+        $preFork = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:t6-payload-abandon'
+        $payload = [ordered]@{
+            'Fork Point' = $preFork.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='source A';Source='source evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared';Source='confirmed evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='t6-create-b'}
+            'Step Operation IDs' = [ordered]@{createB='t6-create-b'}
+        }
+        $hook = Join-Path $remote 'hooks/pre-receive'
+        $hookText = @'
+#!/bin/sh
+while read old new ref; do
+  case "$ref" in
+    refs/heads/handoff-v1/recovery/*)
+      if [ -f "$GIT_DIR/block-payload" ]; then
+        : > "$GIT_DIR/payload-entered"
+        while [ -f "$GIT_DIR/block-payload" ]; do sleep 0.02; done
+      fi
+      ;;
+    refs/heads/handoff-v1/recovery-envelopes/*|refs/heads/handoff-v1/recovery-index/*)
+      if [ -f "$GIT_DIR/block-abandon-terminal" ]; then
+        : > "$GIT_DIR/abandon-terminal-entered"
+        while [ -f "$GIT_DIR/block-abandon-terminal" ]; do sleep 0.02; done
+      fi
+      ;;
+  esac
+done
+exit 0
+'@
+        Set-Content -LiteralPath $hook -Value $hookText -Encoding utf8
+        if (-not $IsWindows) {
+            $mode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute
+            [IO.File]::SetUnixFileMode($hook, $mode)
+        }
+        $blockPayload = Join-Path $remote 'block-payload'
+        $payloadEntered = Join-Path $remote 'payload-entered'
+        $blockAbandon = Join-Path $remote 'block-abandon-terminal'
+        $abandonEntered = Join-Path $remote 'abandon-terminal-entered'
+        Set-Content -LiteralPath $blockPayload -Value 'hold payload creation' -Encoding ascii
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $recoveryJob = $null
+        $abandonJob = $null
+        try {
+            $recoveryJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$Payload)
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                try {
+                    $result = New-GitHandoffForkRecovery -Adapter $adapter -TaskKey 'demo:t6-payload-abandon' `
+                        -ForkId 't6-fork' -Payload $Payload -OperationId 't6-prepare-fork' -Actor 'writer-a'
+                    [pscustomobject]@{status='succeeded';result=$result}
+                }
+                catch { [pscustomobject]@{status='failed';error=$_.Exception.Message} }
+            } -ArgumentList $modulePath,$a.RepositoryRoot,$payload
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+            while (-not (Test-Path -LiteralPath $payloadEntered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 50
+            }
+            Test-Path -LiteralPath $payloadEntered | Should -BeTrue
+            $pending = @(Get-GitHandoffPendingForkRecoveries -Adapter $b -TaskKey 'demo:t6-payload-abandon')
+            $pending.Count | Should -Be 1
+            Set-Content -LiteralPath $blockAbandon -Value 'hold terminal abandonment' -Encoding ascii
+
+            $abandonJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$ExpectedEnvelopeRevision)
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                try {
+                    $result = Abandon-GitHandoffForkRecovery -Adapter $adapter -TaskKey 'demo:t6-payload-abandon' `
+                        -ForkId 't6-fork' -ExpectedEnvelopeRevision $ExpectedEnvelopeRevision `
+                        -OperationId 't6-abandon-fork' -Reason 'payload creation did not become durable'
+                    [pscustomobject]@{status='succeeded';result=$result}
+                }
+                catch { [pscustomobject]@{status='failed';error=$_.Exception.Message} }
+            } -ArgumentList $modulePath,$b.RepositoryRoot,$pending[0].Revision
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+            while (-not (Test-Path -LiteralPath $abandonEntered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 50
+            }
+            Test-Path -LiteralPath $abandonEntered | Should -BeTrue
+            Remove-Item -LiteralPath $blockAbandon -Force
+            $abandonResult = Receive-Job -Job $abandonJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $abandonJob = $null
+            Remove-Item -LiteralPath $blockPayload -Force
+            $recoveryResult = Receive-Job -Job $recoveryJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $recoveryJob = $null
+
+            $abandonResult.status | Should -Be 'succeeded'
+            $recoveryResult.status | Should -Be 'failed'
+            $payloadRefs = @(& git -C $a.RepositoryRoot ls-remote origin 'refs/heads/handoff-v1/recovery/*')
+            $payloadRefs.Count | Should -Be 0
+            @(Get-GitHandoffPendingForkRecoveries -Adapter $b -TaskKey 'demo:t6-payload-abandon').Count | Should -Be 0
+            $envelopeRefLines = @(& git --git-dir=$remote for-each-ref --format='%(objectname)' 'refs/heads/handoff-v1/recovery-envelopes')
+            $indexRefLines = @(& git --git-dir=$remote for-each-ref --format='%(objectname)' 'refs/heads/handoff-v1/recovery-index')
+            $envelopeRefLines.Count | Should -Be 1
+            $indexRefLines.Count | Should -Be 1
+            $envelopeJson = ((& git --git-dir=$remote show "$($envelopeRefLines[0]):envelope.json") -join "`n") | ConvertFrom-Json
+            $indexJson = ((& git --git-dir=$remote show "$($indexRefLines[0]):index.json") -join "`n") | ConvertFrom-Json
+            $envelopeJson.status | Should -Be 'Abandoned'
+            $indexJson.status | Should -Be 'Abandoned'
+            $envelopeJson.payloadRevision | Should -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item -LiteralPath $blockPayload,$blockAbandon -Force -ErrorAction SilentlyContinue
+            if ($null -ne $recoveryJob) { Stop-Job -Job $recoveryJob -ErrorAction SilentlyContinue; Remove-Job -Job $recoveryJob -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $abandonJob) { Stop-Job -Job $abandonJob -ErrorAction SilentlyContinue; Remove-Job -Job $abandonJob -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     # Scenario: The payload never commits for an existing-A fork and none of the missing branch work starts.
