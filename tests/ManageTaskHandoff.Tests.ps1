@@ -70,11 +70,14 @@ Describe 'manage-task-handoff Skill contract' {
             'payload-free-pending-envelope','protected-control-record','protected-pending-index-entry','common-revision-fence'
         )
         @($script:Contract.forkRecovery.protectedControlRequiredEvidence) | Should -Be @(
-            'Source Branch ID','Branch Creation Operations','Expected Branch Creation Payload Digests',
+            'Source Branch ID','Source Branch Revision','Source Branch Fork Point','Source Continuation Generation',
+            'Branch Creation Operations','Expected Branch Creation Payload Digests',
             'Payload Object Identity','Payload Digest','Verified Common Revision At Creation','Source ACL Locator'
         )
         $script:Contract.forkRecovery.pendingListUsesAuthorizationIndexWithoutEnvelopeLoad | Should -BeTrue
         $script:Contract.forkRecovery.pendingListMayReturnOpaqueBlockingIndicator | Should -BeTrue
+        $script:Contract.forkRecovery.pendingIndexBlocksCommonArchivalIndependentOfItemVisibility | Should -BeTrue
+        $script:Contract.forkRecovery.sourceBranchAuthorizationBeforePayloadRead | Should -BeTrue
         $script:Contract.forkRecovery.payloadAttestationRequiredBeforeClaim | Should -BeTrue
         $script:Contract.forkRecovery.payloadRevisionBoundInEnvelope | Should -BeTrue
         $script:Contract.forkRecovery.payloadCreationAndAbandonmentShareEnvelopeRevision | Should -BeTrue
@@ -82,6 +85,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.payloadAttestationExcludesMutableRecoveryStatus | Should -BeTrue
         $script:Contract.forkRecovery.terminalStatusStoredOutsideSnapshotAttestation | Should -BeTrue
         $script:Contract.forkRecovery.completionDoesNotRotateSnapshotPayloadDigest | Should -BeTrue
+        $script:Contract.forkRecovery.everyForkPointEqualsVerifiedCommonRevision | Should -BeTrue
+        $script:Contract.forkRecovery.liveSourceBranchBindingBeforeRecoveryAdmission | Should -BeTrue
         $script:Contract.forkRecovery.firstClaimAtomicallyFencesCommonRevision | Should -BeTrue
         $script:Contract.forkRecovery.existingBranchForkUsesSameCommonFence | Should -BeTrue
         $script:Contract.forkRecovery.branchCreateAtomicallyValidatesClaimBinding | Should -BeTrue

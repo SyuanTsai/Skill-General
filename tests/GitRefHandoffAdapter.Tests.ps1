@@ -37,13 +37,22 @@ Describe 'Optional Git-ref Task Handoff adapter' {
             if ($pending.Count -eq 0) {
                 $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
                 if ($null -eq $common) { throw 'The synthetic branch fixture requires common first.' }
-                $effectiveForkPoint = if (@($common.ActiveBranches).Count -eq 0) { [string]$common.Revision } else { $ForkPoint }
+                $effectiveForkPoint = [string]$common.Revision
+                $sourceBranchId = $BranchId
+                $sourceSnapshot = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
+                $sharedBaseline = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
+                if (@($common.ActiveBranches).Count -gt 0) {
+                    $sourceBranchId = [string](@($common.ActiveBranches | Sort-Object)[0])
+                    $sourceBranch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $sourceBranchId
+                    if ($null -eq $sourceBranch) { throw 'The synthetic branch fixture source branch is missing.' }
+                    $sourceSnapshot = [ordered]@{Current=$sourceBranch.Fields.Current;Source=$sourceBranch.Fields.Source}
+                }
                 $payload = [ordered]@{
                     'Fork Point' = $effectiveForkPoint
-                    'Source Branch ID' = $BranchId
+                    'Source Branch ID' = $sourceBranchId
                     'Intended Branch IDs' = @($BranchId)
-                    'Source Snapshot' = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
-                    'Shared Baseline' = [ordered]@{Current=$Fields.Current;Source=$Fields.Source}
+                    'Source Snapshot' = $sourceSnapshot
+                    'Shared Baseline' = $sharedBaseline
                     'Verified Active Branches' = @($common.ActiveBranches)
                     'Branch Creation Operations' = [ordered]@{$BranchId=$OperationId}
                     'Step Operation IDs' = [ordered]@{create=$OperationId}
@@ -656,10 +665,96 @@ exit 0
             -Authorize {
                 param($request)
                 if ($request.Action -eq 'fork-recovery:list-item') { return $false }
-                if ($request.Action -ne 'fork-recovery:list') { throw "unexpected authorization action: $($request.Action)" }
-                return $true
+                if ($request.Action -in @('fork-recovery:list','common:update','common:read')) { return $true }
+                throw "unexpected authorization action: $($request.Action)"
             }
         @(Get-GitHandoffPendingForkRecoveries -Adapter $filtered -TaskKey 'demo:pending-auth').Count | Should -Be 0
+        { Set-GitHandoffFields -Adapter $filtered -RecordKind common -TaskKey 'demo:pending-auth' `
+            -ExpectedRevision $commonAfterRecovery.Revision -Changes ([ordered]@{Lifecycle='Archived'}) `
+            -OperationId 'archive-hidden-pending' -Actor 'filtered-principal' -Reason 'hidden pending must still protect common' } |
+            Should -Throw '*Pending fork recovery protects common*'
+    }
+
+    It 'InterT29h_requires_live_source_binding_before_recovery_admission' {
+        $root = Join-Path $TestDrive 'source-binding'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-binding' -Fields $script:InitialCommon `
+            -OperationId 'create-source-binding-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:source-binding' -BranchId 'thread:A' `
+            -ForkPoint 'ignored-by-fixture' -Fields $script:InitialBranch -OperationId 'create-source-binding-a' `
+            -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-binding'
+        $source = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:source-binding' -BranchId 'thread:A'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$source.Fields.Current;Source=$source.Fields.Source}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @($common.ActiveBranches)
+            'Branch Creation Operations' = [ordered]@{'thread:B'='source-binding-b'}
+            'Step Operation IDs' = [ordered]@{createB='source-binding-b'}
+        }
+        $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:source-binding' `
+            -ForkId 'source-binding-fork' -Payload $payload -OperationId 'prepare-source-binding' -Actor 'writer-a'
+        $recovery.Control.sourceBranchId | Should -Be 'thread:A'
+        $recovery.Control.sourceAclLocator | Should -Be 'thread:A'
+        $recovery.Control.sourceBranchRevision | Should -Be $source.Revision
+        [int64]$recovery.Control.sourceContinuationGeneration | Should -Be $source.ContinuationGeneration
+        $recovery.Control.sourceBranchForkPoint | Should -Be $source.ForkPoint
+
+        $stalePayload = [ordered]@{}
+        foreach ($name in $payload.Keys) { $stalePayload[$name] = $payload[$name] }
+        $currentCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-binding'
+        $stalePayload['Fork Point'] = $currentCommon.Revision
+        $stalePayload['Verified Active Branches'] = @($currentCommon.ActiveBranches)
+        $stalePayload['Source Snapshot'] = [ordered]@{Current='fabricated source state';Source=$source.Fields.Source}
+        { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:source-binding' `
+            -ForkId 'source-binding-stale-fork' -Payload $stalePayload `
+            -OperationId 'prepare-source-binding-stale' -Actor 'writer-a' } |
+            Should -Throw '*Source Snapshot does not match*'
+        Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:source-binding' `
+            -ForkId 'source-binding-stale-fork' | Should -BeNullOrEmpty
+
+        $fabricatedPayload = [ordered]@{}
+        foreach ($name in $payload.Keys) { $fabricatedPayload[$name] = $payload[$name] }
+        $fabricatedPayload['Fork Point'] = $currentCommon.Revision
+        $fabricatedPayload['Verified Active Branches'] = @($currentCommon.ActiveBranches)
+        $fabricatedPayload['Source Branch ID'] = 'thread:unrelated'
+        { New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:source-binding' `
+            -ForkId 'source-binding-fabricated-fork' -Payload $fabricatedPayload `
+            -OperationId 'prepare-source-binding-fabricated' -Actor 'writer-a' } |
+            Should -Throw '*live common Active index*'
+    }
+
+    It 'InterT29i_requires_source_branch_authorization_before_recovery_payload_read' {
+        $root = Join-Path $TestDrive 'source-read-authorization'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-read-auth' -Fields $script:InitialCommon `
+            -OperationId 'create-source-read-auth-common' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-read-auth'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current='private source state';Source='private source evidence'}
+            'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:B'='source-read-auth-b'}
+            'Step Operation IDs' = [ordered]@{createB='source-read-auth-b'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:source-read-auth' `
+            -ForkId 'source-read-auth-fork' -Payload $payload -OperationId 'prepare-source-read-auth' -Actor 'writer-a' | Out-Null
+        $denied = New-GitHandoffAdapter -RepositoryRoot $a.RepositoryRoot -RemoteName origin `
+            -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'source-denied-principal' } -Authorize {
+                param($request)
+                if ($request.Action -eq 'branch:read') { return $false }
+                return $true
+            }
+        { Get-GitHandoffForkRecovery -Adapter $denied -TaskKey 'demo:source-read-auth' `
+            -ForkId 'source-read-auth-fork' } | Should -Throw '*access was denied*'
     }
 
     # Scenario: A recovery admission and common archival both read the same Active common revision.
@@ -909,13 +1004,15 @@ exit 0
             -OperationId 'create-abandon-common' -Actor 'writer-a' | Out-Null
         New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A' `
             -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-existing-a' -Actor 'writer-a' | Out-Null
+        $existingCommon = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:abandon-empty'
+        $existingSource = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:abandon-empty' -BranchId 'thread:A'
         $payload = [ordered]@{
-            'Fork Point' = 'shared-r1'
+            'Fork Point' = $existingCommon.Revision
             'Source Branch ID' = 'thread:A'
             'Intended Branch IDs' = @('thread:A','thread:B')
-            'Source Snapshot' = [ordered]@{Current='existing A state';Source='existing A evidence'}
+            'Source Snapshot' = [ordered]@{Current=$existingSource.Fields.Current;Source=$existingSource.Fields.Source}
             'Shared Baseline' = [ordered]@{Current='confirmed shared state';Source='confirmed shared evidence'}
-            'Verified Active Branches' = @('thread:A')
+            'Verified Active Branches' = @($existingCommon.ActiveBranches)
             'Branch Creation Operations' = [ordered]@{'thread:B'='create-missing-b'}
             'Step Operation IDs' = [ordered]@{createB='create-missing-b';indexB='index-missing-b'}
         }
