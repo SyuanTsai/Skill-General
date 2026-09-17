@@ -21,6 +21,15 @@
         "change.value",
         "change.effective_native_time"
       ],
+      "unmergedChangeFingerprintCanonicalOrder": [
+        "change.effective_native_time",
+        "change.id",
+        "change.last_edited_time",
+        "change.merged",
+        "change.field",
+        "change.value"
+      ],
+      "unmergedChangeFingerprintUsesTotalOrder": true,
       "reReadMainAndCompleteUnmergedSetBeforeReturn": true,
       "requireExactFingerprintMatch": true,
       "maxReconstructionRetries": 2,
