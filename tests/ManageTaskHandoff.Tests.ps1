@@ -73,6 +73,9 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.pendingListUsesAuthorizationIndexWithoutEnvelopeLoad | Should -BeTrue
         $script:Contract.forkRecovery.pendingListMayReturnOpaqueBlockingIndicator | Should -BeTrue
         $script:Contract.forkRecovery.payloadAttestationRequiredBeforeClaim | Should -BeTrue
+        $script:Contract.forkRecovery.payloadAttestationExcludesMutableRecoveryStatus | Should -BeTrue
+        $script:Contract.forkRecovery.terminalStatusStoredOutsideSnapshotAttestation | Should -BeTrue
+        $script:Contract.forkRecovery.completionDoesNotRotateSnapshotPayloadDigest | Should -BeTrue
         $script:Contract.forkRecovery.firstClaimAtomicallyFencesCommonRevision | Should -BeTrue
         $script:Contract.forkRecovery.existingBranchForkUsesSameCommonFence | Should -BeTrue
         $script:Contract.forkRecovery.branchCreateAtomicallyValidatesClaimBinding | Should -BeTrue
@@ -101,7 +104,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.firstFork.pendingUsesDedicatedForkRecoveryRecord | Should -BeTrue
         $script:Contract.firstFork.pendingNeverUsesCommonOrBranchFields | Should -BeTrue
         $script:Contract.firstFork.forkRecoveryPayloadExcludedFromTaskRecall | Should -BeTrue
-        $script:Contract.firstFork.pendingEnvelopeVisibleToTaskRecall | Should -BeTrue
+        $script:Contract.firstFork.pendingEnvelopeVisibleToTaskRecall | Should -BeFalse
+        $script:Contract.firstFork.pendingRecallExposesProtectedIndexIndicatorOnly | Should -BeTrue
         $script:Contract.firstFork.forkRecoveryHistoryKeepsPayloadIsolated | Should -BeTrue
         $script:Contract.firstFork.commonOnlyRecoveryCompletesAfterConfirmedCommonReadback | Should -BeTrue
         $script:Contract.firstFork.existingPeerPendingPreservesBranchCurrentAndSource | Should -BeTrue
@@ -297,6 +301,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.legacy.unmappedOrDeniedSourceFailsBeforeQuery | Should -BeTrue
         $script:Contract.legacy.readOnlyReplayCapturesMainAndUnmergedFingerprint | Should -BeTrue
         $script:Contract.legacy.readOnlyReplayRevalidatesFingerprintBeforeReturn | Should -BeTrue
+        $script:Contract.legacy.unmergedChangeFingerprintUsesTotalOrder | Should -BeTrue
+        @($script:Contract.legacy.unmergedChangeFingerprintCanonicalOrder) | Should -Be @(
+            'change.effective_native_time','change.id','change.last_edited_time','change.merged','change.field','change.value'
+        )
         $script:Contract.legacy.onUnstableReadOnlyReplay | Should -Be 'bounded-reconstruct-or-stop'
         $script:Contract.legacy.bulkMigration | Should -BeFalse
         $script:Contract.legacy.autoResumeOnNewConversation | Should -BeFalse
