@@ -2158,7 +2158,8 @@ function Invoke-GitHandoffFieldsMutation {
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($BranchId)) { throw 'An exact Branch ID is required for its own record.' }
     if ($RecordKind -eq 'branch') {
         $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
-        if ($pendingRecoveryBlocker.HasPending) {
+        $isPendingCreationArchive = ($Changes.Contains('Lifecycle') -and [string]$Changes['Lifecycle'] -ceq 'Archived')
+        if ($pendingRecoveryBlocker.HasPending -and -not $isPendingCreationArchive) {
             throw 'A Pending fork recovery blocks branch mutation until every branch creation and index step is reconciled.'
         }
     }
@@ -2471,7 +2472,7 @@ function Set-GitHandoffBranchLifecycle {
             else { 'restore the exact peer on explicit continuation' }
     }
     $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
-    if ($pendingRecoveryBlocker.HasPending) {
+    if ($pendingRecoveryBlocker.HasPending -and $Lifecycle -cne 'Archived') {
         throw 'A Pending fork recovery blocks branch lifecycle mutation until every branch creation and index step is reconciled.'
     }
     $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
