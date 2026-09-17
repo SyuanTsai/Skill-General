@@ -757,6 +757,46 @@ exit 0
             -ForkId 'source-read-auth-fork' } | Should -Throw '*access was denied*'
     }
 
+    It 'InterT29j_blocks_exact_branch_mutation_while_fork_recovery_is_pending' {
+        $root = Join-Path $TestDrive 'pending-branch-mutation'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $commonFields = [ordered]@{
+            Intent = 'Compare options without selecting one'
+            Scope = 'Confirmed version 2 requirement'
+            Current = 'Confirmed baseline before branch exploration'
+            Source = 'synthetic revision pending-branch-mutation'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-branch-mutation' `
+            -Fields $commonFields -OperationId 'create-common-pending-branch-mutation' -Actor 'writer-a' | Out-Null
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-branch-mutation'
+        $payload = [ordered]@{
+            'Fork Point' = $common.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:A','thread:B')
+            'Source Snapshot' = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source}
+            'Shared Baseline' = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source}
+            'Verified Active Branches' = @()
+            'Branch Creation Operations' = [ordered]@{'thread:A'='create-pending-A';'thread:B'='create-pending-B'}
+            'Step Operation IDs' = [ordered]@{createA='create-pending-A';createB='create-pending-B';finish='finish-pending-branch-mutation'}
+        }
+        New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:pending-branch-mutation' -ForkId 'pending-branch-mutation-fork' `
+            -Payload $payload -OperationId 'prepare-pending-branch-mutation' -Actor 'writer-a' | Out-Null
+        $branchFields = [ordered]@{Current=$common.Fields.Current;Source=$common.Fields.Source;Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -ForkPoint $common.Revision -Fields $branchFields -OperationId 'create-pending-A' -Actor 'writer-a' | Out-Null
+        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A'
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -ExpectedRevision $branch.Revision -Changes ([ordered]@{Current='unsafe branch continuation'}) `
+            -OperationId 'unsafe-pending-branch-update' } | Should -Throw '*Pending fork recovery blocks branch mutation*'
+        { Start-GitHandoffBranchContinuation -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A' `
+            -OperationId 'unsafe-pending-branch-continuation' } | Should -Throw '*Pending fork recovery blocks branch lifecycle mutation*'
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:pending-branch-mutation' -BranchId 'thread:A').Fields.Current |
+            Should -Be $common.Fields.Current
+    }
+
     # Scenario: A recovery admission and common archival both read the same Active common revision.
     # Purpose: The admission must fence the common revision before either writer can commit its decision.
     It 'InterT2_serializes_recovery_admission_against_common_archival' {

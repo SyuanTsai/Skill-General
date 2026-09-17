@@ -2130,6 +2130,12 @@ function Invoke-GitHandoffFieldsMutation {
     if ([string]::IsNullOrWhiteSpace($Reason)) { $Reason = 'field checkpoint with traceable Source' }
     if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff field event requires an actor.' }
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($BranchId)) { throw 'An exact Branch ID is required for its own record.' }
+    if ($RecordKind -eq 'branch') {
+        $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
+        if ($pendingRecoveryBlocker.HasPending) {
+            throw 'A Pending fork recovery blocks branch mutation until every branch creation and index step is reconciled.'
+        }
+    }
     $hasBranchOutcome = ($RecordKind -eq 'branch' -and $Changes.Contains('Branch Outcome'))
     if ($hasBranchOutcome -and [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
         throw 'Branch Outcome requires the exact verified common decision revision.'
@@ -2415,6 +2421,10 @@ function Set-GitHandoffBranchLifecycle {
     if ([string]::IsNullOrWhiteSpace($Reason)) {
         $Reason = if ($Lifecycle -ceq 'Archived') { 'archive the exact peer after the validated Gate' }
             else { 'restore the exact peer on explicit continuation' }
+    }
+    $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
+    if ($pendingRecoveryBlocker.HasPending) {
+        throw 'A Pending fork recovery blocks branch lifecycle mutation until every branch creation and index step is reconciled.'
     }
     $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
     $branch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
