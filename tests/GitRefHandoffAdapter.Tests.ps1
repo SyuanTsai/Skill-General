@@ -1657,6 +1657,161 @@ exit 0
             -Reason 'an ordinary descendant cannot authorize finalization' } | Should -Throw '*did not originate*'
     }
 
+    It 'InterT84c_fences_decision_bound_branch_write_against_a_live_common_decision_change' {
+        $root = Join-Path $TestDrive 'q84c'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c' -Fields $script:InitialCommon `
+            -OperationId 'create-q84c-common' -Actor 'writer-a' | Out-Null
+        foreach ($branchId in @('thread:A','thread:B')) {
+            New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId $branchId `
+                -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+                -OperationId "create-$($branchId.Replace(':','-'))" -Actor 'writer-a' | Out-Null
+        }
+        $bindingOne = @(
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A' -Outcome Superseded
+            Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:B' -Outcome Superseded
+        )
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c'
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:q84c' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision one';'Decision Branch Bindings'=$bindingOne
+            }) -OperationId 'q84c-decision-one' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'first confirmed branch decision' | Out-Null
+        $decisionOneRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c').Revision
+
+        $bin = Join-Path $root 'git-barrier-bin'
+        [void](New-Item -ItemType Directory -Path $bin)
+        $gitWrapper = Join-Path $bin 'git.cmd'
+        $gitWrapperText = @'
+@echo off
+setlocal EnableDelayedExpansion
+if /I "%SYP_TEST_BARRIER_ROLE%"=="decision-finalize" (
+  set "HANDOFF_IS_COMMIT_TREE=0"
+  for %%A in (%*) do if /I "%%~A"=="commit-tree" set "HANDOFF_IS_COMMIT_TREE=1"
+  if "!HANDOFF_IS_COMMIT_TREE!"=="1" (
+    if not exist "%SYP_TEST_BARRIER_FIRST%" (
+      >"%SYP_TEST_BARRIER_FIRST%" echo common fence commit created
+    ) else (
+      >"%SYP_TEST_BARRIER_ENTERED%" echo decision-bound branch commit created
+      :wait_for_release
+      if exist "%SYP_TEST_BARRIER_BLOCK%" (
+        %SystemRoot%\System32\ping.exe -n 2 -w 100 127.0.0.1 >nul
+        goto wait_for_release
+      )
+    )
+  )
+)
+"%SYP_TEST_REAL_GIT%" %*
+exit /b %ERRORLEVEL%
+'@
+        Set-Content -LiteralPath $gitWrapper -Value $gitWrapperText -Encoding ascii
+        $remote = Join-Path $root 'remote.git'
+        $blockFinalizePush = Join-Path $remote 'block-finalize-push'
+        $finalizePushEntered = Join-Path $remote 'finalize-push-entered'
+        $commitTreeFirst = Join-Path $remote 'commit-tree-first'
+        Set-Content -LiteralPath $blockFinalizePush -Value 'hold decision-bound branch push' -Encoding ascii
+        $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
+        $realGit = (Get-Command git.exe -ErrorAction Stop).Source
+        $priorGitFunction = Get-Command git -CommandType Function -ErrorAction SilentlyContinue
+        function global:git {
+            $gitArguments = @($args)
+            if ($env:SYP_TEST_BARRIER_ROLE -eq 'decision-finalize' -and $gitArguments -contains 'commit-tree') {
+                if (-not (Test-Path -LiteralPath $env:SYP_TEST_BARRIER_FIRST)) {
+                    Set-Content -LiteralPath $env:SYP_TEST_BARRIER_FIRST -Value 'common fence commit created' -Encoding ascii
+                }
+                else {
+                    Set-Content -LiteralPath $env:SYP_TEST_BARRIER_ENTERED -Value 'decision-bound branch commit created' -Encoding ascii
+                    while (Test-Path -LiteralPath $env:SYP_TEST_BARRIER_BLOCK) {
+                        Start-Sleep -Milliseconds 50
+                    }
+                }
+            }
+            & $env:SYP_TEST_REAL_GIT @gitArguments
+        }
+        $decisionJob = $null
+        $originalPath = $env:Path
+        $originalBarrierRole = $env:SYP_TEST_BARRIER_ROLE
+        $originalBarrierEntered = $env:SYP_TEST_BARRIER_ENTERED
+        $originalBarrierBlock = $env:SYP_TEST_BARRIER_BLOCK
+        $originalBarrierFirst = $env:SYP_TEST_BARRIER_FIRST
+        $originalRealGit = $env:SYP_TEST_REAL_GIT
+        try {
+            $decisionJob = Start-Job -ScriptBlock {
+                param($ModulePath,$RepositoryRoot,$GitWrapperDir,$BarrierEntered,$BarrierBlock)
+                $env:Path = (($env:Path -split ';') | Where-Object { $_ -and $_ -ne $GitWrapperDir }) -join ';'
+                $env:SYP_TEST_BARRIER_ROLE = ''
+                Import-Module $ModulePath -Force
+                $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
+                    -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
+                    -Authorize { param($request) $true }
+                $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+                while (-not (Test-Path -LiteralPath $BarrierEntered) -and [DateTimeOffset]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 50
+                }
+                if (-not (Test-Path -LiteralPath $BarrierEntered)) { throw 'The branch writer did not reach the push barrier.' }
+                $commonB = Get-GitHandoffCommon -Adapter $adapter -TaskKey 'demo:q84c'
+                $bindingTwo = @(
+                    Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey 'demo:q84c' -BranchId 'thread:A' -Outcome Selected
+                    Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey 'demo:q84c' -BranchId 'thread:B' -Outcome Selected
+                )
+                Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey 'demo:q84c' `
+                    -ExpectedRevision $commonB.Revision -Changes ([ordered]@{
+                        Current='Decision two';'Decision Branch Bindings'=$bindingTwo
+                    }) -OperationId 'q84c-decision-two' -DecisionConfirmed -Actor 'writer-b' `
+                    -Reason 'user replaced the prior branch decision' | Out-Null
+                Remove-Item -LiteralPath $BarrierBlock -Force -ErrorAction SilentlyContinue
+                [pscustomobject]@{status='succeeded'}
+            } -ArgumentList $modulePath,$b.RepositoryRoot,$bin,$finalizePushEntered,$blockFinalizePush
+
+            $env:Path = "$bin;$env:Path"
+            $env:SYP_TEST_BARRIER_ROLE = 'decision-finalize'
+            $env:SYP_TEST_BARRIER_ENTERED = $finalizePushEntered
+            $env:SYP_TEST_BARRIER_BLOCK = $blockFinalizePush
+            $env:SYP_TEST_BARRIER_FIRST = $commitTreeFirst
+            $env:SYP_TEST_REAL_GIT = $realGit
+            $finalizeFailure = $null
+            try {
+                $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A'
+                Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:q84c' -BranchId 'thread:A' `
+                    -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Superseded'}) `
+                    -OperationId 'q84c-race-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionOneRevision `
+                    -Actor 'writer-a' -Reason 'archive the reviewed branch after decision' | Out-Null
+            }
+            catch { $finalizeFailure = [string]$_.Exception.Message }
+            $finalizePushEntered | Should -Exist
+            $finalizeFailure | Should -Match 'live common decision|decision-bound branch|atomic|Conditional|supplied common revision'
+            $decisionResult = Receive-Job -Job $decisionJob -Wait -AutoRemoveJob -ErrorAction Stop
+            $decisionJob = $null
+            $decisionResult.status | Should -Be 'succeeded'
+            $afterRace = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:q84c' -BranchId 'thread:A'
+            $afterRace.Fields.Contains('Branch Outcome') | Should -BeFalse
+            (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:q84c' -RecordKind branch `
+                -BranchId 'thread:A' -OperationId 'q84c-race-outcome' -Field 'Branch Outcome') | Should -BeNullOrEmpty
+            (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:q84c').Fields.Current | Should -Be 'Decision two'
+        }
+        finally {
+            $env:Path = $originalPath
+            $env:SYP_TEST_BARRIER_ROLE = $originalBarrierRole
+            $env:SYP_TEST_BARRIER_ENTERED = $originalBarrierEntered
+            $env:SYP_TEST_BARRIER_BLOCK = $originalBarrierBlock
+            $env:SYP_TEST_BARRIER_FIRST = $originalBarrierFirst
+            $env:SYP_TEST_REAL_GIT = $originalRealGit
+            if ($null -ne $priorGitFunction) {
+                Set-Item -Path Function:\global:git -Value $priorGitFunction.ScriptBlock
+            }
+            else {
+                Remove-Item -Path Function:\global:git -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $blockFinalizePush -Force -ErrorAction SilentlyContinue
+            if ($null -ne $decisionJob) {
+                Stop-Job -Job $decisionJob -ErrorAction SilentlyContinue
+                Remove-Job -Job $decisionJob -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     # Scenario: A peer changes reviewed branch content after a common decision but before its finalization.
     # Purpose: Stop old-decision outcomes and archival until the user confirms a new exact branch revision and content identity.
     It 'InterT84_binds_finalization_to_the_exact_reviewed_branch_revision_and_content' {

@@ -301,6 +301,32 @@ function Push-GitHandoffForkBranchIfCommonRevision {
     return [pscustomobject]@{BranchRevision=$verifiedBranch;CommonRevision=$verifiedCommon}
 }
 
+function Push-GitHandoffBranchMutationIfRevisions {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $BranchRef,
+        [Parameter(Mandatory = $true)][string] $ExpectedBranchRevision,[Parameter(Mandatory = $true)][string] $BranchCommit,
+        [Parameter(Mandatory = $true)][string] $CommonRef,[Parameter(Mandatory = $true)][string] $ExpectedCommonRevision,
+        [Parameter(Mandatory = $true)][string] $CommonFenceCommit)
+    $arguments = @('-C',[string]$Adapter.RepositoryRoot,'push','--quiet','--atomic',
+        "--force-with-lease=${BranchRef}:${ExpectedBranchRevision}",
+        "--force-with-lease=${CommonRef}:${ExpectedCommonRevision}",
+        [string]$Adapter.RemoteName,"${BranchCommit}:${BranchRef}","${CommonFenceCommit}:${CommonRef}")
+    $pushOutput = @(& git @arguments 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        $remoteBranch = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $BranchRef
+        $remoteCommon = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $CommonRef
+        if ($remoteBranch -cne $ExpectedBranchRevision -or $remoteCommon -cne $ExpectedCommonRevision) {
+            throw 'The live common decision or branch revision changed before the decision-bound branch write; no branch mutation was committed.'
+        }
+        throw "The decision-bound branch and common fence were not committed atomically: $($pushOutput -join ' ')"
+    }
+    $verifiedBranch = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $BranchRef
+    $verifiedCommon = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $CommonRef
+    if ($verifiedBranch -cne $BranchCommit -or $verifiedCommon -cne $CommonFenceCommit) {
+        throw 'The decision-bound branch and common fence were not atomically read back.'
+    }
+    return [pscustomobject]@{BranchRevision=$verifiedBranch;CommonRevision=$verifiedCommon}
+}
+
 function Assert-GitHandoffForkRecoveryCommonFence {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
         [Parameter(Mandatory = $true)][string] $ExpectedRevision,[Parameter(Mandatory = $true)][string] $FailureMessage)
@@ -2294,8 +2320,30 @@ function Invoke-GitHandoffFieldsMutation {
         @($actualChanges | Where-Object { $_.field -cne 'Active Branches' }).Count -gt 0) {
         $newRecord.lastActivityAt = $operation.occurredAt
     }
+    $commonFenceCommit = $null
+    $liveCommon = $null
+    if ($RecordKind -eq 'branch' -and -not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
+        $liveCommon = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+        if ($null -eq $liveCommon) { throw 'The exact common decision record disappeared before the decision-bound branch write.' }
+        Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
+            -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
+        $liveBinding = Assert-GitHandoffDecisionBranchBinding -Adapter $Adapter -TaskKey $TaskKey `
+            -BranchId $BranchId -DecisionCommonRevision $DecisionCommonRevision -ExpectedOutcome $expectedOutcome
+        if ([string]$liveBinding.CurrentRevision -cne [string]$old.Revision) {
+            throw "Reviewed branch '$BranchId' changed before the decision-bound branch write; re-read before retrying."
+        }
+        $commonFenceCommit = New-GitHandoffCommit -Adapter $Adapter -Document $liveCommon.Record `
+            -Parent $liveCommon.Revision -FileName 'record.json'
+    }
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $newRecord -Parent $old.Revision -FileName 'record.json'
-    Push-GitHandoffIfRevision -Adapter $Adapter -Ref $old.Ref -ExpectedRevision $ExpectedRevision -Commit $commit | Out-Null
+    if ($null -ne $commonFenceCommit) {
+        Push-GitHandoffBranchMutationIfRevisions -Adapter $Adapter -BranchRef $old.Ref `
+            -ExpectedBranchRevision $ExpectedRevision -BranchCommit $commit -CommonRef $liveCommon.Ref `
+            -ExpectedCommonRevision $liveCommon.Revision -CommonFenceCommit $commonFenceCommit | Out-Null
+    }
+    else {
+        Push-GitHandoffIfRevision -Adapter $Adapter -Ref $old.Ref -ExpectedRevision $ExpectedRevision -Commit $commit | Out-Null
+    }
     $read = Read-GitHandoffRecord -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($null -eq $read -or $read.Revision -cne $commit -or $read.Record.operations[$OperationId].payloadDigest -cne $digest) {
         throw "Operation ID '$OperationId' may have committed, but record readback is unverified."
