@@ -797,6 +797,83 @@ exit 0
             Should -Be $common.Fields.Current
     }
 
+    It 'InterT85_isolates_existing_peer_snapshot_and_revalidates_common_before_new_branch_claim' {
+        $root = Join-Path $TestDrive 'epf'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        $b = New-WriterFixture -Root $root -WriterId 'b'
+        $commonFields = [ordered]@{
+            Intent = 'Compare options without selecting one'
+            Scope = 'Confirmed shared requirement before the existing-peer fork'
+            Current = 'Confirmed shared baseline before the existing-peer fork'
+            Source = 'synthetic shared evidence before the existing-peer fork'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        $sourceFields = [ordered]@{
+            Current = 'A private candidate before the existing-peer fork'
+            Source = 'A private evidence before the existing-peer fork'
+            Lifecycle = 'Active'
+            'Work State' = 'Running'
+        }
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence' -Fields $commonFields `
+            -OperationId 'existing-peer-create-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A' `
+            -ForkPoint 'ignored-by-fixture' -Fields $sourceFields -OperationId 'existing-peer-create-A' -Actor 'writer-a' | Out-Null
+
+        $commonBefore = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence'
+        $sourceBefore = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A'
+        $payload = [ordered]@{
+            'Fork Point' = $commonBefore.Revision
+            'Source Branch ID' = 'thread:A'
+            'Intended Branch IDs' = @('thread:B')
+            'Source Snapshot' = [ordered]@{Current=$sourceBefore.Fields.Current;Source=$sourceBefore.Fields.Source}
+            'Shared Baseline' = [ordered]@{Current=$commonBefore.Fields.Current;Source=$commonBefore.Fields.Source}
+            'Verified Active Branches' = @('thread:A')
+            'Branch Creation Operations' = [ordered]@{'thread:B'='existing-peer-create-B'}
+            'Step Operation IDs' = [ordered]@{createB='existing-peer-create-B';finish='existing-peer-finish'}
+        }
+        $recovery = New-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -ForkId 'existing-peer-fence-fork' -Payload $payload -OperationId 'existing-peer-prepare' -Actor 'writer-a'
+        $persisted = (Get-GitHandoffForkRecovery -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -ForkId 'existing-peer-fence-fork').Payload
+        $recovery.Status | Should -Be 'Pending'
+        $persisted['Source Snapshot'].Current | Should -Be $sourceBefore.Fields.Current
+        $persisted['Source Snapshot'].Source | Should -Be $sourceBefore.Fields.Source
+        $persisted['Shared Baseline'].Current | Should -Be $commonBefore.Fields.Current
+        $persisted['Shared Baseline'].Source | Should -Be $commonBefore.Fields.Source
+        $recovery.Control.sourceBranchRevision | Should -Be $sourceBefore.Revision
+
+        $commonAfterAdmission = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence'
+        $commonAfterAdmission.Fields.Current | Should -Be $commonBefore.Fields.Current
+        $commonAfterAdmission.Fields.Source | Should -Be $commonBefore.Fields.Source
+        (Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:existing-peer-fence' -RecordKind common `
+            -OperationId 'existing-peer-prepare' -Field 'Current') | Should -BeNullOrEmpty
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:A' `
+            -ExpectedRevision $sourceBefore.Revision -Changes ([ordered]@{Current='A advanced while B was pending'}) `
+            -OperationId 'existing-peer-unsafe-A-update' } | Should -Throw '*Pending fork recovery blocks branch mutation*'
+
+        $commonPeer = Get-GitHandoffCommon -Adapter $b -TaskKey 'demo:existing-peer-fence'
+        Set-GitHandoffFields -Adapter $b -RecordKind common -TaskKey 'demo:existing-peer-fence' `
+            -ExpectedRevision $commonPeer.Revision -Changes ([ordered]@{
+                Current='Superseding shared state before B creation'
+                Source='new shared evidence before B creation'
+            }) -OperationId 'existing-peer-advance-common' -Actor 'writer-b' `
+            -Reason 'supersede the shared state before the pending peer is claimed' | Out-Null
+        $sharedBaselineFields = [ordered]@{
+            Current=$persisted['Shared Baseline'].Current
+            Source=$persisted['Shared Baseline'].Source
+            Lifecycle='Active'
+            'Work State'='Running'
+        }
+        { GitRefHandoffAdapter\New-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' `
+            -BranchId 'thread:B' -ForkPoint $persisted['Fork Point'] -Fields $sharedBaselineFields `
+            -OperationId 'existing-peer-create-B' -Actor 'writer-a' } | Should -Throw '*verified common recovery fence changed*'
+        Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:existing-peer-fence' -BranchId 'thread:B' | Should -BeNullOrEmpty
+        (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:existing-peer-fence').Fields.Current |
+            Should -Be 'Superseding shared state before B creation'
+    }
+
     # Scenario: A recovery admission and common archival both read the same Active common revision.
     # Purpose: The admission must fence the common revision before either writer can commit its decision.
     It 'InterT2_serializes_recovery_admission_against_common_archival' {
