@@ -208,7 +208,11 @@ exit 0
         $root = Join-Path $TestDrive 'creation-actor'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
-        (Get-Command New-GitHandoffCommon).Parameters.Actor.Attributes.Mandatory | Should -Contain $true
+        $actorParameterAttributes = @(
+            (Get-Command New-GitHandoffCommon).Parameters.Actor.Attributes |
+                Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }
+        )
+        $actorParameterAttributes.Mandatory | Should -Contain $true
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:actor' -Fields $script:InitialCommon `
             -OperationId 'create-with-actor' -Actor 'claimed-admin' | Out-Null
         $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:actor' -RecordKind common `
