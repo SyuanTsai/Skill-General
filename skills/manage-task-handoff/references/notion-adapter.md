@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Optional Notion adapter
 
-This is an example mapping for adopters who chose Notion. It does not make Notion the public template's authority. Establish the adopter's intended workspace, role, data source identities and write authorization before any live mutation. Existing memory and Handoff data sources are distinct; a missing AI Memory source does not prove the Handoff source is missing. Do not create properties, databases, or a migration as an implicit fallback.
+This is an example mapping for an opaque memory target whose trusted adopter configuration selects the Notion adapter. Choosing the target does not make Notion the public template's authority and does not require the core to know a provider, account, model, endpoint, or signer. Inspect this adapter's activation requirements only when that selected target is about to perform content I/O. Establish the adopter's intended workspace, role, data source identities and write authorization before any live mutation; missing or unverified activation fails closed before content access. Existing memory and Handoff data sources are distinct; a missing AI Memory source does not prove the Handoff source is missing. Do not inspect an unselected Notion adapter or create properties, databases, or a migration as an implicit fallback.
 
 ## Capability status
 
