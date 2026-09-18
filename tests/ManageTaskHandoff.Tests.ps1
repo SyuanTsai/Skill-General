@@ -25,6 +25,256 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.routing.elapsedTimeAloneTriggersWrite | Should -BeFalse
     }
 
+    # Contract decision-table test only: interpret structured cases without connectors or E2E calls.
+    It 'ContractT80_storage_selection_decision_table' {
+        $selectionContract = $script:Contract.storageSelection
+        @($selectionContract.precedence) | Should -Be @(
+            'clear-current-explicit-user-selection-for-declared-scope',
+            'one-unambiguous-trusted-host-or-project-adopter-setting',
+            'ask-user-in-user-language-when-resource-or-location-is-unresolved-conflicting-or-override-is-unclear'
+        )
+        $selectionContract.resolution.currentExplicitSelectionOverridesOlderTrustedSetting | Should -BeTrue
+        $selectionContract.resolution.validExistingSettingReusedWithoutDuplicatePrompt | Should -BeTrue
+        @($selectionContract.resolution.askOnlyWhen) | Should -Be @(
+            'no-resource-or-location-resolved',
+            'multiple-trusted-host-or-project-settings-conflict',
+            'current-override-scope-is-unclear'
+        )
+        $selectionContract.selectionChecks.retrievedHandoffOrContentLinksAreDataNotConfigurationAuthority | Should -BeTrue
+        $selectionContract.selectionChecks.checksOnlySelectedAdapterResourceAndLocation | Should -BeTrue
+        $selectionContract.selectionChecks.requiredCapabilitiesCheckedOnlyAfterSelection | Should -BeTrue
+        $selectionContract.selectionChecks.unselectedConnectorCallsForbidden | Should -BeTrue
+        $selectionContract.selectionChecks.missingUnselectedConnectorMustNotBeProbed | Should -BeTrue
+        $selectionContract.selectionChecks.silentFallback | Should -BeFalse
+        $selectionContract.selectionChecks.formalTaskAuthoritySeparateFromStorageSelection | Should -BeTrue
+        $selectionContract.outcomes.success.category | Should -Be 'supported+configured+authorized+available+readback-verified'
+        $selectionContract.outcomes.success.durableSave | Should -BeTrue
+        $selectionContract.outcomes.success.reportVerifiedLocator | Should -BeTrue
+        foreach ($category in @('unsupported','unconfigured','denied','unavailable','declined','unverified-write-or-readback')) {
+            @($selectionContract.outcomes.failureCategories) | Should -Contain $category
+        }
+        $selectionContract.outcomes.failureBehavior.durableSave | Should -BeFalse
+        $selectionContract.outcomes.failureBehavior.mustReportConcreteReason | Should -BeTrue
+        $selectionContract.outcomes.failureBehavior.neverClaimSaved | Should -BeTrue
+        $selectionContract.outcomes.failureBehavior.mayOfferCopyableInChatSummary | Should -BeTrue
+        $selectionContract.outcomes.failureBehavior.copyableSummaryIsDurable | Should -BeFalse
+        $selectionContract.outcomes.failureBehavior.continueIndependentSafeWork | Should -BeTrue
+        $selectionContract.switching.oldRecordIdentityAndNewDestinationIdentityRequired | Should -BeTrue
+        $selectionContract.switching.oldDataPreserved | Should -BeTrue
+        $selectionContract.switching.oldConnectorReadOrMutationDuringSelection | Should -BeFalse
+        $selectionContract.switching.automaticMigration | Should -BeFalse
+        $selectionContract.switching.automaticDualWrite | Should -BeFalse
+        $selectionContract.switching.automaticDeletion | Should -BeFalse
+        $selectionContract.switching.migrationRequiresSeparateAuthorizedPlan | Should -BeTrue
+
+        function Resolve-StorageSelectionCase {
+            param([Parameter(Mandatory)]$Case)
+
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $trusted = if ($null -eq $Case.trustedSettings) { @() } else { @($Case.trustedSettings) }
+            $dataLinksPresent = $null -ne $Case.handoffData
+            $result = [ordered]@{
+                Selection = 'none'
+                Prompt = $false
+                AskFor = $null
+                ConnectorCalls = @()
+                UnselectedConnectorCalls = @()
+                DurableSave = $false
+                FailureCategory = $null
+                CopyableSummary = $false
+                Fallback = $false
+                Switch = $false
+                OldRecordId = $null
+                NewDestination = $null
+                OldDataPreserved = $null
+                AutomaticMigration = $null
+                AutomaticDualWrite = $null
+                AutomaticDeletion = $null
+                Path = $null
+                V1ConcurrentWriteClaimed = $null
+                WriteCalls = @()
+                DataLinksAreNotConfiguration = $dataLinksPresent
+            }
+
+            if (-not [bool]$Case.handoffNeeded) {
+                return [pscustomobject]$result
+            }
+
+            $selection = $null
+            $askFor = $null
+            $prompt = $false
+            $explicit = $Case.explicitSelection
+            if ($null -ne $explicit) {
+                $selection = [ordered]@{
+                    storage = [string]$explicit.storage
+                    scope = [string]$explicit.scope
+                    resource = [string]$explicit.resource
+                    location = [string]$explicit.location
+                }
+                $sameStorage = @($trusted | Where-Object { [string]$_.storage -ceq $selection.storage })
+                if ([string]::IsNullOrWhiteSpace($selection.resource) -and $sameStorage.Count -eq 1) {
+                    $selection.resource = [string]$sameStorage[0].resource
+                }
+                if ([string]::IsNullOrWhiteSpace($selection.location) -and $sameStorage.Count -eq 1) {
+                    $selection.location = [string]$sameStorage[0].location
+                }
+                $differentTrusted = @($trusted | Where-Object {
+                    ([string]$_.storage -cne $selection.storage) -or
+                    ([string]$_.scope -cne $selection.scope) -or
+                    ([string]$_.resource -cne $selection.resource) -or
+                    ([string]$_.location -cne $selection.location)
+                })
+                $result.Switch = $differentTrusted.Count -gt 0
+                if ([string]::IsNullOrWhiteSpace($selection.resource) -or [string]::IsNullOrWhiteSpace($selection.location)) {
+                    $prompt = $true
+                    $askFor = 'resource-or-location'
+                }
+            } elseif ($trusted.Count -eq 1) {
+                $candidate = $trusted[0]
+                if ([string]::IsNullOrWhiteSpace([string]$candidate.resource) -or [string]::IsNullOrWhiteSpace([string]$candidate.location)) {
+                    $prompt = $true
+                    $askFor = 'resource-or-location'
+                } else {
+                    $selection = [ordered]@{
+                        storage = [string]$candidate.storage
+                        scope = [string]$candidate.scope
+                        resource = [string]$candidate.resource
+                        location = [string]$candidate.location
+                    }
+                }
+            } else {
+                $prompt = $true
+                $askFor = if ($trusted.Count -eq 0) { 'resource-or-location' } else { 'conflicting-storage-settings' }
+            }
+
+            if ($prompt) {
+                $result.Selection = 'ask'
+                $result.Prompt = $true
+                $result.AskFor = $askFor
+                return [pscustomobject]$result
+            }
+
+            $selected = [string]$selection.storage
+            $result.Selection = $selected
+            $old = if ($null -ne $Case.oldRecord) {
+                $Case.oldRecord
+            } else {
+                @($trusted | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.recordId) } | Select-Object -First 1)
+            }
+            if ($result.Switch -and $null -ne $old) {
+                $result.OldRecordId = [string]$old.recordId
+                $result.NewDestination = [pscustomobject]@{
+                    storage = $selection.storage
+                    resource = $selection.resource
+                    location = $selection.location
+                }
+                $result.OldDataPreserved = if ($null -ne $Case.oldRecord) { [bool]$old.preserved } else { $true }
+                $result.AutomaticMigration = $false
+                $result.AutomaticDualWrite = $false
+                $result.AutomaticDeletion = $false
+            }
+
+            if ([string]$Case.mode -ceq 'legacy-read-only') {
+                $legacy = $Case.legacyContinuation
+                [void]$calls.Add("${selected}:legacy-capability")
+                $legacySupported = $null -ne $legacy -and
+                    [bool]$legacy.exactTaskKey -and
+                    [bool]$legacy.authorized -and
+                    [bool]$legacy.scopeMapped -and
+                    [bool]$legacy.readOnlySupported -and
+                    -not [bool]$legacy.v1ConcurrentWriteSupported
+                if ($legacySupported) {
+                    [void]$calls.Add("${selected}:legacy-read")
+                    $result.Path = 'legacy-read-only'
+                    $result.V1ConcurrentWriteClaimed = $false
+                } else {
+                    $result.FailureCategory = 'unavailable'
+                    $result.CopyableSummary = $true
+                }
+                $result.ConnectorCalls = @($calls.ToArray())
+                return [pscustomobject]$result
+            }
+
+            $capability = $Case.selectedCapability
+            [void]$calls.Add("${selected}:capability")
+            if ($null -eq $capability) {
+                $result.FailureCategory = 'unavailable'
+            } elseif (-not [bool]$capability.supported) {
+                $result.FailureCategory = 'unsupported'
+            } elseif (-not [bool]$capability.configured) {
+                $result.FailureCategory = 'unconfigured'
+            } elseif (-not [bool]$capability.authorized) {
+                $result.FailureCategory = 'denied'
+            } elseif (-not [bool]$capability.available) {
+                $result.FailureCategory = 'unavailable'
+            }
+            if ($null -ne $result.FailureCategory) {
+                $result.CopyableSummary = $true
+                $result.ConnectorCalls = @($calls.ToArray())
+                return [pscustomobject]$result
+            }
+
+            [void]$calls.Add("${selected}:save")
+            $result.WriteCalls = @("${selected}:save")
+            if (-not [bool]$capability.readback) {
+                $result.FailureCategory = 'unverified-write-or-readback'
+                $result.CopyableSummary = $true
+                $result.ConnectorCalls = @($calls.ToArray())
+                return [pscustomobject]$result
+            }
+            [void]$calls.Add("${selected}:readback")
+            $result.DurableSave = $true
+            $result.ConnectorCalls = @($calls.ToArray())
+            return [pscustomobject]$result
+        }
+
+        foreach ($case in $script:Cases.storageSelection) {
+            $actual = Resolve-StorageSelectionCase -Case $case
+            $actual.Selection | Should -Be $case.expected.selection -Because $case.id
+            $actual.Prompt | Should -Be ([bool]$case.expected.prompt) -Because $case.id
+            @($actual.ConnectorCalls) | Should -Be @($case.expected.connectorCalls) -Because $case.id
+            $actual.DurableSave | Should -Be ([bool]$case.expected.durableSave) -Because $case.id
+            $actual.FailureCategory | Should -Be $case.expected.failureCategory -Because $case.id
+            if ($case.expected.PSObject.Properties.Name -contains 'askFor') {
+                $actual.AskFor | Should -Be $case.expected.askFor -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'copyableSummary') {
+                $actual.CopyableSummary | Should -Be ([bool]$case.expected.copyableSummary) -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'fallback') {
+                $actual.Fallback | Should -Be ([bool]$case.expected.fallback) -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'switch') {
+                $actual.Switch | Should -Be ([bool]$case.expected.switch) -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'unselectedConnectorCalls') {
+                @($actual.UnselectedConnectorCalls) | Should -Be @($case.expected.unselectedConnectorCalls) -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'dataLinksAreNotConfiguration') {
+                $actual.DataLinksAreNotConfiguration | Should -BeTrue -Because $case.id
+            }
+            if ($actual.Selection -notin @('none','ask')) {
+                @($actual.ConnectorCalls | Where-Object { $_ -notlike "$($actual.Selection):*" }) | Should -BeNullOrEmpty -Because $case.id
+            }
+            if ([bool]$case.expected.switch -and $case.expected.PSObject.Properties.Name -contains 'oldRecordId') {
+                $actual.OldRecordId | Should -Be $case.expected.oldRecordId -Because $case.id
+                $actual.NewDestination.storage | Should -Be $case.expected.newDestination.storage -Because $case.id
+                $actual.NewDestination.resource | Should -Be $case.expected.newDestination.resource -Because $case.id
+                $actual.NewDestination.location | Should -Be $case.expected.newDestination.location -Because $case.id
+                $actual.OldDataPreserved | Should -BeTrue -Because $case.id
+                $actual.AutomaticMigration | Should -BeFalse -Because $case.id
+                $actual.AutomaticDualWrite | Should -BeFalse -Because $case.id
+                $actual.AutomaticDeletion | Should -BeFalse -Because $case.id
+            }
+            if ($case.expected.PSObject.Properties.Name -contains 'path') {
+                $actual.Path | Should -Be $case.expected.path -Because $case.id
+                $actual.V1ConcurrentWriteClaimed | Should -Be ([bool]$case.expected.v1ConcurrentWriteClaimed) -Because $case.id
+                @($actual.WriteCalls) | Should -Be @($case.expected.writeCalls) -Because $case.id
+                @($actual.ConnectorCalls | Where-Object { $_ -like 'notion:v1-*' -or $_ -like 'notion:save' }) | Should -BeNullOrEmpty -Because $case.id
+            }
+        }
+    }
+
     # Scenario: A fork creates A and B from the same point, with neither branch privileged.
     # Purpose: Stop cross-branch last-write-wins and exact-key integrity failures.
     It 'InterT20_resolves_exact_common_and_peer_branch_identity' {

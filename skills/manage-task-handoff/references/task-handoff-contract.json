@@ -27,6 +27,63 @@
     "defaultRiskRecheckMinutes": 5,
     "riskRecheckMinutesConfigurable": true
   },
+  "storageSelection": {
+    "precedence": [
+      "clear-current-explicit-user-selection-for-declared-scope",
+      "one-unambiguous-trusted-host-or-project-adopter-setting",
+      "ask-user-in-user-language-when-resource-or-location-is-unresolved-conflicting-or-override-is-unclear"
+    ],
+    "resolution": {
+      "currentExplicitSelectionOverridesOlderTrustedSetting": true,
+      "validExistingSettingReusedWithoutDuplicatePrompt": true,
+      "askOnlyWhen": [
+        "no-resource-or-location-resolved",
+        "multiple-trusted-host-or-project-settings-conflict",
+        "current-override-scope-is-unclear"
+      ]
+    },
+    "selectionChecks": {
+      "retrievedHandoffOrContentLinksAreDataNotConfigurationAuthority": true,
+      "checksOnlySelectedAdapterResourceAndLocation": true,
+      "requiredCapabilitiesCheckedOnlyAfterSelection": true,
+      "unselectedConnectorCallsForbidden": true,
+      "missingUnselectedConnectorMustNotBeProbed": true,
+      "silentFallback": false,
+      "formalTaskAuthoritySeparateFromStorageSelection": true
+    },
+    "outcomes": {
+      "success": {
+        "category": "supported+configured+authorized+available+readback-verified",
+        "durableSave": true,
+        "reportVerifiedLocator": true
+      },
+      "failureCategories": [
+        "unsupported",
+        "unconfigured",
+        "denied",
+        "unavailable",
+        "declined",
+        "unverified-write-or-readback"
+      ],
+      "failureBehavior": {
+        "durableSave": false,
+        "mustReportConcreteReason": true,
+        "neverClaimSaved": true,
+        "mayOfferCopyableInChatSummary": true,
+        "copyableSummaryIsDurable": false,
+        "continueIndependentSafeWork": true
+      }
+    },
+    "switching": {
+      "oldRecordIdentityAndNewDestinationIdentityRequired": true,
+      "oldDataPreserved": true,
+      "oldConnectorReadOrMutationDuringSelection": false,
+      "automaticMigration": false,
+      "automaticDualWrite": false,
+      "automaticDeletion": false,
+      "migrationRequiresSeparateAuthorizedPlan": true
+    }
+  },
   "common": {
     "uniqueKey": ["Authority Scope", "Task Key"],
     "requiredFields": ["Authority Scope", "Task Key", "Intent", "Scope", "Current", "Source", "Lifecycle", "Work State"],
