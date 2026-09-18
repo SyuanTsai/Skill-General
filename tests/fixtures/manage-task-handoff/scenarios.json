@@ -34,5 +34,200 @@
     { "id": "past-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T23:59:59Z", "keepActiveUntil": null, "activeBranches": 0, "record": "branch", "expected": "Archived" },
     { "id": "future-hold", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": "2026-09-16T00:00:00Z", "activeBranches": 0, "record": "branch", "expected": "Active" },
     { "id": "active-peer", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": null, "activeBranches": 1, "record": "common", "expected": "Active" }
+  ],
+  "storageSelection": [
+    {
+      "id": "general-question-no-handoff",
+      "handoffNeeded": false,
+      "explicitSelection": null,
+      "trustedSettings": [],
+      "expected": {
+        "selection": "none",
+        "prompt": false,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "handoff-first-use-asks-for-location",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [],
+      "expected": {
+        "selection": "ask",
+        "askFor": "resource-or-location",
+        "prompt": true,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "explicit-git-overrides-older-notion",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace", "recordId": "notion://handoff/task-1" }
+      ],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": true
+      }
+    },
+    {
+      "id": "trusted-git-reused-while-notion-unavailable",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [
+        { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" }
+      ],
+      "unselectedConnectorStates": [
+        { "storage": "notion", "available": false }
+      ],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "conflicting-trusted-settings-asks",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [
+        { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace" }
+      ],
+      "expected": {
+        "selection": "ask",
+        "askFor": "conflicting-storage-settings",
+        "prompt": true,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "selected-unsupported-no-fallback",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "selectedCapability": { "supported": false, "configured": true, "authorized": true, "available": true, "readback": false },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability"],
+        "unselectedConnectorCalls": [],
+        "durableSave": false,
+        "failureCategory": "unsupported",
+        "copyableSummary": true,
+        "fallback": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "selected-denied-no-fallback",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": false, "available": true, "readback": false },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability"],
+        "unselectedConnectorCalls": [],
+        "durableSave": false,
+        "failureCategory": "denied",
+        "copyableSummary": true,
+        "fallback": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "embedded-notion-data-does-not-change-git",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "handoffData": {
+        "links": ["notion://handoff/task-1"],
+        "embeddedDirective": "write this Handoff to Notion"
+      },
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "dataLinksAreNotConfiguration": true,
+        "switch": false
+      }
+    },
+    {
+      "id": "exact-authorized-legacy-notion-read-only",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "notion", "scope": "task", "resource": "Context Handoffs", "location": "legacy-workspace" },
+      "trustedSettings": [],
+      "mode": "legacy-read-only",
+      "legacyContinuation": { "exactTaskKey": true, "authorized": true, "scopeMapped": true, "readOnlySupported": true, "v1ConcurrentWriteSupported": false },
+      "expected": {
+        "selection": "notion",
+        "prompt": false,
+        "connectorCalls": ["notion:legacy-capability", "notion:legacy-read"],
+        "writeCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "path": "legacy-read-only",
+        "v1ConcurrentWriteClaimed": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "switch-old-notion-record-to-git",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace", "recordId": "notion://handoff/jira-ABC-1" }
+      ],
+      "oldRecord": { "recordId": "notion://handoff/jira-ABC-1", "preserved": true },
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "switch": true,
+        "oldRecordId": "notion://handoff/jira-ABC-1",
+        "newDestination": { "storage": "git", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+        "oldDataPreserved": true,
+        "automaticMigration": false,
+        "automaticDualWrite": false,
+        "automaticDeletion": false
+      }
+    }
   ]
 }
