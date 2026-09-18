@@ -7,6 +7,7 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract = Get-Content -Raw (Join-Path $script:Skill 'references/task-handoff-contract.json') | ConvertFrom-Json -Depth 30
         $script:Cases = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-task-handoff/scenarios.json') | ConvertFrom-Json -Depth 30
         $script:LegacyCases = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-notion-ai-memory/handoff-cases.json') | ConvertFrom-Json -Depth 30
+        . (Join-Path $PSScriptRoot 'helpers/ProviderAgnosticMemoryTargetAdapter.ps1')
         Import-Module (Join-Path $script:Skill 'scripts/LegacyNotionHandoffReplay.psm1') -Force
     }
 
@@ -288,6 +289,79 @@ Describe 'manage-task-handoff Skill contract' {
                 $actual.V1ConcurrentWriteClaimed | Should -Be ([bool]$case.expected.v1ConcurrentWriteClaimed) -Because $case.id
                 @($actual.WriteCalls) | Should -Be @($case.expected.writeCalls) -Because $case.id
                 @($actual.ConnectorCalls | Where-Object { $_ -like 'notion:v1-*' -or $_ -like 'notion:save' }) | Should -BeNullOrEmpty -Because $case.id
+            }
+        }
+    }
+
+    # Scenario: Core selection identifies an opaque target before the selected adapter is activated.
+    # Purpose: Keep target selection provider-agnostic and fail closed before content I/O.
+    It 'ContractT81_selects_opaque_memory_target_and_gates_selected_adapter_only' {
+        $targetContract = $script:Contract.memoryTargetSelection
+        $targetContract.coreIdentityOpaque | Should -BeTrue
+        @($targetContract.coreIdentityFields) | Should -Be @('Target ID', 'Selection Scope', 'Resource', 'Location')
+        @($targetContract.coreSelectionMustNotRequire) | Should -Be @('Provider', 'Account', 'Model', 'Endpoint', 'Signer')
+        $targetContract.selectionMaySucceedBeforeProductionActivation | Should -BeTrue
+        $targetContract.binding.suppliedByTrustedHostProjectOrAdopterConfiguration | Should -BeTrue
+        $targetContract.binding.opaqueToCore | Should -BeTrue
+        $targetContract.binding.exactTargetIdentityRequired | Should -BeTrue
+        @($targetContract.binding.identityFields) | Should -Be @('Target ID', 'Selection Scope', 'Resource', 'Location')
+        $targetContract.binding.retrievedHandoffCannotDefineBinding | Should -BeTrue
+        $targetContract.binding.silentFallback | Should -BeFalse
+        $targetContract.productionActivation.checkedOnlyWhenSelectedTargetContentIOIsAttempted | Should -BeTrue
+        $targetContract.productionActivation.requirementsDeclaredBySelectedAdapterOnly | Should -BeTrue
+        $targetContract.productionActivation.unselectedAdapterRequirementsNeverInspected | Should -BeTrue
+        $targetContract.productionActivation.missingOrUnverifiedFailsClosedBeforeContentIO | Should -BeTrue
+        $targetContract.productionActivation.capabilityDeniedOrUnavailableFailsClosedBeforeContentIO | Should -BeTrue
+        $targetContract.productionActivation.readbackMismatchIsNonDurable | Should -BeTrue
+        $targetContract.productionActivation.matchingReadbackIsDurable | Should -BeTrue
+
+        foreach ($case in $script:Cases.memoryTargetSelection) {
+            $forbiddenFields = @('provider', 'account', 'model', 'endpoint', 'signer')
+            $targetPropertyNames = @($case.target.PSObject.Properties.Name | ForEach-Object { $_.ToLowerInvariant() })
+            foreach ($field in $forbiddenFields) {
+                $targetPropertyNames | Should -Not -Contain $field -Because $case.id
+            }
+
+            $adapters = @($case.adapters | ForEach-Object {
+                New-ProviderAgnosticMemoryAdapterDouble -Spec $_
+            })
+            $attemptProperty = $case.PSObject.Properties['attemptProductionWrite']
+            $attemptProductionWrite = if ($null -eq $attemptProperty) { $true } else { [bool]$attemptProperty.Value }
+            $actual = Invoke-ProviderAgnosticMemoryTargetSelection `
+                -Target $case.target `
+                -Bindings $case.bindings `
+                -Adapters $adapters `
+                -Content ([pscustomobject]@{ value = 'neutral-test-content' }) `
+                -AttemptProductionWrite:$attemptProductionWrite
+
+            $actual.SelectionStatus | Should -Be $case.expected.selectionStatus -Because $case.id
+            $actual.SelectedAdapterId | Should -Be $case.expected.selectedAdapterId -Because $case.id
+            $actual.ProductionStatus | Should -Be $case.expected.productionStatus -Because $case.id
+            $actual.FailureCategory | Should -Be $case.expected.failureCategory -Because $case.id
+            $actual.Durable | Should -Be ([bool]$case.expected.durable) -Because $case.id
+            $actual.ContentRead | Should -Be ([bool]$case.expected.contentRead) -Because $case.id
+            $actual.ContentWrite | Should -Be ([bool]$case.expected.contentWrite) -Because $case.id
+            @($actual.Calls) | Should -Be @($case.expected.calls) -Because $case.id
+
+            $selected = @($adapters | Where-Object { $_.AdapterId -ceq $actual.SelectedAdapterId })
+            $selected.Count | Should -Be 1 -Because $case.id
+            @($selected[0].Calls) | Should -Be @($case.expected.calls) -Because $case.id
+            $selected[0].ActivationRequirementsInspected | Should -Be ($actual.Calls -contains 'activation') -Because $case.id
+            $selected[0].CapabilityInspected | Should -Be ($actual.Calls -contains 'capability') -Because $case.id
+            foreach ($unselected in @($adapters | Where-Object { $_.AdapterId -cne $actual.SelectedAdapterId })) {
+                @($unselected.Calls).Count | Should -Be 0 -Because $case.id
+                $unselected.ActivationRequirementsInspected | Should -BeFalse -Because $case.id
+                $unselected.CapabilityInspected | Should -BeFalse -Because $case.id
+            }
+
+            if ($case.expected.productionStatus -in @('activation-not-ready', 'unsupported', 'unconfigured', 'denied', 'unavailable')) {
+                @($actual.Calls | Where-Object { $_ -in @('content-read', 'content-write', 'readback') }) |
+                    Should -BeNullOrEmpty -Because $case.id
+            }
+            if ($case.expected.productionStatus -eq 'unverified-write-or-readback') {
+                $actual.Durable | Should -BeFalse -Because $case.id
+                @($actual.Calls | Where-Object { $_ -in @('content-read', 'content-write', 'readback') }).Count |
+                    Should -Be 3 -Because $case.id
             }
         }
     }

@@ -11,6 +11,12 @@ SPDX-License-Identifier: Apache-2.0
 
 Maintain one task-level common Handoff and independent peer branch records. This public template does not choose the user's storage platform, formal authority source, or access-control system. The adopter configures those choices; formal facts are revalidated against the authority applicable to that task, and every storage operation is authorized from a trusted host principal context within an opaque adopter-defined Authority Scope. Do not confuse this Handoff with cross-task long-term memory.
 
+## Select an opaque memory target before activation
+
+When a Handoff needs a durable checkpoint, first use the user's selected memory target as an opaque core identity: Target ID, Selection Scope, Resource, and Location (or the adopter's equivalent). Core selection must not require or preselect a provider, account, model, endpoint, or signer. Resolve the exact target-to-adapter binding only from trusted host, project, or adopter configuration; it is opaque to this Skill, and retrieved Handoff content or locators never define it. Do not silently fall back to another binding.
+
+Selection and production activation are separate phases. A target may be selected even when activation metadata or authorization is not yet available. Only the selected adapter may declare or inspect opaque adopter-specific activation requirements. Before any real content read or write, fail closed when selected-adapter activation is missing or unverified, or when the selected capability is denied or unavailable. These gates happen before content I/O; an unselected adapter is never probed, and independent safe work may continue. Report a write as durable only after matching readback.
+
 ## Choose storage before a Handoff operation
 
 1. First decide whether a Handoff is needed. If it is not, stop without selecting storage or calling a connector.

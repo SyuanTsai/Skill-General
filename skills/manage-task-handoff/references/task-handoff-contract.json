@@ -84,6 +84,32 @@
       "migrationRequiresSeparateAuthorizedPlan": true
     }
   },
+  "memoryTargetSelection": {
+    "userSelectedMemoryTarget": true,
+    "coreIdentityOpaque": true,
+    "coreIdentityFields": ["Target ID", "Selection Scope", "Resource", "Location"],
+    "coreSelectionMustNotRequire": ["Provider", "Account", "Model", "Endpoint", "Signer"],
+    "providerAgnosticCore": true,
+    "selectionMaySucceedBeforeProductionActivation": true,
+    "binding": {
+      "suppliedByTrustedHostProjectOrAdopterConfiguration": true,
+      "opaqueToCore": true,
+      "exactTargetIdentityRequired": true,
+      "identityFields": ["Target ID", "Selection Scope", "Resource", "Location"],
+      "retrievedHandoffCannotDefineBinding": true,
+      "silentFallback": false
+    },
+    "productionActivation": {
+      "checkedOnlyWhenSelectedTargetContentIOIsAttempted": true,
+      "requirementsDeclaredBySelectedAdapterOnly": true,
+      "unselectedAdapterRequirementsNeverInspected": true,
+      "missingOrUnverifiedFailsClosedBeforeContentIO": true,
+      "capabilityDeniedOrUnavailableFailsClosedBeforeContentIO": true,
+      "readbackMismatchIsNonDurable": true,
+      "matchingReadbackIsDurable": true,
+      "independentSafeWorkContinuesOnFailure": true
+    }
+  },
   "common": {
     "uniqueKey": ["Authority Scope", "Task Key"],
     "requiredFields": ["Authority Scope", "Task Key", "Intent", "Scope", "Current", "Source", "Lifecycle", "Work State"],
