@@ -8,6 +8,12 @@ Load `../scripts/GitRefHandoffAdapter.psm1` only after the adopting user has sel
 
 The remote must support writes to a dedicated `refs/heads/handoff-v1` namespace and the explicit expected SHA form of `--force-with-lease`. Limit writers to that namespace if the host supports it. Do not point the module at a general application source repository unless the adopter has explicitly designated its dedicated Handoff refs for storage. Configure authentication through the host's normal private credential mechanism; this module neither obtains nor stores credentials, and a protected or unavailable ref stops the Handoff mutation. No operation writes a regular source branch, Notion page, Jira issue, or another selected authority.
 
+## Capability status
+
+- Supported: when selected and configured, the existing `GitRefHandoffAdapter.psm1` is an implemented opt-in Git adapter. It is not a global default and is not the task's formal authority.
+- Selected Git is unavailable when the required remote, policy, CAS/expected-lease behavior, or readback is missing or unavailable; state that durable Git saving did not complete and do not fall back.
+- A missing or unavailable connector that was not selected must not block the Git adapter and must not be probed or required as a fallback.
+
 On Windows, full SHA-256 record refs under a deeply nested **local bare remote** can exceed Git's default path capacity. A controlled local test showed that `core.longpaths=true` on the isolated bare remote allowed that exact ref to be written and read back; an adopting user must verify the selected host's behavior and may instead use a shorter isolated Git store path. Exact reads disable the configured fetch refmap, so opaque Handoff refs enter object storage and `FETCH_HEAD` without being mirrored under a writer clone's longer `refs/remotes/origin/...` path. The module never changes Git configuration. A ref that remains absent after a rejected create-only push is an unverified storage write, not evidence of a competing revision. Only a different observed remote SHA is a conditional revision conflict. Preserve the Operation ID and inspect the selected remote's ref path, permissions, and long-ref support before retrying.
 
 ## Mapping
