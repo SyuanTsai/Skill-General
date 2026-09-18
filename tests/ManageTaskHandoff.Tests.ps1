@@ -71,8 +71,20 @@ Describe 'manage-task-handoff Skill contract' {
             param([Parameter(Mandatory)]$Case)
 
             $calls = [System.Collections.Generic.List[string]]::new()
-            $trusted = if ($null -eq $Case.trustedSettings) { @() } else { @($Case.trustedSettings) }
-            $dataLinksPresent = $null -ne $Case.handoffData
+            $trusted = @(
+                if ($null -eq $Case.trustedSettings) { @() } else { @($Case.trustedSettings) }
+            )
+            $handoffDataProperty = $Case.PSObject.Properties['handoffData']
+            $oldRecordProperty = $Case.PSObject.Properties['oldRecord']
+            $modeProperty = $Case.PSObject.Properties['mode']
+            $legacyContinuationProperty = $Case.PSObject.Properties['legacyContinuation']
+            $selectedCapabilityProperty = $Case.PSObject.Properties['selectedCapability']
+            $handoffData = if ($null -eq $handoffDataProperty) { $null } else { $handoffDataProperty.Value }
+            $oldRecord = if ($null -eq $oldRecordProperty) { $null } else { $oldRecordProperty.Value }
+            $mode = if ($null -eq $modeProperty) { $null } else { [string]$modeProperty.Value }
+            $legacyContinuation = if ($null -eq $legacyContinuationProperty) { $null } else { $legacyContinuationProperty.Value }
+            $selectedCapability = if ($null -eq $selectedCapabilityProperty) { $null } else { $selectedCapabilityProperty.Value }
+            $dataLinksPresent = $null -ne $handoffData
             $result = [ordered]@{
                 Selection = 'none'
                 Prompt = $false
@@ -156,26 +168,31 @@ Describe 'manage-task-handoff Skill contract' {
 
             $selected = [string]$selection.storage
             $result.Selection = $selected
-            $old = if ($null -ne $Case.oldRecord) {
-                $Case.oldRecord
+            $old = if ($null -ne $oldRecord) {
+                $oldRecord
             } else {
-                @($trusted | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.recordId) } | Select-Object -First 1)
+                @($trusted | Where-Object {
+                    [void]($recordIdProperty = $_.PSObject.Properties['recordId'])
+                    $null -ne $recordIdProperty -and
+                        -not [string]::IsNullOrWhiteSpace([string]$recordIdProperty.Value)
+                } | Select-Object -First 1)
             }
-            if ($result.Switch -and $null -ne $old) {
-                $result.OldRecordId = [string]$old.recordId
+            $oldRecordIdProperty = if ($null -eq $old) { $null } else { $old.PSObject.Properties['recordId'] }
+            if ($result.Switch -and $null -ne $oldRecordIdProperty) {
+                $result.OldRecordId = [string]$oldRecordIdProperty.Value
                 $result.NewDestination = [pscustomobject]@{
                     storage = $selection.storage
                     resource = $selection.resource
                     location = $selection.location
                 }
-                $result.OldDataPreserved = if ($null -ne $Case.oldRecord) { [bool]$old.preserved } else { $true }
+                $result.OldDataPreserved = if ($null -ne $oldRecord) { [bool]$old.preserved } else { $true }
                 $result.AutomaticMigration = $false
                 $result.AutomaticDualWrite = $false
                 $result.AutomaticDeletion = $false
             }
 
-            if ([string]$Case.mode -ceq 'legacy-read-only') {
-                $legacy = $Case.legacyContinuation
+            if ($mode -ceq 'legacy-read-only') {
+                $legacy = $legacyContinuation
                 [void]$calls.Add("${selected}:legacy-capability")
                 $legacySupported = $null -ne $legacy -and
                     [bool]$legacy.exactTaskKey -and
@@ -195,7 +212,7 @@ Describe 'manage-task-handoff Skill contract' {
                 return [pscustomobject]$result
             }
 
-            $capability = $Case.selectedCapability
+            $capability = $selectedCapability
             [void]$calls.Add("${selected}:capability")
             if ($null -eq $capability) {
                 $result.FailureCategory = 'unavailable'
