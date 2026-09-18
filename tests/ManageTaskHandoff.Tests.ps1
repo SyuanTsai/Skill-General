@@ -6,6 +6,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Skill = Join-Path $script:Root 'skills/manage-task-handoff'
         $script:Contract = Get-Content -Raw (Join-Path $script:Skill 'references/task-handoff-contract.json') | ConvertFrom-Json -Depth 30
         $script:Cases = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-task-handoff/scenarios.json') | ConvertFrom-Json -Depth 30
+        $script:LegacyCases = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-notion-ai-memory/handoff-cases.json') | ConvertFrom-Json -Depth 30
+        Import-Module (Join-Path $script:Skill 'scripts/LegacyNotionHandoffReplay.psm1') -Force
     }
 
     # Scenario: Explicit risk, an unlisted risk, and a new conversation produce different actions.
@@ -317,5 +319,65 @@ Describe 'manage-task-handoff Skill contract' {
         $yaml = Get-Content -Raw (Join-Path $script:Skill 'agents/openai.yaml')
         $yaml | Should -Match '\$manage-task-handoff'
         $yaml | Should -Not -Match '(?m)^\s*value:\s*"(?:notion|jira|github)"\s*$'
+    }
+
+    # Scenario: A connector returns the same complete legacy change set in different query or page order.
+    # Purpose: Prove the production replay path canonicalizes the set and preserves a true native-time collision.
+    It 'InterT70_legacy_replay_is_stable_across_query_order_and_preserves_native_time_collision' {
+        $case = $script:LegacyCases.mergeCases |
+            Where-Object { $_.id -ceq 'preserve-an-exact-native-time-collision' } |
+            Select-Object -First 1
+        $main = $case.main | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $main | Add-Member -NotePropertyName id -NotePropertyValue 'handoff-collision'
+        $forward = @($case.changes)
+        $reverse = @($case.changes | Sort-Object id -Descending)
+        $readerState = @{ mainReads = 0; changeReads = 0 }
+
+        $forwardFingerprint = Get-LegacyNotionUnmergedChangeFingerprint -Changes $forward
+        $reverseFingerprint = Get-LegacyNotionUnmergedChangeFingerprint -Changes $reverse
+        $forwardFingerprint | Should -BeExactly $reverseFingerprint
+
+        $result = Invoke-LegacyNotionReadOnlyReplay `
+            -Contract (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') | ConvertFrom-Json -Depth 30) `
+            -ReadMain {
+                $readerState.mainReads++
+                return $main
+            } `
+            -ReadUnmergedChanges {
+                $readerState.changeReads++
+                if (($readerState.changeReads % 2) -eq 1) { return $reverse }
+                return $forward
+            }
+
+        $result.Status | Should -BeExactly 'Stable'
+        $result.ReconstructionAttempts | Should -Be 1
+        $readerState.mainReads | Should -Be 2
+        $readerState.changeReads | Should -Be 2
+        $result.CapturedFingerprint | Should -BeExactly $result.ConfirmedFingerprint
+        $result.Replay.Fields.Current | Should -BeExactly 'Original checkpoint'
+        @($result.Replay.AppliedChangeIds).Count | Should -Be 0
+        @($result.Replay.CollisionFields) | Should -Be @('Current')
+        @($result.Replay.Collisions.ChangeId | Sort-Object) | Should -Be @('change-20','change-21')
+    }
+
+    It 'UnitT71_replays_legacy_merge_fixtures_through_the_production_helper' {
+        $legacyContract = Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') |
+            ConvertFrom-Json -Depth 30
+        foreach ($case in $script:LegacyCases.mergeCases) {
+            $main = $case.main | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+            $main | Add-Member -NotePropertyName id -NotePropertyValue "handoff-$($case.id)"
+            $changes = @($case.changes)
+            $result = Invoke-LegacyNotionReadOnlyReplay `
+                -Contract $legacyContract `
+                -ReadMain { return $main } `
+                -ReadUnmergedChanges { return $changes }
+
+            $result.Status | Should -BeExactly 'Stable' -Because $case.id
+            ($result.Replay.Fields | ConvertTo-Json -Compress) |
+                Should -BeExactly ($case.expected.fields | ConvertTo-Json -Compress) -Because $case.id
+            @($result.Replay.AppliedChangeIds) | Should -Be @($case.expected.appliedChangeIds) -Because $case.id
+            @($result.Replay.CollisionFields) | Should -Be @($case.expected.collisionFields) -Because $case.id
+            @($result.Replay.InvalidChangeIds) | Should -Be @($case.expected.invalidChangeIds) -Because $case.id
+        }
     }
 }
