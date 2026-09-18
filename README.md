@@ -50,7 +50,7 @@ tests/
 | `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
 | `review-agent-skills` | Agent Skill package review |
 
-`manage-task-handoff` is platform-neutral: selecting storage never creates a connector or capability. The core package provides the logical Handoff contract plus exact legacy Notion read-only continuation; Git-ref is an optional adapter only where its implementation is installed and configured. Other storage needs a conforming adapter and evidence. Git is not mandatory and is not present on every installation.
+`manage-task-handoff` is platform-neutral: the user selects an opaque memory target, and trusted adopter configuration binds that exact target to an adapter. Core selection does not require or preselect a provider, account, model, endpoint, or signer, and it may complete before production activation is available. Only the selected adapter may validate its own opaque activation requirements before content I/O; missing or unverified activation fails closed without probing or falling back to another adapter. The core package provides the logical Handoff contract plus exact legacy Notion read-only continuation; Git-ref is an optional adapter only where its implementation is installed and configured. Other storage needs a conforming adapter and evidence. Git is not mandatory and is not present on every installation.
 
 ## Canonical validation
 
