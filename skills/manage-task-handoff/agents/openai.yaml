@@ -1,0 +1,10 @@
+interface:
+  display_name: "Manage Task Handoff"
+  short_description: "Keep task progress safe across sessions and peer branches"
+  default_prompt: "Use $manage-task-handoff to preserve the current task's confirmed state and next safe action."
+
+policy:
+  allow_implicit_invocation: true
+
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0

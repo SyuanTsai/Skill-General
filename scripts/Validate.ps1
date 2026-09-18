@@ -13,7 +13,12 @@ param(
     [string] $BaseCommit,
     [string] $ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION,
     [string] $OutputPath,
-    [int] $TimeoutSeconds = 900
+    [int] $TimeoutSeconds = 900,
+    [switch] $SemanticConsent,
+    [string] $SemanticProvider,
+    [string] $SemanticPurpose,
+    [string] $SemanticScope,
+    [string] $SemanticEvidencePath
 )
 
 Set-StrictMode -Version Latest
@@ -802,6 +807,15 @@ try {
         '-TrustedToolRoot', $trustedRoot,
         '-DevelopmentHarness'
     )
+    if ($SemanticConsent) { $centralRunnerArgs += '-SemanticConsent' }
+    foreach ($pair in @(
+        @('-SemanticProvider', $SemanticProvider),
+        @('-SemanticPurpose', $SemanticPurpose),
+        @('-SemanticScope', $SemanticScope),
+        @('-SemanticEvidencePath', $SemanticEvidencePath)
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) { $centralRunnerArgs += @($pair[0],$pair[1]) }
+    }
     & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs
     $centralExitCode = $LASTEXITCODE
     exit $centralExitCode

@@ -24,6 +24,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($inventory.skills) | Should -Be @(
             'investigate-datadog-logs'
             'manage-notion-ai-memory'
+            'manage-task-handoff'
             'plan-production-change'
             'review-agent-skills'
             'verify-data-access-performance'
