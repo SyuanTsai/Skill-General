@@ -180,7 +180,7 @@ function Assert-NoReparseAncestors {
 
 function Assert-PreparedResolverReceipts {
     param(
-        [Parameter(Mandatory = $true)] $Receipts,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()] $Receipts,
         [Parameter(Mandatory = $true)][string] $RunRoot,
         [Parameter(Mandatory = $true)][string] $RunId
     )

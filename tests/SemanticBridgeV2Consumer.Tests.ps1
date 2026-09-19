@@ -237,9 +237,9 @@ function Get-StandardValidationTextSha256 {
 
     It 'rejects empty, duplicate, and wrong-tool resolver receipt lists through ResumeSemantic' {
         $scenarios = @(
-            [pscustomobject]@{ name = 'empty'; tools = @() }
-            [pscustomobject]@{ name = 'duplicate'; tools = @('skillspector', 'skillspector', 'skill-tools', 'pester') }
-            [pscustomobject]@{ name = 'wrong-tool'; tools = @('skillspector', 'skill-validator', 'unexpected-tool', 'pester') }
+            [pscustomobject]@{ name = 'empty'; tools = @(); expectedError = 'must contain exactly four canonical tools' }
+            [pscustomobject]@{ name = 'duplicate'; tools = @('skillspector', 'skillspector', 'skill-tools', 'pester'); expectedError = 'must use canonical tools exactly once in fixed order' }
+            [pscustomobject]@{ name = 'wrong-tool'; tools = @('skillspector', 'skill-validator', 'unexpected-tool', 'pester'); expectedError = 'must use canonical tools exactly once in fixed order' }
         )
         foreach ($scenario in $scenarios) {
             $fixture = New-SyntheticResumePlan `
@@ -249,7 +249,7 @@ function Get-StandardValidationTextSha256 {
                 -WriteReceiptFiles
             $result = Invoke-SyntheticResume -ValidatorPath $script:ValidatorPath -RepositoryRoot $script:RepositoryRoot -PlanPath $fixture.planPath
             $result.exitCode | Should -Not -Be 0 -Because "$($scenario.name) receipt list must fail closed. Output: $($result.output)"
-            $result.output | Should -Match 'resolver receipt|canonical' -Because "$($scenario.name) failure should identify the receipt contract."
+            $result.output | Should -Match $scenario.expectedError -Because "$($scenario.name) failure should come from the canonical receipt-set implementation."
         }
     }
 
