@@ -178,6 +178,83 @@ function Assert-NoReparseAncestors {
     }
 }
 
+function Assert-PreparedResolverReceipts {
+    param(
+        [Parameter(Mandatory = $true)] $Receipts,
+        [Parameter(Mandatory = $true)][string] $RunRoot,
+        [Parameter(Mandatory = $true)][string] $RunId
+    )
+
+    $canonicalTools = @('skillspector', 'skill-validator', 'skill-tools', 'pester')
+    if ($null -eq $Receipts -or $Receipts -isnot [array]) {
+        throw 'Semantic run plan resolver receipts must be an array of the four canonical tools.'
+    }
+    $receiptItems = @($Receipts)
+    if ($receiptItems.Count -ne $canonicalTools.Count) {
+        throw 'Semantic run plan resolver receipts must contain exactly four canonical tools.'
+    }
+
+    $seenTools = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seenPaths = [Collections.Generic.HashSet[string]]::new($(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
+    $validatedReceipts = [ordered]@{}
+    for ($index = 0; $index -lt $canonicalTools.Count; $index++) {
+        $receipt = $receiptItems[$index]
+        $tool = $canonicalTools[$index]
+        Assert-ExactPropertySet -Value $receipt -Expected @('tool', 'path', 'sha256') -Context 'Prepared resolver receipt'
+        if ([string]$receipt.tool -cne $tool -or -not $seenTools.Add([string]$receipt.tool)) {
+            throw "Semantic run plan resolver receipts must use canonical tools exactly once in fixed order; expected '$tool'."
+        }
+        Assert-Sha256 -Value ([string]$receipt.sha256) -Context "Prepared resolver receipt $tool"
+        $receiptPath = Assert-PathWithinRoot -Path ([string]$receipt.path) -Root $RunRoot -Context "Prepared resolver receipt $tool"
+        if ([IO.Path]::GetFileName($receiptPath) -cne "receipt-$tool.json") {
+            throw "Prepared resolver receipt $tool must use the canonical basename 'receipt-$tool.json'."
+        }
+        if (-not $seenPaths.Add($receiptPath)) {
+            throw "Prepared resolver receipt paths must be unique: $receiptPath"
+        }
+        Assert-NoReparseAncestors -Path $receiptPath -Context "Prepared resolver receipt $tool"
+        if ((Get-FileSha256 -Path $receiptPath) -cne [string]$receipt.sha256) {
+            throw "Prepared resolver receipt drifted: $tool"
+        }
+
+        $receiptJson = Read-JsonFile -Path $receiptPath -Context "$tool resolver receipt"
+        foreach ($propertyName in @('schemaVersion', 'resolutionRunId', 'toolName', 'channel', 'resolvedVersion', 'resolvedIdentity', 'frozenForRun')) {
+            if ($null -eq $receiptJson.PSObject.Properties[$propertyName]) {
+                throw "$tool resolver receipt is missing '$propertyName'."
+            }
+        }
+        if ([int]$receiptJson.schemaVersion -ne 1 -or
+            [string]$receiptJson.resolutionRunId -cne $RunId -or
+            [string]$receiptJson.toolName -cne $tool -or
+            [string]$receiptJson.channel -cne 'latest-stable' -or
+            [string]::IsNullOrWhiteSpace([string]$receiptJson.resolvedVersion) -or
+            [string]::IsNullOrWhiteSpace([string]$receiptJson.resolvedIdentity) -or
+            $receiptJson.frozenForRun -ne $true) {
+            throw "$tool resolver receipt is not bound to this verified latest-stable resolution run."
+        }
+        $statusProperty = $receiptJson.PSObject.Properties['status']
+        if ($null -ne $statusProperty -and [string]$statusProperty.Value -cne 'verified') {
+            throw "$tool resolver receipt status must be 'verified'."
+        }
+        $toolProperties = switch ($tool) {
+            'skillspector' { @('executablePath', 'executableSha256') }
+            'skill-validator' { @('executablePath', 'executableSha256') }
+            'skill-tools' { @('nodePath', 'nodeSha256', 'entryPointPath', 'entryPointSha256') }
+            'pester' { @('modulePath', 'executableSha256') }
+        }
+        foreach ($propertyName in $toolProperties) {
+            if ($null -eq $receiptJson.PSObject.Properties[$propertyName] -or [string]::IsNullOrWhiteSpace([string]$receiptJson.$propertyName)) {
+                throw "$tool resolver receipt is missing '$propertyName'."
+            }
+            if ($propertyName -like '*Sha256') {
+                Assert-Sha256 -Value ([string]$receiptJson.$propertyName) -Context "$tool resolver receipt $propertyName"
+            }
+        }
+        $validatedReceipts[$tool] = $receiptJson
+    }
+    return $validatedReceipts
+}
+
 function Write-Utf8NoBom {
     param([Parameter(Mandatory = $true)][string] $Path, [Parameter(Mandatory = $true)][string] $Text)
     $parent = Split-Path -Parent $Path
@@ -734,6 +811,7 @@ try {
             if ($PSBoundParameters.ContainsKey($forbiddenName)) { throw "ResumeSemantic does not accept caller override '$forbiddenName'." }
         }
         $planFull = [IO.Path]::GetFullPath($SemanticRunPlanPath)
+        Assert-NoReparseAncestors -Path $planFull -Context 'Semantic run plan'
         $plan = Read-JsonFile -Path $planFull -Context 'Semantic run plan'
         Assert-ExactPropertySet -Value $plan -Expected @('schemaVersion', 'artifactType', 'runId', 'source', 'roots', 'candidate', 'authority', 'tools', 'execution', 'semantic') -Context 'Semantic run plan'
         Assert-ExactPropertySet -Value $plan.source -Expected @('repositoryRoot', 'repository', 'revision', 'baseRevision', 'tree', 'eventName') -Context 'Semantic run plan source'
@@ -764,6 +842,10 @@ try {
         if ($PSBoundParameters.ContainsKey('OutputPath') -and -not (Test-PathEqual -Left $OutputPath -Right ([string]$plan.execution.outputPath))) { throw 'OutputPath conflicts with the prepared run plan.' }
         if ($PSBoundParameters.ContainsKey('TimeoutSeconds') -and $TimeoutSeconds -ne [int]$plan.execution.timeoutSeconds) { throw 'TimeoutSeconds conflicts with the prepared run plan.' }
 
+        $runRoot = Assert-PathWithinRoot -Path ([string]$plan.roots.run) -Root $planArtifactsRoot -Context 'Prepared run root'
+        if (-not (Test-PathEqual -Left $runRoot -Right (Join-Path $planArtifactsRoot "sgv1-$(([string]$plan.runId).Substring(0, 12))"))) { throw 'Prepared run root is not derived from the run identity.' }
+        $preparedReceipts = Assert-PreparedResolverReceipts -Receipts $plan.tools.receipts -RunRoot $runRoot -RunId ([string]$plan.runId)
+
         $gitPath = Get-ResolvedGitPath
         $pwshPath = Get-ResolvedPowerShellPath
         if (-not (Test-PathEqual -Left $repoRoot -Right ([string]$plan.source.repositoryRoot))) { throw 'RepositoryRoot conflicts with the prepared run plan.' }
@@ -771,14 +853,14 @@ try {
         $dirty = @(& $gitPath -C $repoRoot status --porcelain=v1 --untracked-files=all)
         if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'ResumeSemantic requires the same clean immutable candidate commit.' }
         $baseRevision = Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision ([string]$plan.source.baseRevision) -Context 'Resume base revision'
+        & $gitPath -C $repoRoot merge-base --is-ancestor $baseRevision $candidateCommit
+        if ($LASTEXITCODE -ne 0 -or $baseRevision -ceq $candidateCommit) { throw 'Prepared base commit must be a distinct ancestor of the immutable candidate.' }
         $candidateTree = @(& $gitPath -C $repoRoot rev-parse --verify --end-of-options "$candidateCommit^{tree}")
         if ($candidateCommit -cne [string]$plan.source.revision -or $baseRevision -cne [string]$plan.source.baseRevision -or
             $candidateTree.Count -ne 1 -or [string]$candidateTree[0] -cne [string]$plan.source.tree -or
             (Get-EventName) -cne [string]$plan.source.eventName) { throw 'Prepared source revision, tree, base, or event drifted.' }
         if ($PSBoundParameters.ContainsKey('BaseCommit') -and (Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision $BaseCommit -Context 'Caller base revision') -cne $baseRevision) { throw 'BaseCommit conflicts with the prepared run plan.' }
 
-        $runRoot = Assert-PathWithinRoot -Path ([string]$plan.roots.run) -Root $planArtifactsRoot -Context 'Prepared run root'
-        if (-not (Test-PathEqual -Left $runRoot -Right (Join-Path $planArtifactsRoot "sgv1-$(([string]$plan.runId).Substring(0, 12))"))) { throw 'Prepared run root is not derived from the run identity.' }
         $trustedRoot = [IO.Path]::GetFullPath([string]$plan.roots.trusted)
         $candidateExtractRoot = [IO.Path]::GetFullPath([string]$plan.roots.candidateExtract)
         $resolvedToolsRoot = [IO.Path]::GetFullPath([string]$plan.roots.resolvedTools)
@@ -816,6 +898,37 @@ try {
         )) {
             $boundPath = Assert-PathWithinRoot -Path ([string]$fileBinding.path) -Root ([string]$fileBinding.root) -Context "Prepared $($fileBinding.name)"
             if ((Get-FileSha256 -Path $boundPath) -cne [string]$fileBinding.sha) { throw "Prepared $($fileBinding.name) drifted." }
+        }
+        $preparedToolchain = Read-JsonFile -Path ([string]$plan.tools.toolchainPath) -Context 'Prepared toolchain'
+        Assert-ExactPropertySet -Value $preparedToolchain -Expected @(
+            'upstreamAdapterValidatorPath', 'upstreamAdapterValidatorSha256', 'upstreamPolicyPath', 'upstreamPolicySha256',
+            'skillValidatorPath', 'skillValidatorSha256', 'skillToolsNodePath', 'skillToolsNodeSha256',
+            'skillToolsEntryPointPath', 'skillToolsEntryPointSha256', 'skillSpectorPath', 'skillSpectorSha256',
+            'pesterModulePath', 'pesterModuleSha256', 'pesterVersion'
+        ) -Context 'Prepared toolchain'
+        foreach ($binding in @(
+            [pscustomobject]@{ actualPath = $preparedToolchain.skillValidatorPath; expectedPath = $preparedReceipts.'skill-validator'.executablePath; actualSha = $preparedToolchain.skillValidatorSha256; expectedSha = $preparedReceipts.'skill-validator'.executableSha256; name = 'skill-validator' },
+            [pscustomobject]@{ actualPath = $preparedToolchain.skillToolsNodePath; expectedPath = $preparedReceipts.'skill-tools'.nodePath; actualSha = $preparedToolchain.skillToolsNodeSha256; expectedSha = $preparedReceipts.'skill-tools'.nodeSha256; name = 'skill-tools Node' },
+            [pscustomobject]@{ actualPath = $preparedToolchain.skillToolsEntryPointPath; expectedPath = $preparedReceipts.'skill-tools'.entryPointPath; actualSha = $preparedToolchain.skillToolsEntryPointSha256; expectedSha = $preparedReceipts.'skill-tools'.entryPointSha256; name = 'skill-tools entry point' },
+            [pscustomobject]@{ actualPath = $preparedToolchain.skillSpectorPath; expectedPath = $preparedReceipts.skillspector.executablePath; actualSha = $preparedToolchain.skillSpectorSha256; expectedSha = $preparedReceipts.skillspector.executableSha256; name = 'skillspector' },
+            [pscustomobject]@{ actualPath = $preparedToolchain.pesterModulePath; expectedPath = $preparedReceipts.pester.modulePath; actualSha = $preparedToolchain.pesterModuleSha256; expectedSha = $preparedReceipts.pester.executableSha256; name = 'pester' }
+        )) {
+            if (-not (Test-PathEqual -Left ([string]$binding.actualPath) -Right ([string]$binding.expectedPath)) -or
+                [string]$binding.actualSha -cne [string]$binding.expectedSha) {
+                throw "Prepared toolchain does not match the $($binding.name) resolver receipt."
+            }
+        }
+        if ([string]$preparedToolchain.pesterVersion -cne [string]$preparedReceipts.pester.resolvedVersion) {
+            throw 'Prepared toolchain does not match the pester resolver receipt version.'
+        }
+        $policyReceipt = Read-JsonFile -Path ([string]$plan.tools.policyReceiptPath) -Context 'Validation tool policy receipt'
+        foreach ($policyPropertyName in @('schemaVersion', 'resolutionRunId')) {
+            if ($null -eq $policyReceipt.PSObject.Properties[$policyPropertyName]) {
+                throw "Validation tool policy receipt is missing '$policyPropertyName'."
+            }
+        }
+        if ([int]$policyReceipt.schemaVersion -ne 1 -or [string]$policyReceipt.resolutionRunId -cne [string]$plan.runId) {
+            throw 'Validation tool policy receipt is not bound to the prepared resolution run.'
         }
         foreach ($receipt in @($plan.tools.receipts)) {
             Assert-ExactPropertySet -Value $receipt -Expected @('tool', 'path', 'sha256') -Context 'Prepared resolver receipt'
@@ -994,18 +1107,20 @@ try {
     $upstreamAdapterPath = Join-Path $authorityRoot 'scripts/Validate-UpstreamAdapter.ps1'
     $upstreamPolicyPath = Join-Path $authorityRoot 'docs/standards/upstream-adapter.json'
     $policyReceiptPath = Join-Path $runRoot 'policy.json'
-    Invoke-Resolver -PowerShellPath $pwshPath -ResolverPath $resolverPath -Arguments @('-PolicyPath', $policyPath, '-ValidatePolicyOnly', '-OutputPath', $policyReceiptPath)
+    Invoke-Resolver -PowerShellPath $pwshPath -ResolverPath $resolverPath -Arguments @('-PolicyPath', $policyPath, '-ValidatePolicyOnly', '-RunId', $runId, '-OutputPath', $policyReceiptPath)
     $policyReceipt = Read-JsonFile -Path $policyReceiptPath -Context 'Validation tool policy receipt'
     if ([string]$policyReceipt.policy -cne 'latest-stable-per-validation-run' -or
-        [string]$policyReceipt.sourceTrust.enforcement -cne 'exact-approved-source' -or $policyReceipt.recordResolvedIdentityWhenAvailable -ne $true) {
+        [string]$policyReceipt.sourceTrust.enforcement -cne 'exact-approved-source' -or $policyReceipt.recordResolvedIdentityWhenAvailable -ne $true -or
+        [string]$policyReceipt.resolutionRunId -cne $runId) {
         throw 'Validation tool policy receipt does not preserve the central trust contract.'
     }
     $receipts = [ordered]@{}
     foreach ($toolName in @('skillspector', 'skill-validator', 'skill-tools', 'pester')) {
         $receiptPath = Join-Path $runRoot "receipt-$toolName.json"
-        Invoke-Resolver -PowerShellPath $pwshPath -ResolverPath $resolverPath -Arguments @('-PolicyPath', $policyPath, '-ToolName', $toolName, '-Install', '-InstallRoot', $resolvedToolsRoot, '-ExpectedGoRuntimeVersion', $goRuntimeVersion, '-OutputPath', $receiptPath)
+        Invoke-Resolver -PowerShellPath $pwshPath -ResolverPath $resolverPath -Arguments @('-PolicyPath', $policyPath, '-ToolName', $toolName, '-Install', '-InstallRoot', $resolvedToolsRoot, '-ExpectedGoRuntimeVersion', $goRuntimeVersion, '-RunId', $runId, '-OutputPath', $receiptPath)
         $receipt = Read-JsonFile -Path $receiptPath -Context "$toolName resolver receipt"
         if ([string]$receipt.toolName -cne $toolName -or [string]$receipt.channel -cne 'latest-stable' -or $receipt.frozenForRun -ne $true -or
+            [string]$receipt.resolutionRunId -cne $runId -or
             [string]::IsNullOrWhiteSpace([string]$receipt.resolvedVersion) -or [string]::IsNullOrWhiteSpace([string]$receipt.resolvedIdentity)) { throw "$toolName resolver receipt is not an exact frozen latest-stable identity." }
         $receipts[$toolName] = $receipt
     }
