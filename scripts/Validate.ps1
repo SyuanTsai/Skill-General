@@ -4,6 +4,8 @@
 
 [CmdletBinding()]
 param(
+    [ValidateSet('Run', 'PrepareSemantic', 'ResumeSemantic')]
+    [string] $ExecutionMode = 'Run',
     [string] $RepositoryRoot,
     [string] $ArtifactsRoot = $(
         if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { $env:RUNNER_TEMP }
@@ -18,7 +20,13 @@ param(
     [string] $SemanticProvider,
     [string] $SemanticPurpose,
     [string] $SemanticScope,
-    [string] $SemanticEvidencePath
+    [string] $SemanticEvidencePath,
+    [string] $SemanticConsentRequestPath,
+    [string] $SemanticConsentDecisionPath,
+    [string] $SemanticPublicKeyPath,
+    [string] $SemanticPublicKeyId,
+    [string] $SemanticRunPlanPath,
+    [switch] $SemanticTriggered
 )
 
 Set-StrictMode -Version Latest
@@ -26,29 +34,31 @@ $ErrorActionPreference = 'Stop'
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-$script:AuthorityCommit = 'a403abdf038a3346d775431a6908a71cc3d35a5b'
-$script:AuthorityArchiveSha256 = '17154929fadfa63487263db1efcb78f4948195af9c11c25a66432eff3411b2d3'
+$script:AuthorityCommit = '8a944f4a74a054cb0353f22ab22c459dc9dc18ef'
+$script:AuthorityArchiveSha256 = '99ba8cae62c80db9da8876b5a7e49dfdd499ca863c006bfd2a411a5d4e7dbcc0'
 $script:AuthorityFiles = [ordered]@{
     'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
     'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
     'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
     'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
     'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
-    'docs/standards/schemas/validation-security-gate-v1.schema.json' = '56979baa08f3ec5534e3a17f925d53e69accd4cdc500872e92ca56b694044ea6'
-    'docs/standards/skill-repository-review-matrix.md' = 'c345ad3ec32d1941df5c5757ce96b4430c0223b3f8ed99f2a4de7dc9923410f2'
-    'docs/standards/skill-repository-standard.md' = '78a72aa8214acd5a5e202df34bbb20f8cfd841ab3d181de10645a777267cfd5d'
+    'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'a69e11d41697feae79f8322ce2115352af97cefd2eb0af809b4d47f241b3c3f2'
+    'docs/standards/skill-repository-review-matrix.md' = '315204afe428bb51cab5e815b2c40f6d0cbd55c81a3532ad59b686ae5e4c166c'
+    'docs/standards/skill-repository-standard.md' = '585d74097cca9413aba8c153be34ff53165c0acc058ef1fdbcf12ba8e954edb7'
     'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
-    'docs/standards/validation-security-gate.json' = 'e303e8c3d484012022f5c4da694c3fe21ff02395b0b9b7e973a4234d4182f485'
+    'docs/standards/validation-security-gate.json' = '81d4eadcb38a573f218b49d9c5555d609f89e13c2cf1ad63f0ee6422c9ecc33c'
     'docs/standards/validation-toolchain.json' = '5925dcb1aea1e545b9787a29825e7a0cc03a04c777cd68ab44c9bdd7482ff579'
-    'scripts/Invoke-StandardAuthorityGate.ps1' = 'c98d3f1b181ba0e7d3894729a8f1636984407c20454a27e0e383799c2f90425f'
+    'scripts/Invoke-StandardAuthorityGate.ps1' = '22d70074762437daf926a1afe3ff1def2f57efed7c7a6b41f1c390d68cb664d7'
     'scripts/Resolve-PythonWheelClosure.py' = '7fa1511a3e3ba257c6d9e37f929f68e5684184a3a2756a3f9e765ccc6e69d208'
-    'scripts/Resolve-StandardValidationTool.ps1' = '3744bc4549612e5997361315a8fd5e1ea803ade26052cf4eaf2ccdc1776fcf6e'
+    'scripts/Resolve-StandardValidationTool.ps1' = '07cb7d9bf35aaee1e3d0fc8af1837582e588227cbcb2e29cd4a5e4b610754a15'
     'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '1b45052712450d40df278937d381018b9ce2ded2cbf42845db65f8028e56df44'
-    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '24d8b0f29f9bddd8af1bee02943fb46c72ca5d4a874727cb107ff68a39af12b9'
-    'docs/standards/standard-validation-contract-v1.json' = '2b3d6da1c97c5542a9761445da9de5f101ada53e83cb1f17ee90c8b0d4929356'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '7abb4cea105eecc97f0b190930b77297336595ffb4d26cf04b0ea1071a79f483'
+    'docs/standards/standard-validation-contract-v1.json' = '503a93a443629eec6572c642fa324e3d5bd4b0b857ca3b1b3ae265e132f05404'
     'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
     'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-    'scripts/Invoke-StandardValidation.ps1' = '3cee28379d5612e4592f1755d8732e6b869018402b7d82efacd89fa10bcafd57'
+    'scripts/Invoke-StandardValidation.ps1' = 'a1ff12b3d2127975813df044495aa14763cd2b640fbdb2f0534975f3721eaaa2'
+    'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '561e9bb167c1c4d5ce1a438eeca13df9d2623b8fe6dbb31973427f462f97eb55'
+    'scripts/StandardSemanticBridge.psm1' = 'f61d3a4166b8e312d9f4090cb72e8af37056d88f2936cb22ecdd1fb389b191cc'
     'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
     'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
     'scripts/Validate-UpstreamAdapter.ps1' = '7fd3c2c34544b21b769ebfa9238c379e094e022381b7ebe11f3e196e623fd376'
@@ -130,6 +140,12 @@ function Test-PathWithinOrEqual {
         $fullPath.StartsWith($fullRoot + [IO.Path]::DirectorySeparatorChar, $comparison)
 }
 
+function Test-PathEqual {
+    param([Parameter(Mandatory = $true)][string] $Left, [Parameter(Mandatory = $true)][string] $Right)
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    return [IO.Path]::GetFullPath($Left).Equals([IO.Path]::GetFullPath($Right), $comparison)
+}
+
 function Assert-PathWithinRoot {
     param(
         [Parameter(Mandatory = $true)][string] $Path,
@@ -167,6 +183,21 @@ function Write-Utf8NoBom {
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
     [IO.File]::WriteAllText([IO.Path]::GetFullPath($Path), $Text, [Text.UTF8Encoding]::new($false))
+}
+
+function Write-Utf8NoBomCreateNew {
+    param([Parameter(Mandatory = $true)][string] $Path, [Parameter(Mandatory = $true)][string] $Text)
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $parent = Split-Path -Parent $fullPath
+    if (-not [string]::IsNullOrWhiteSpace($parent)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open($fullPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { if ($null -ne $stream) { $stream.Dispose() } }
 }
 
 function Get-ResolvedGitPath {
@@ -630,12 +661,225 @@ catch {
 }
 '@
 
+$semanticPreparationHelperText = @'
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
+#requires -Version 7.0
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string] $RunnerPath,
+    [Parameter(Mandatory = $true)][string] $CandidateRoot,
+    [Parameter(Mandatory = $true)][string] $AdapterPath,
+    [Parameter(Mandatory = $true)][string] $ArtifactsRoot,
+    [Parameter(Mandatory = $true)][string] $SourceRepository,
+    [Parameter(Mandatory = $true)][string] $SourceRevision,
+    [Parameter(Mandatory = $true)][string] $BaseRevision,
+    [Parameter(Mandatory = $true)][string] $EventName,
+    [Parameter(Mandatory = $true)][string] $CandidateArchiveSha256,
+    [Parameter(Mandatory = $true)][string] $OutputPath
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$consumerPreparationRunnerPath = [IO.Path]::GetFullPath($RunnerPath)
+$consumerPreparationCandidateRoot = [IO.Path]::GetFullPath($CandidateRoot)
+$consumerPreparationAdapterPath = [IO.Path]::GetFullPath($AdapterPath)
+$consumerPreparationArtifactsRoot = [IO.Path]::GetFullPath($ArtifactsRoot)
+$consumerPreparationSourceRepository = [string]$SourceRepository
+$consumerPreparationSourceRevision = [string]$SourceRevision
+$consumerPreparationBaseRevision = [string]$BaseRevision
+$consumerPreparationEventName = [string]$EventName
+$consumerPreparationCandidateArchiveSha256 = [string]$CandidateArchiveSha256
+$consumerPreparationOutputPath = [IO.Path]::GetFullPath($OutputPath)
+. $consumerPreparationRunnerPath `
+    -CandidateRoot $consumerPreparationCandidateRoot `
+    -AdapterPath $consumerPreparationAdapterPath `
+    -ArtifactsRoot $consumerPreparationArtifactsRoot `
+    -SourceRepository $consumerPreparationSourceRepository `
+    -SourceRevision $consumerPreparationSourceRevision `
+    -BaseRevision $consumerPreparationBaseRevision `
+    -EventName $consumerPreparationEventName `
+    -DefineFunctionsOnly
+$inventory = @(Get-StandardValidationInventory -Root $consumerPreparationCandidateRoot -Context 'consumer prepared candidate')
+$contentSha256 = Get-StandardValidationInventorySha256 -Inventory $inventory
+$adapterSha256 = Get-StandardValidationFileSha256 -Path $consumerPreparationAdapterPath -Context 'consumer prepared adapter'
+$candidateId = Get-StandardValidationTextSha256 -Value (
+    "$consumerPreparationSourceRepository`n$consumerPreparationSourceRevision`n$consumerPreparationBaseRevision`n$consumerPreparationEventName`n$contentSha256`n$adapterSha256`n$consumerPreparationCandidateArchiveSha256"
+)
+$value = [ordered]@{
+    schemaVersion = 1
+    artifactType = 'standard-validation-consumer-preparation-v1'
+    candidateId = $candidateId
+    candidateContentSha256 = $contentSha256
+    adapterSha256 = $adapterSha256
+    candidateInventory = @($inventory)
+}
+[IO.File]::WriteAllText($consumerPreparationOutputPath, (($value | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+'@
+
 try {
     $repoRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
         [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
     }
     else { [IO.Path]::GetFullPath($RepositoryRoot) }
     if (-not (Test-Path -LiteralPath $repoRoot -PathType Container)) { throw "RepositoryRoot does not exist: $repoRoot" }
+    if ($ExecutionMode -ne 'Run' -and [string]::IsNullOrWhiteSpace($SemanticRunPlanPath)) {
+        throw 'SemanticRunPlanPath is required for PrepareSemantic and ResumeSemantic.'
+    }
+    if ($ExecutionMode -eq 'ResumeSemantic') {
+        foreach ($forbiddenName in @(
+            'AuthorityArchivePath', 'ExpectedGoRuntimeVersion', 'SemanticConsent', 'SemanticProvider', 'SemanticPurpose',
+            'SemanticScope', 'SemanticEvidencePath', 'SemanticConsentRequestPath', 'SemanticConsentDecisionPath',
+            'SemanticPublicKeyPath', 'SemanticPublicKeyId', 'SemanticTriggered'
+        )) {
+            if ($PSBoundParameters.ContainsKey($forbiddenName)) { throw "ResumeSemantic does not accept caller override '$forbiddenName'." }
+        }
+        $planFull = [IO.Path]::GetFullPath($SemanticRunPlanPath)
+        $plan = Read-JsonFile -Path $planFull -Context 'Semantic run plan'
+        Assert-ExactPropertySet -Value $plan -Expected @('schemaVersion', 'artifactType', 'runId', 'source', 'roots', 'candidate', 'authority', 'tools', 'execution', 'semantic') -Context 'Semantic run plan'
+        Assert-ExactPropertySet -Value $plan.source -Expected @('repositoryRoot', 'repository', 'revision', 'baseRevision', 'tree', 'eventName') -Context 'Semantic run plan source'
+        Assert-ExactPropertySet -Value $plan.roots -Expected @('artifacts', 'run', 'trusted', 'candidateExtract', 'resolvedTools') -Context 'Semantic run plan roots'
+        Assert-ExactPropertySet -Value $plan.candidate -Expected @('archivePath', 'archiveSha256', 'snapshotRoot', 'contentSha256', 'inventory', 'candidateId') -Context 'Semantic run plan candidate'
+        Assert-ExactPropertySet -Value $plan.authority -Expected @('revision', 'archivePath', 'archiveSha256', 'root', 'runnerPath', 'runnerSha256') -Context 'Semantic run plan authority'
+        Assert-ExactPropertySet -Value $plan.tools -Expected @('policyReceiptPath', 'policyReceiptSha256', 'receipts', 'toolchainPath', 'toolchainSha256', 'childRunnerPath', 'childRunnerSha256', 'preparationHelperPath', 'preparationHelperSha256', 'preparationPath', 'preparationSha256', 'adapterPath', 'adapterSha256') -Context 'Semantic run plan tools'
+        Assert-ExactPropertySet -Value $plan.execution -Expected @('outputPath', 'timeoutSeconds', 'semanticTriggered', 'consumptionClaimPath') -Context 'Semantic run plan execution'
+        Assert-ExactPropertySet -Value $plan.semantic -Expected @('consentRequestPath', 'consentDecisionPath', 'evidencePath', 'publicKeyPath', 'publicKeyId') -Context 'Semantic run plan semantic binding'
+        if ([int]$plan.schemaVersion -ne 1 -or [string]$plan.artifactType -cne 'standard-validation-consumer-run-plan-v1' -or
+            [string]$plan.source.repository -cne $script:SourceRepository -or [string]$plan.authority.revision -cne $script:AuthorityCommit -or
+            [string]$plan.authority.archiveSha256 -cne $script:AuthorityArchiveSha256 -or $plan.execution.semanticTriggered -ne $true) {
+            throw 'Semantic run plan identity or pinned authority binding is invalid.'
+        }
+        if ([string]$plan.runId -cnotmatch '^[0-9a-f]{32}$') { throw 'Semantic run plan runId is invalid.' }
+        foreach ($sha in @(
+            $plan.candidate.archiveSha256, $plan.candidate.contentSha256, $plan.candidate.candidateId,
+            $plan.authority.archiveSha256, $plan.authority.runnerSha256, $plan.tools.policyReceiptSha256,
+            $plan.tools.toolchainSha256, $plan.tools.childRunnerSha256, $plan.tools.preparationHelperSha256,
+            $plan.tools.preparationSha256, $plan.tools.adapterSha256
+        )) { Assert-Sha256 -Value ([string]$sha) -Context 'Semantic run plan SHA-256 binding' }
+
+        $planArtifactsRoot = [IO.Path]::GetFullPath([string]$plan.roots.artifacts)
+        Assert-OutsideRoot -Path $planArtifactsRoot -Root $repoRoot -Context 'Prepared artifacts root'
+        Assert-NoReparseAncestors -Path $planArtifactsRoot -Context 'Prepared artifacts root'
+        if (-not (Test-PathWithinOrEqual -Path $planFull -Root $planArtifactsRoot)) { throw 'Semantic run plan is outside its prepared artifacts root.' }
+        if ($PSBoundParameters.ContainsKey('ArtifactsRoot') -and -not (Test-PathEqual -Left $ArtifactsRoot -Right $planArtifactsRoot)) { throw 'ArtifactsRoot conflicts with the prepared run plan.' }
+        if ($PSBoundParameters.ContainsKey('OutputPath') -and -not (Test-PathEqual -Left $OutputPath -Right ([string]$plan.execution.outputPath))) { throw 'OutputPath conflicts with the prepared run plan.' }
+        if ($PSBoundParameters.ContainsKey('TimeoutSeconds') -and $TimeoutSeconds -ne [int]$plan.execution.timeoutSeconds) { throw 'TimeoutSeconds conflicts with the prepared run plan.' }
+
+        $gitPath = Get-ResolvedGitPath
+        $pwshPath = Get-ResolvedPowerShellPath
+        if (-not (Test-PathEqual -Left $repoRoot -Right ([string]$plan.source.repositoryRoot))) { throw 'RepositoryRoot conflicts with the prepared run plan.' }
+        $candidateCommit = Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision 'HEAD' -Context 'Resume candidate revision'
+        $dirty = @(& $gitPath -C $repoRoot status --porcelain=v1 --untracked-files=all)
+        if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'ResumeSemantic requires the same clean immutable candidate commit.' }
+        $baseRevision = Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision ([string]$plan.source.baseRevision) -Context 'Resume base revision'
+        $candidateTree = @(& $gitPath -C $repoRoot rev-parse --verify --end-of-options "$candidateCommit^{tree}")
+        if ($candidateCommit -cne [string]$plan.source.revision -or $baseRevision -cne [string]$plan.source.baseRevision -or
+            $candidateTree.Count -ne 1 -or [string]$candidateTree[0] -cne [string]$plan.source.tree -or
+            (Get-EventName) -cne [string]$plan.source.eventName) { throw 'Prepared source revision, tree, base, or event drifted.' }
+        if ($PSBoundParameters.ContainsKey('BaseCommit') -and (Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision $BaseCommit -Context 'Caller base revision') -cne $baseRevision) { throw 'BaseCommit conflicts with the prepared run plan.' }
+
+        $runRoot = Assert-PathWithinRoot -Path ([string]$plan.roots.run) -Root $planArtifactsRoot -Context 'Prepared run root'
+        if (-not (Test-PathEqual -Left $runRoot -Right (Join-Path $planArtifactsRoot "sgv1-$(([string]$plan.runId).Substring(0, 12))"))) { throw 'Prepared run root is not derived from the run identity.' }
+        $trustedRoot = [IO.Path]::GetFullPath([string]$plan.roots.trusted)
+        $candidateExtractRoot = [IO.Path]::GetFullPath([string]$plan.roots.candidateExtract)
+        $resolvedToolsRoot = [IO.Path]::GetFullPath([string]$plan.roots.resolvedTools)
+        $systemTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if (-not (Test-PathEqual -Left $trustedRoot -Right (Join-Path $systemTempRoot "sgv1-tools-$($plan.runId)")) -or
+            -not (Test-PathEqual -Left $candidateExtractRoot -Right (Join-Path $systemTempRoot "sgv1-candidate-$($plan.runId)")) -or
+            -not (Test-PathEqual -Left $resolvedToolsRoot -Right (Join-Path $systemTempRoot "sgv1-resolved-tools-$($plan.runId)"))) {
+            throw 'Prepared external roots are not derived from the run identity.'
+        }
+        foreach ($externalRoot in @($trustedRoot, $candidateExtractRoot, $resolvedToolsRoot)) {
+            Assert-OutsideRoot -Path $externalRoot -Root $repoRoot -Context 'Prepared external root'
+            Assert-OutsideRoot -Path $externalRoot -Root $planArtifactsRoot -Context 'Prepared external root'
+            Assert-NoReparseAncestors -Path $externalRoot -Context 'Prepared external root'
+        }
+        $candidateArchivePath = Assert-PathWithinRoot -Path ([string]$plan.candidate.archivePath) -Root $runRoot -Context 'Prepared candidate archive'
+        if ((Get-FileSha256 -Path $candidateArchivePath) -cne [string]$plan.candidate.archiveSha256) { throw 'Prepared candidate archive drifted.' }
+        $candidateRoot = Assert-PathWithinRoot -Path ([string]$plan.candidate.snapshotRoot) -Root $candidateExtractRoot -Context 'Prepared candidate snapshot'
+        $authorityArchive = Assert-PathWithinRoot -Path ([string]$plan.authority.archivePath) -Root $runRoot -Context 'Prepared authority archive'
+        if ((Get-FileSha256 -Path $authorityArchive) -cne $script:AuthorityArchiveSha256) { throw 'Prepared authority archive drifted.' }
+        $authorityRoot = Assert-PathWithinRoot -Path ([string]$plan.authority.root) -Root $trustedRoot -Context 'Prepared authority root'
+        foreach ($entry in $script:AuthorityFiles.GetEnumerator()) {
+            $authorityPath = Assert-PathWithinRoot -Path (Join-Path $authorityRoot ($entry.Key -replace '/', [IO.Path]::DirectorySeparatorChar)) -Root $authorityRoot -Context 'Prepared authority file'
+            if ((Get-FileSha256 -Path $authorityPath) -cne $entry.Value) { throw "Prepared authority file drifted: $($entry.Key)" }
+        }
+        $centralRunnerPath = Assert-PathWithinRoot -Path ([string]$plan.authority.runnerPath) -Root $authorityRoot -Context 'Prepared central runner'
+        if ((Get-FileSha256 -Path $centralRunnerPath) -cne [string]$plan.authority.runnerSha256) { throw 'Prepared central runner drifted.' }
+
+        foreach ($fileBinding in @(
+            [pscustomobject]@{ path = $plan.tools.policyReceiptPath; sha = $plan.tools.policyReceiptSha256; root = $runRoot; name = 'policy receipt' },
+            [pscustomobject]@{ path = $plan.tools.toolchainPath; sha = $plan.tools.toolchainSha256; root = $trustedRoot; name = 'toolchain' },
+            [pscustomobject]@{ path = $plan.tools.childRunnerPath; sha = $plan.tools.childRunnerSha256; root = $trustedRoot; name = 'child runner' },
+            [pscustomobject]@{ path = $plan.tools.preparationHelperPath; sha = $plan.tools.preparationHelperSha256; root = $trustedRoot; name = 'preparation helper' },
+            [pscustomobject]@{ path = $plan.tools.preparationPath; sha = $plan.tools.preparationSha256; root = $runRoot; name = 'preparation result' },
+            [pscustomobject]@{ path = $plan.tools.adapterPath; sha = $plan.tools.adapterSha256; root = $trustedRoot; name = 'adapter' }
+        )) {
+            $boundPath = Assert-PathWithinRoot -Path ([string]$fileBinding.path) -Root ([string]$fileBinding.root) -Context "Prepared $($fileBinding.name)"
+            if ((Get-FileSha256 -Path $boundPath) -cne [string]$fileBinding.sha) { throw "Prepared $($fileBinding.name) drifted." }
+        }
+        foreach ($receipt in @($plan.tools.receipts)) {
+            Assert-ExactPropertySet -Value $receipt -Expected @('tool', 'path', 'sha256') -Context 'Prepared resolver receipt'
+            Assert-Sha256 -Value ([string]$receipt.sha256) -Context 'Prepared resolver receipt'
+            $receiptPath = Assert-PathWithinRoot -Path ([string]$receipt.path) -Root $runRoot -Context 'Prepared resolver receipt'
+            if ((Get-FileSha256 -Path $receiptPath) -cne [string]$receipt.sha256) { throw "Prepared resolver receipt drifted: $($receipt.tool)" }
+        }
+
+        $semanticPaths = @($plan.semantic.consentRequestPath, $plan.semantic.consentDecisionPath, $plan.semantic.evidencePath, $plan.semantic.publicKeyPath)
+        $seenSemanticPaths = [Collections.Generic.HashSet[string]]::new($(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
+        foreach ($semanticPath in $semanticPaths) {
+            Assert-OutsideRoot -Path ([string]$semanticPath) -Root $repoRoot -Context 'Prepared semantic artifact'
+            Assert-OutsideRoot -Path ([string]$semanticPath) -Root $planArtifactsRoot -Context 'Prepared semantic artifact'
+            if (-not (Test-Path -LiteralPath ([string]$semanticPath) -PathType Leaf)) { throw "Prepared semantic artifact is missing: $semanticPath" }
+            Assert-NoReparseAncestors -Path ([string]$semanticPath) -Context 'Prepared semantic artifact'
+            if (-not $seenSemanticPaths.Add([IO.Path]::GetFullPath([string]$semanticPath))) { throw 'Prepared semantic artifact paths must be distinct.' }
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$plan.semantic.publicKeyId)) { throw 'Prepared semantic public-key identity is missing.' }
+
+        $resumeVerificationPath = Join-Path $runRoot "semantic-resume-verification-$([guid]::NewGuid().ToString('N')).json"
+        & $pwshPath -NoProfile -NonInteractive -File ([string]$plan.tools.preparationHelperPath) `
+            -RunnerPath $centralRunnerPath -CandidateRoot $candidateRoot -AdapterPath ([string]$plan.tools.adapterPath) `
+            -ArtifactsRoot $planArtifactsRoot -SourceRepository $script:SourceRepository -SourceRevision $candidateCommit `
+            -BaseRevision $baseRevision -EventName ([string]$plan.source.eventName) `
+            -CandidateArchiveSha256 ([string]$plan.candidate.archiveSha256) -OutputPath $resumeVerificationPath
+        if ($LASTEXITCODE -ne 0) { throw 'Prepared semantic identity revalidation failed.' }
+        $recomputed = Read-JsonFile -Path $resumeVerificationPath -Context 'Recomputed semantic preparation'
+        if ([string]$recomputed.candidateId -cne [string]$plan.candidate.candidateId -or
+            [string]$recomputed.candidateContentSha256 -cne [string]$plan.candidate.contentSha256 -or
+            [string]$recomputed.adapterSha256 -cne [string]$plan.tools.adapterSha256 -or
+            ((@($recomputed.candidateInventory) | ConvertTo-Json -Depth 100 -Compress) -cne (@($plan.candidate.inventory) | ConvertTo-Json -Depth 100 -Compress))) {
+            throw 'Prepared candidate, inventory, or adapter binding drifted.'
+        }
+
+        $outputFull = Assert-PathWithinRoot -Path ([string]$plan.execution.outputPath) -Root $planArtifactsRoot -Context 'Prepared output path'
+        if (Test-Path -LiteralPath $outputFull) { throw 'Prepared output path is no longer create-only.' }
+        $claimPath = Assert-PathWithinRoot -Path ([string]$plan.execution.consumptionClaimPath) -Root $planArtifactsRoot -Context 'Prepared consumption claim'
+        if (-not (Test-PathEqual -Left $claimPath -Right "$planFull.consumed.json")) { throw 'Prepared consumption claim path is not derived from the run plan.' }
+        $claimStream = $null
+        try {
+            $claimStream = [IO.File]::Open($claimPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $claimBytes = [Text.UTF8Encoding]::new($false).GetBytes((([ordered]@{ schemaVersion = 1; artifactType = 'standard-validation-consumer-run-claim-v1'; planSha256 = Get-FileSha256 -Path $planFull; claimedAt = [DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress) + [Environment]::NewLine))
+            $claimStream.Write($claimBytes, 0, $claimBytes.Length)
+            $claimStream.Flush($true)
+        }
+        catch { throw "Semantic run plan is already consumed or could not be claimed: $($_.Exception.Message)" }
+        finally { if ($null -ne $claimStream) { $claimStream.Dispose() } }
+
+        $resumeArgs = @(
+            '-CandidateRoot', $candidateRoot, '-AdapterPath', ([string]$plan.tools.adapterPath),
+            '-ArtifactsRoot', $planArtifactsRoot, '-OutputPath', $outputFull,
+            '-SourceRepository', $script:SourceRepository, '-SourceRevision', $candidateCommit,
+            '-BaseRevision', $baseRevision, '-EventName', ([string]$plan.source.eventName),
+            '-TimeoutSeconds', ([string][int]$plan.execution.timeoutSeconds), '-TrustedToolRoot', $trustedRoot,
+            '-CandidateArchiveSha256', ([string]$plan.candidate.archiveSha256), '-DevelopmentHarness', '-SemanticTriggered',
+            '-SemanticEvidencePath', ([string]$plan.semantic.evidencePath),
+            '-SemanticConsentRequestPath', ([string]$plan.semantic.consentRequestPath),
+            '-SemanticConsentDecisionPath', ([string]$plan.semantic.consentDecisionPath),
+            '-SemanticPublicKeyPath', ([string]$plan.semantic.publicKeyPath),
+            '-SemanticPublicKeyId', ([string]$plan.semantic.publicKeyId)
+        )
+        & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @resumeArgs
+        exit $LASTEXITCODE
+    }
     $gitPath = Get-ResolvedGitPath
     $pwshPath = Get-ResolvedPowerShellPath
     $candidateCommit = Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision 'HEAD' -Context 'Candidate revision'
@@ -658,6 +902,36 @@ try {
     Assert-NoReparseAncestors -Path $artifactsRootPath -Context 'Artifacts root'
     $outputFull = if ([string]::IsNullOrWhiteSpace($OutputPath)) { Join-Path $artifactsRootPath 'skill-general-conformance-report.json' } else { Assert-PathWithinRoot -Path $OutputPath -Root $artifactsRootPath -Context 'OutputPath' }
     if (Test-Path -LiteralPath $outputFull -PathType Leaf) { throw "OutputPath already exists and evidence is create-only: $outputFull" }
+    $semanticRunPlanFull = $null
+    $semanticArtifactPaths = $null
+    if ($ExecutionMode -eq 'PrepareSemantic') {
+        if (-not $SemanticTriggered) { throw 'PrepareSemantic requires an explicit SemanticTriggered development-harness request.' }
+        if ($SemanticConsent -or -not [string]::IsNullOrWhiteSpace($SemanticProvider) -or
+            -not [string]::IsNullOrWhiteSpace($SemanticPurpose) -or -not [string]::IsNullOrWhiteSpace($SemanticScope)) {
+            throw 'PrepareSemantic v2 does not accept legacy semantic consent/provider/purpose/scope inputs; those bindings belong in the v2 artifacts.'
+        }
+        if ([string]::IsNullOrWhiteSpace($SemanticEvidencePath) -or
+            [string]::IsNullOrWhiteSpace($SemanticConsentRequestPath) -or
+            [string]::IsNullOrWhiteSpace($SemanticConsentDecisionPath) -or
+            [string]::IsNullOrWhiteSpace($SemanticPublicKeyPath) -or
+            [string]::IsNullOrWhiteSpace($SemanticPublicKeyId)) {
+            throw 'PrepareSemantic requires fixed consent request, decision, evidence, public-key paths, and public-key identity.'
+        }
+        $semanticRunPlanFull = Assert-PathWithinRoot -Path $SemanticRunPlanPath -Root $artifactsRootPath -Context 'SemanticRunPlanPath'
+        if (Test-Path -LiteralPath $semanticRunPlanFull) { throw "Semantic run plan already exists and is create-only: $semanticRunPlanFull" }
+        $semanticArtifactPaths = [ordered]@{
+            consentRequest = [IO.Path]::GetFullPath($SemanticConsentRequestPath)
+            consentDecision = [IO.Path]::GetFullPath($SemanticConsentDecisionPath)
+            evidence = [IO.Path]::GetFullPath($SemanticEvidencePath)
+            publicKey = [IO.Path]::GetFullPath($SemanticPublicKeyPath)
+        }
+        $seenSemanticPaths = [Collections.Generic.HashSet[string]]::new($(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
+        foreach ($semanticPath in $semanticArtifactPaths.Values) {
+            Assert-OutsideRoot -Path $semanticPath -Root $repoRoot -Context 'Semantic artifact path'
+            Assert-OutsideRoot -Path $semanticPath -Root $artifactsRootPath -Context 'Semantic artifact path'
+            if (-not $seenSemanticPaths.Add($semanticPath)) { throw 'Semantic artifact paths must be distinct.' }
+        }
+    }
 
     $runId = [guid]::NewGuid().ToString('N')
     $runRoot = Join-Path $artifactsRootPath "sgv1-$($runId.Substring(0, 12))"
@@ -769,6 +1043,8 @@ try {
     $toolchainSha256 = Get-FileSha256 -Path $toolchainPath
     $childRunnerPath = Join-Path $trustedRoot 'Invoke-SkillGeneralValidationChild.ps1'
     Write-Utf8NoBom -Path $childRunnerPath -Text $childRunnerText
+    $semanticPreparationHelperPath = Join-Path $trustedRoot 'Get-SkillGeneralSemanticPreparation.ps1'
+    Write-Utf8NoBom -Path $semanticPreparationHelperPath -Text $semanticPreparationHelperText
 
     $semanticRequired = $false
     $changedPaths = @(& $gitPath -C $repoRoot diff --find-renames=100% --name-only "$baseRevision...$candidateCommit")
@@ -794,6 +1070,111 @@ try {
     }
     $adapterPath = Join-Path $trustedRoot 'standard-validation-adapter.json'
     Write-Utf8NoBom -Path $adapterPath -Text (($adapter | ConvertTo-Json -Depth 50) + [Environment]::NewLine)
+    if ($ExecutionMode -eq 'PrepareSemantic') {
+        $preparationPath = Join-Path $runRoot 'semantic-preparation.json'
+        & $pwshPath -NoProfile -NonInteractive -File $semanticPreparationHelperPath `
+            -RunnerPath $centralRunnerPath `
+            -CandidateRoot $candidateRoot `
+            -AdapterPath $adapterPath `
+            -ArtifactsRoot $artifactsRootPath `
+            -SourceRepository $script:SourceRepository `
+            -SourceRevision $candidateCommit `
+            -BaseRevision $baseRevision `
+            -EventName $eventName `
+            -CandidateArchiveSha256 $candidateArchiveSha256 `
+            -OutputPath $preparationPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $preparationPath -PathType Leaf)) {
+            throw "Semantic preparation helper failed with exit code $LASTEXITCODE."
+        }
+        $preparation = Read-JsonFile -Path $preparationPath -Context 'Semantic preparation result'
+        Assert-ExactPropertySet -Value $preparation -Expected @('schemaVersion', 'artifactType', 'candidateId', 'candidateContentSha256', 'adapterSha256', 'candidateInventory') -Context 'Semantic preparation result'
+        if ([int]$preparation.schemaVersion -ne 1 -or [string]$preparation.artifactType -cne 'standard-validation-consumer-preparation-v1') {
+            throw 'Semantic preparation result has an unsupported contract identity.'
+        }
+        foreach ($entry in @($preparation.candidateId, $preparation.candidateContentSha256, $preparation.adapterSha256)) {
+            Assert-Sha256 -Value ([string]$entry) -Context 'Semantic preparation identity'
+        }
+        if ([string]$preparation.adapterSha256 -cne (Get-FileSha256 -Path $adapterPath)) {
+            throw 'Semantic preparation adapter identity does not match the actual generated adapter.'
+        }
+        $candidateTree = @(& $gitPath -C $repoRoot rev-parse --verify --end-of-options "$candidateCommit^{tree}")
+        if ($LASTEXITCODE -ne 0 -or $candidateTree.Count -ne 1 -or [string]$candidateTree[0] -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Could not resolve the immutable candidate tree.'
+        }
+        $receiptBindings = @(
+            foreach ($toolName in @('skillspector', 'skill-validator', 'skill-tools', 'pester')) {
+                $receiptPath = Join-Path $runRoot "receipt-$toolName.json"
+                [ordered]@{ tool = $toolName; path = [IO.Path]::GetFullPath($receiptPath); sha256 = Get-FileSha256 -Path $receiptPath }
+            }
+        )
+        $plan = [ordered]@{
+            schemaVersion = 1
+            artifactType = 'standard-validation-consumer-run-plan-v1'
+            runId = $runId
+            source = [ordered]@{
+                repositoryRoot = $repoRoot
+                repository = $script:SourceRepository
+                revision = $candidateCommit
+                baseRevision = $baseRevision
+                tree = [string]$candidateTree[0]
+                eventName = $eventName
+            }
+            roots = [ordered]@{
+                artifacts = $artifactsRootPath
+                run = [IO.Path]::GetFullPath($runRoot)
+                trusted = [IO.Path]::GetFullPath($trustedRoot)
+                candidateExtract = [IO.Path]::GetFullPath($candidateExtractRoot)
+                resolvedTools = [IO.Path]::GetFullPath($resolvedToolsRoot)
+            }
+            candidate = [ordered]@{
+                archivePath = [IO.Path]::GetFullPath($candidateArchivePath)
+                archiveSha256 = $candidateArchiveSha256
+                snapshotRoot = $candidateRoot
+                contentSha256 = [string]$preparation.candidateContentSha256
+                inventory = @($preparation.candidateInventory)
+                candidateId = [string]$preparation.candidateId
+            }
+            authority = [ordered]@{
+                revision = $script:AuthorityCommit
+                archivePath = [IO.Path]::GetFullPath($authorityArchive)
+                archiveSha256 = $script:AuthorityArchiveSha256
+                root = $authorityRoot
+                runnerPath = [IO.Path]::GetFullPath($centralRunnerPath)
+                runnerSha256 = Get-FileSha256 -Path $centralRunnerPath
+            }
+            tools = [ordered]@{
+                policyReceiptPath = [IO.Path]::GetFullPath($policyReceiptPath)
+                policyReceiptSha256 = Get-FileSha256 -Path $policyReceiptPath
+                receipts = $receiptBindings
+                toolchainPath = [IO.Path]::GetFullPath($toolchainPath)
+                toolchainSha256 = $toolchainSha256
+                childRunnerPath = [IO.Path]::GetFullPath($childRunnerPath)
+                childRunnerSha256 = Get-FileSha256 -Path $childRunnerPath
+                preparationHelperPath = [IO.Path]::GetFullPath($semanticPreparationHelperPath)
+                preparationHelperSha256 = Get-FileSha256 -Path $semanticPreparationHelperPath
+                preparationPath = [IO.Path]::GetFullPath($preparationPath)
+                preparationSha256 = Get-FileSha256 -Path $preparationPath
+                adapterPath = [IO.Path]::GetFullPath($adapterPath)
+                adapterSha256 = [string]$preparation.adapterSha256
+            }
+            execution = [ordered]@{
+                outputPath = $outputFull
+                timeoutSeconds = $TimeoutSeconds
+                semanticTriggered = $true
+                consumptionClaimPath = "$semanticRunPlanFull.consumed.json"
+            }
+            semantic = [ordered]@{
+                consentRequestPath = $semanticArtifactPaths.consentRequest
+                consentDecisionPath = $semanticArtifactPaths.consentDecision
+                evidencePath = $semanticArtifactPaths.evidence
+                publicKeyPath = $semanticArtifactPaths.publicKey
+                publicKeyId = $SemanticPublicKeyId
+            }
+        }
+        Write-Utf8NoBomCreateNew -Path $semanticRunPlanFull -Text (($plan | ConvertTo-Json -Depth 100) + [Environment]::NewLine)
+        [pscustomobject]@{ status = 'prepared'; planPath = $semanticRunPlanFull; candidateId = [string]$preparation.candidateId } | ConvertTo-Json -Compress
+        exit 0
+    }
     $centralRunnerArgs = @(
         '-CandidateRoot', $candidateRoot,
         '-AdapterPath', $adapterPath,
@@ -807,12 +1188,17 @@ try {
         '-TrustedToolRoot', $trustedRoot,
         '-DevelopmentHarness'
     )
+    if ($SemanticTriggered) { $centralRunnerArgs += '-SemanticTriggered' }
     if ($SemanticConsent) { $centralRunnerArgs += '-SemanticConsent' }
     foreach ($pair in @(
         @('-SemanticProvider', $SemanticProvider),
         @('-SemanticPurpose', $SemanticPurpose),
         @('-SemanticScope', $SemanticScope),
-        @('-SemanticEvidencePath', $SemanticEvidencePath)
+        @('-SemanticEvidencePath', $SemanticEvidencePath),
+        @('-SemanticConsentRequestPath', $SemanticConsentRequestPath),
+        @('-SemanticConsentDecisionPath', $SemanticConsentDecisionPath),
+        @('-SemanticPublicKeyPath', $SemanticPublicKeyPath),
+        @('-SemanticPublicKeyId', $SemanticPublicKeyId)
     )) {
         if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) { $centralRunnerArgs += @($pair[0],$pair[1]) }
     }

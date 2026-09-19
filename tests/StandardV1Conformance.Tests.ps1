@@ -38,8 +38,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be 'a403abdf038a3346d775431a6908a71cc3d35a5b'
-        $adapter.authority.archiveSha256 | Should -Be '17154929fadfa63487263db1efcb78f4948195af9c11c25a66432eff3411b2d3'
+        $adapter.authority.commit | Should -Be '8a944f4a74a054cb0353f22ab22c459dc9dc18ef'
+        $adapter.authority.archiveSha256 | Should -Be '99ba8cae62c80db9da8876b5a7e49dfdd499ca863c006bfd2a411a5d4e7dbcc0'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -56,6 +56,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-StandardValidationTool.ps1'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-PythonWheelClosure.py'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Invoke-StandardValidation.ps1'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json'
+        @($adapter.authority.files.path) | Should -Contain 'scripts/StandardSemanticBridge.psm1'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/standard-validation-contract-v1.json'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-validation-adapter-v1.schema.json'
         @($adapter.authority.files | Where-Object { $_.sha256 -notmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
@@ -71,6 +73,25 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $validator | Should -Match 'repository-test-general'
         $validator | Should -Match 'repository-test-pester'
         $validator | Should -Not -Match 'deviations\s*='
+    }
+
+    It 'keeps semantic v1 and development-harness forwarding while exposing v2 paths and key identity' {
+        $validator = Get-Content -LiteralPath $script:CanonicalValidatorPath -Raw
+        $validator | Should -Match '-DevelopmentHarness'
+        $validator | Should -Match 'if \(\$SemanticConsent\) \{ \$centralRunnerArgs \+= ''-SemanticConsent'' \}'
+        foreach ($parameter in @(
+            'SemanticProvider',
+            'SemanticPurpose',
+            'SemanticScope',
+            'SemanticEvidencePath',
+            'SemanticConsentRequestPath',
+            'SemanticConsentDecisionPath',
+            'SemanticPublicKeyPath',
+            'SemanticPublicKeyId'
+        )) {
+            $pair = '@(' + "'" + '-' + $parameter + "', " + '$' + $parameter + ')'
+            $validator | Should -Match ([regex]::Escape($pair))
+        }
     }
 
     It 'routes CI through the canonical validator without a second installer policy' {
