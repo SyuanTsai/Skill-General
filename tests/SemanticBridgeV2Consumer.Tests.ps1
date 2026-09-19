@@ -42,7 +42,11 @@ param(
 )
 function Get-StandardValidationInventory {
     param([string] $Root, [string] $Context)
-    return @([pscustomobject][ordered]@{ path = 'skills/example/SKILL.md'; sha256 = ('3' * 64); bytes = 1 })
+    $entries = @(
+        [pscustomobject][ordered]@{ path = 'skills/example/SKILL.md'; sha256 = ('3' * 64); length = 1 }
+        [pscustomobject][ordered]@{ path = 'skills/second/SKILL.md'; sha256 = ('4' * 64); length = 2 }
+    )
+    return ,$entries
 }
 function Get-StandardValidationInventorySha256 { param($Inventory); return ('1' * 64) }
 function Get-StandardValidationFileSha256 { param([string] $Path, [string] $Context); return ('2' * 64) }
@@ -78,7 +82,8 @@ function Get-StandardValidationTextSha256 {
             [Security.Cryptography.SHA256]::HashData([Text.UTF8Encoding]::new($false).GetBytes($binding))
         ).ToLowerInvariant()
         $preparation.candidateId | Should -BeExactly $expectedCandidateId
-        @($preparation.candidateInventory).Count | Should -Be 1
+        @($preparation.candidateInventory).Count | Should -Be 2
+        @($preparation.candidateInventory.path) | Should -BeExactly @('skills/example/SKILL.md', 'skills/second/SKILL.md')
     }
 
     It 'prepares, signs, resumes, verifies, and rejects replay through the exact Validate.ps1 entrypoint' -Tag 'SemanticBridgeV2ConsumerE2E' {

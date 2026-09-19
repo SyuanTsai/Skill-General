@@ -699,7 +699,7 @@ $consumerPreparationOutputPath = [IO.Path]::GetFullPath($OutputPath)
     -BaseRevision $consumerPreparationBaseRevision `
     -EventName $consumerPreparationEventName `
     -DefineFunctionsOnly
-$inventory = @(Get-StandardValidationInventory -Root $consumerPreparationCandidateRoot -Context 'consumer prepared candidate')
+$inventory = Get-StandardValidationInventory -Root $consumerPreparationCandidateRoot -Context 'consumer prepared candidate'
 $contentSha256 = Get-StandardValidationInventorySha256 -Inventory $inventory
 $adapterSha256 = Get-StandardValidationFileSha256 -Path $consumerPreparationAdapterPath -Context 'consumer prepared adapter'
 $candidateId = Get-StandardValidationTextSha256 -Value (
