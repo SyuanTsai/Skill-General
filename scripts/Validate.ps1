@@ -720,7 +720,17 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
-            $result = Invoke-Pester -Path $testRoot -Output None -PassThru 6>$null
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                # Tests intentionally exercise non-zero native child processes. Do not let the
+                # runner's fail-fast preference promote their captured stderr into terminating
+                # errors before Pester can evaluate the assertions.
+                $ErrorActionPreference = 'Continue'
+                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 6>$null
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
             if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
                 [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
             $testInventory = @(
