@@ -75,6 +75,49 @@ jobs:
           $outputPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
           & ./scripts/Validate.ps1 -ArtifactsRoot $env:RUNNER_TEMP -BaseCommit $baseCommit -ExpectedGoRuntimeVersion $env:STANDARD_GO_RUNTIME_VERSION -OutputPath $outputPath
 
+      - name: Diagnose repository Pester failure
+        if: ${{ failure() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifests = @(
+            Get-Module -ListAvailable Pester |
+              Where-Object { [string]$_.Version -ceq '6.2.0' } |
+              Select-Object -ExpandProperty Path -Unique
+          )
+          if ($manifests.Count -ne 1) {
+            throw "Expected exactly one run-owned Pester 6.2.0 manifest after canonical validation; found $($manifests.Count)."
+          }
+          Import-Module -Name $manifests[0] -Force -ErrorAction Stop
+          $loaded = Get-Module Pester | Select-Object -First 1
+          if ($null -eq $loaded -or [string]$loaded.Version -cne '6.2.0') {
+            throw 'The run-owned Pester 6.2.0 module was not loaded.'
+          }
+          Write-Host "PowerShell=$($PSVersionTable.PSVersion); Pester=$($loaded.Version); Manifest=$($manifests[0]); NativeErrorPreference=$PSNativeCommandUseErrorActionPreference"
+          $env:STANDARD_VALIDATION_STAGE_ID = 'repository-tests'
+          $env:STANDARD_VALIDATION_TOOL_ID = 'repository-test-pester'
+          $previousErrorActionPreference = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $focused = Invoke-Pester -Path 'tests/SemanticBridgeV2Consumer.Tests.ps1' -Output Detailed -PassThru
+          }
+          finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+          }
+          if ([int64]$focused.FailedCount -ne 0 -or [int64]$focused.PassedCount + [int64]$focused.SkippedCount -ne [int64]$focused.TotalCount) {
+            throw "Focused consumer Pester failed: total=$($focused.TotalCount), passed=$($focused.PassedCount), failed=$($focused.FailedCount), skipped=$($focused.SkippedCount)."
+          }
+          try {
+            $ErrorActionPreference = 'Continue'
+            $complete = Invoke-Pester -Path 'tests' -Output Detailed -PassThru
+          }
+          finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+          }
+          if ([int64]$complete.FailedCount -ne 0 -or [int64]$complete.PassedCount + [int64]$complete.SkippedCount -ne [int64]$complete.TotalCount) {
+            throw "Complete repository Pester failed: total=$($complete.TotalCount), passed=$($complete.PassedCount), failed=$($complete.FailedCount), skipped=$($complete.SkippedCount)."
+          }
+
   # These jobs preserve the repository's existing required status contexts while
   # keeping the canonical Standard v1 gate as the only validation policy.
   repository-contract:
