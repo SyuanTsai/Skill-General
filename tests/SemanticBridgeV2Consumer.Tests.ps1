@@ -150,7 +150,13 @@ function Invoke-SyntheticResume {
         -ExecutionMode ResumeSemantic `
         -RepositoryRoot $RepositoryRoot `
         -SemanticRunPlanPath $PlanPath 2>&1)
-    return [pscustomobject]@{ exitCode = $LASTEXITCODE; output = ($output -join [Environment]::NewLine) }
+    $renderedOutput = $output -join [Environment]::NewLine
+    $normalizedOutput = (([regex]::Replace($renderedOutput, '\x1B\[[0-9;]*m', ' ')) -replace '\s+', ' ').Trim()
+    return [pscustomobject]@{
+        exitCode = $LASTEXITCODE
+        output = $renderedOutput
+        normalizedOutput = $normalizedOutput
+    }
 }
 
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -249,7 +255,7 @@ function Get-StandardValidationTextSha256 {
                 -WriteReceiptFiles
             $result = Invoke-SyntheticResume -ValidatorPath $script:ValidatorPath -RepositoryRoot $script:RepositoryRoot -PlanPath $fixture.planPath
             $result.exitCode | Should -Not -Be 0 -Because "$($scenario.name) receipt list must fail closed. Output: $($result.output)"
-            $result.output | Should -Match $scenario.expectedError -Because "$($scenario.name) failure should come from the canonical receipt-set implementation."
+            $result.normalizedOutput | Should -Match $scenario.expectedError -Because "$($scenario.name) failure should come from the canonical receipt-set implementation."
         }
     }
 
@@ -278,7 +284,7 @@ function Get-StandardValidationTextSha256 {
 
         $result = Invoke-SyntheticResume -ValidatorPath $script:ValidatorPath -RepositoryRoot $script:RepositoryRoot -PlanPath $planPath
         $result.exitCode | Should -Not -Be 0 -Because 'A plan reparse point must be rejected before JSON parsing.'
-        $result.output | Should -Match 'reparse point'
+        $result.normalizedOutput | Should -Match 'reparse point'
     }
 
     It 'rejects a non-ancestor base through ResumeSemantic before consuming the plan' {
@@ -313,7 +319,7 @@ function Get-StandardValidationTextSha256 {
             -WriteReceiptFiles
         $result = Invoke-SyntheticResume -ValidatorPath $script:ValidatorPath -RepositoryRoot $repositoryRoot -PlanPath $fixture.planPath
         $result.exitCode | Should -Not -Be 0 -Because "A non-ancestor base must fail closed. Output: $($result.output)"
-        $result.output | Should -Match 'distinct ancestor'
+        $result.normalizedOutput | Should -Match 'distinct ancestor'
     }
 
     It 'prepares, signs, resumes, verifies, and rejects replay through the exact Validate.ps1 entrypoint' -Tag 'SemanticBridgeV2ConsumerE2E' {
