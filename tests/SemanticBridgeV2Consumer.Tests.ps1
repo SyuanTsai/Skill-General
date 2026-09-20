@@ -151,7 +151,8 @@ function Invoke-SyntheticResume {
         -RepositoryRoot $RepositoryRoot `
         -SemanticRunPlanPath $PlanPath 2>&1)
     $renderedOutput = $output -join [Environment]::NewLine
-    $normalizedOutput = (([regex]::Replace($renderedOutput, '\x1B\[[0-9;]*m', ' ')) -replace '\s+', ' ').Trim()
+    $plainOutput = [regex]::Replace($renderedOutput, '\x1B\[[0-9;]*m', ' ')
+    $normalizedOutput = (($plainOutput -replace '\s+\|\s+', ' ') -replace '\s+', ' ').Trim()
     return [pscustomobject]@{
         exitCode = $LASTEXITCODE
         output = $renderedOutput
