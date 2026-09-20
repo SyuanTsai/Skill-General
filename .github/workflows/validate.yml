@@ -81,18 +81,19 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $manifests = @(
-            Get-ChildItem -Path (Join-Path ([IO.Path]::GetTempPath()) 'sgv1-resolved-tools-*') -Recurse -File -Filter Pester.psd1 -ErrorAction SilentlyContinue |
-              Where-Object FullName -Match '[\\/]Pester[\\/]6\.2\.0[\\/]Pester\.psd1$'
+            Get-Module -ListAvailable Pester |
+              Where-Object { [string]$_.Version -ceq '6.2.0' } |
+              Select-Object -ExpandProperty Path -Unique
           )
           if ($manifests.Count -ne 1) {
             throw "Expected exactly one run-owned Pester 6.2.0 manifest after canonical validation; found $($manifests.Count)."
           }
-          Import-Module -Name $manifests[0].FullName -Force -ErrorAction Stop
+          Import-Module -Name $manifests[0] -Force -ErrorAction Stop
           $loaded = Get-Module Pester | Select-Object -First 1
           if ($null -eq $loaded -or [string]$loaded.Version -cne '6.2.0') {
             throw 'The run-owned Pester 6.2.0 module was not loaded.'
           }
-          Write-Host "PowerShell=$($PSVersionTable.PSVersion); Pester=$($loaded.Version); Manifest=$($manifests[0].FullName); NativeErrorPreference=$PSNativeCommandUseErrorActionPreference"
+          Write-Host "PowerShell=$($PSVersionTable.PSVersion); Pester=$($loaded.Version); Manifest=$($manifests[0]); NativeErrorPreference=$PSNativeCommandUseErrorActionPreference"
           $env:STANDARD_VALIDATION_STAGE_ID = 'repository-tests'
           $env:STANDARD_VALIDATION_TOOL_ID = 'repository-test-pester'
           $previousErrorActionPreference = $ErrorActionPreference
