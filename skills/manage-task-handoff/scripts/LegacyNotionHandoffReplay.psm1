@@ -92,7 +92,7 @@ function Get-LegacyNotionUnmergedChangeFingerprint {
             $byteCount = [Text.Encoding]::UTF8.GetByteCount($component)
             [void]$builder.Append($byteCount).Append(':').Append($component)
         }
-        [void]$builder.Append("`n")
+        [void]$builder.Append([char]10)
     }
 
     $hasher = [Security.Cryptography.SHA256]::Create()
