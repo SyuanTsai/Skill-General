@@ -305,7 +305,7 @@ function Push-GitHandoffBranchMutationIfRevisions {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $BranchRef,
         [Parameter(Mandatory = $true)][string] $ExpectedBranchRevision,[Parameter(Mandatory = $true)][string] $BranchCommit,
         [Parameter(Mandatory = $true)][string] $CommonRef,[Parameter(Mandatory = $true)][string] $ExpectedCommonRevision,
-        [Parameter(Mandatory = $true)][string] $CommonFenceCommit)
+        [Parameter(Mandatory = $true)][string] $CommonFenceCommit,[string] $WriteDescription='decision-bound branch')
     $arguments = @('-C',[string]$Adapter.RepositoryRoot,'push','--quiet','--atomic',
         "--force-with-lease=${BranchRef}:${ExpectedBranchRevision}",
         "--force-with-lease=${CommonRef}:${ExpectedCommonRevision}",
@@ -315,14 +315,14 @@ function Push-GitHandoffBranchMutationIfRevisions {
         $remoteBranch = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $BranchRef
         $remoteCommon = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $CommonRef
         if ($remoteBranch -cne $ExpectedBranchRevision -or $remoteCommon -cne $ExpectedCommonRevision) {
-            throw 'The live common decision or branch revision changed before the decision-bound branch write; no branch mutation was committed.'
+            throw "The live common or branch revision changed before the $WriteDescription write; no branch mutation was committed."
         }
-        throw "The decision-bound branch and common fence were not committed atomically: $($pushOutput -join ' ')"
+        throw "The $WriteDescription and common fence were not committed atomically: $($pushOutput -join ' ')"
     }
     $verifiedBranch = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $BranchRef
     $verifiedCommon = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $CommonRef
     if ($verifiedBranch -cne $BranchCommit -or $verifiedCommon -cne $CommonFenceCommit) {
-        throw 'The decision-bound branch and common fence were not atomically read back.'
+        throw "The $WriteDescription and common fence were not atomically read back."
     }
     return [pscustomobject]@{BranchRevision=$verifiedBranch;CommonRevision=$verifiedCommon}
 }
@@ -695,6 +695,16 @@ function Read-GitHandoffForkRecoveryControl {
                 throw 'The protected fork-recovery source continuation generation is invalid.'
             }
         }
+        if ($document.Contains('sourceBranchFenceRevision')) {
+            if (($null -eq $document.sourceBranchRevision) -ne ($null -eq $document.sourceBranchFenceRevision) -or
+                ($null -ne $document.sourceBranchFenceRevision -and
+                    [string]$document.sourceBranchFenceRevision -cnotmatch '^[0-9a-f]{40,64}$')) {
+                throw 'The protected fork-recovery source branch fence revision is invalid.'
+            }
+        }
+        elseif ($null -ne $document.sourceBranchRevision) {
+            throw 'The protected existing-source recovery lacks its atomic branch revision fence; reconcile or migrate this Pending record.'
+        }
     }
     foreach ($entry in $document.branchCreationOperations.GetEnumerator()) {
         if ([string]::IsNullOrWhiteSpace([string]$entry.Key) -or
@@ -785,6 +795,8 @@ function Get-GitHandoffForkRecovery {
         throw 'The exact fork-recovery ref contains a mismatched identity or status.'
     }
     Assert-HandoffForkRecoveryPayload -Payload $document.payload
+    [void](Assert-GitHandoffForkRecoverySourceFence -Adapter $Adapter -TaskKey $TaskKey `
+        -Payload $document.payload -Control $control)
     $expectedDigest = Get-HandoffSha256 -Value (([ordered]@{authorityScope=[string]$Adapter.AuthorityScope;
         taskKey=$TaskKey;forkId=$ForkId;payload=$document.payload;
         operationId=[string]$document.creationOperationId;actor=[string]$document.actor}) |
@@ -834,10 +846,9 @@ function Get-GitHandoffForkRecovery {
         Payload=$document.payload;Record=$document}
 }
 
-function Get-GitHandoffPendingForkRecoveryIndexEntries {
+function Read-GitHandoffPendingForkRecoveryIndexEntries {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey)
     Assert-HandoffIdentity -TaskKey $TaskKey
-    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:list' -TaskKey $TaskKey | Out-Null
     $scopedTaskHash = Get-HandoffScopedTaskHash -AuthorityScope ([string]$Adapter.AuthorityScope) -TaskKey $TaskKey
     $prefix = "$($Adapter.RefPrefix)/recovery-index/$scopedTaskHash/"
     $lines = @(& git -C $Adapter.RepositoryRoot ls-remote $Adapter.RemoteName "$prefix*" 2>$null)
@@ -865,6 +876,13 @@ function Get-GitHandoffPendingForkRecoveryIndexEntries {
     return $entries.ToArray()
 }
 
+function Get-GitHandoffPendingForkRecoveryIndexEntries {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey)
+    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:list' -TaskKey $TaskKey | Out-Null
+    return Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey
+}
+
 function Get-GitHandoffPendingForkRecoveries {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey)
@@ -888,10 +906,87 @@ function Get-GitHandoffPendingForkRecoveries {
 
 function Test-GitHandoffPendingForkRecoveryBlocker {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey)
-    # Common archival must account for every protected index entry, even when
-    # the caller may not inspect an individual recovery. Return no identifiers.
-    $indexEntries = @(Get-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey)
+    # The enclosing common/branch update authorization governs this internal
+    # safety check; it must not grant or require public recovery-list access.
+    $indexEntries = @(Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey)
     return [pscustomobject]@{HasPending=(@($indexEntries | Where-Object { $_.Status -ceq 'Pending' }).Count -gt 0)}
+}
+
+function Test-GitHandoffPendingSourceBranchMutation {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)] $Changes,
+        [Parameter(Mandatory = $true)] $PendingIndexEntry)
+    if (@($Changes.Keys | Where-Object { [string]$_ -cin @('Lifecycle','Continuation Generation','Branch Outcome',
+        'Decision Branch Bindings') }).Count -gt 0) {
+        return $false
+    }
+    if ([string]$PendingIndexEntry.Status -cne 'Pending') { return $false }
+    $recovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId ([string]$PendingIndexEntry.ForkId)
+    if ($null -eq $recovery -or $recovery.Status -cne 'Pending' -or
+        [string]$recovery.Control.sourceBranchId -cne $BranchId -or
+        [string]$recovery.Payload['Source Branch ID'] -cne $BranchId -or
+        -not $recovery.Control.branchCreationOperations -or
+        $recovery.Control.branchCreationOperations.Contains($BranchId) -or
+        @($recovery.Payload['Intended Branch IDs'] | Where-Object { [string]$_ -ceq $BranchId }).Count -ne 1 -or
+        @($recovery.Payload['Verified Active Branches'] | Where-Object { [string]$_ -ceq $BranchId }).Count -ne 1) {
+        return $false
+    }
+    return $true
+}
+
+function New-GitHandoffBranchMutationFence {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)] $Changes)
+    # The fence reads the common ref's object tree into the adapter's object store.
+    # Require the ordinary common read capability before any ref lookup/fetch.
+    [void](Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'common:read' -TaskKey $TaskKey)
+    $commonRef = Get-HandoffRecordRef -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+    $expectedCommonRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $commonRef
+    if ([string]::IsNullOrWhiteSpace([string]$expectedCommonRevision)) {
+        throw 'The exact common revision is missing before the branch mutation fence.'
+    }
+
+    # Read the shared CAS cursor before the protected Pending scan. New recovery
+    # admissions take the same order and lease this revision, so one writer wins.
+    $pendingEntries = @(Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey |
+        Where-Object { $_.Status -ceq 'Pending' })
+    $isArchive = ($Changes.Contains('Lifecycle') -and [string]$Changes['Lifecycle'] -ceq 'Archived')
+    $isBoundPendingSourceMutation = $false
+    if ($pendingEntries.Count -gt 0 -and -not $isArchive -and $pendingEntries.Count -eq 1) {
+        $isBoundPendingSourceMutation = Test-GitHandoffPendingSourceBranchMutation -Adapter $Adapter `
+            -TaskKey $TaskKey -BranchId $BranchId -Changes $Changes -PendingIndexEntry $pendingEntries[0]
+    }
+    if ($pendingEntries.Count -gt 0 -and -not $isBoundPendingSourceMutation) {
+        if ($isArchive) {
+            throw 'A Pending fork recovery blocks new branch archival until every branch creation and index step is reconciled.'
+        }
+        if ($Changes.Contains('Lifecycle')) {
+            throw 'A Pending fork recovery blocks branch lifecycle mutation until every branch creation and index step is reconciled.'
+        }
+        throw 'A Pending fork recovery blocks branch mutation until every branch creation and index step is reconciled.'
+    }
+
+    $fetchOutput = @(& git -C $Adapter.RepositoryRoot fetch --quiet --no-tags '--refmap=' `
+        $Adapter.RemoteName $commonRef 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "The exact common revision could not be fetched for the branch mutation fence: $($fetchOutput -join ' ')"
+    }
+    $fetchedCommonRevision = [string](& git -C $Adapter.RepositoryRoot rev-parse FETCH_HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $fetchedCommonRevision -cne [string]$expectedCommonRevision) {
+        throw 'The exact common revision changed while preparing the branch mutation fence; re-read before retrying.'
+    }
+    $tree = [string](& git -C $Adapter.RepositoryRoot show -s --format=%T $expectedCommonRevision 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'The exact common revision has no verifiable tree for the branch mutation fence.'
+    }
+    $fenceCommit = [string](& git -C $Adapter.RepositoryRoot commit-tree $tree -p $expectedCommonRevision `
+        -m 'Git Handoff branch mutation fence' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $fenceCommit -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'The payload-free common branch mutation fence could not be created.'
+    }
+    return [pscustomobject]@{CommonRef=$commonRef;ExpectedCommonRevision=[string]$expectedCommonRevision;
+        CommonFenceCommit=$fenceCommit;HasPending=($pendingEntries.Count -gt 0);
+        BoundSourceMutation=$isBoundPendingSourceMutation}
 }
 
 function Get-GitHandoffForkRecoveryTargetEnvelopes {
@@ -899,8 +994,25 @@ function Get-GitHandoffForkRecoveryTargetEnvelopes {
         [Parameter(Mandatory = $true)][string] $BranchId)
     $targetDigest = Get-HandoffSha256 -Value $BranchId
     $targetEnvelopes = [Collections.Generic.List[object]]::new()
-    foreach ($entry in @(Get-GitHandoffPendingForkRecoveries -Adapter $Adapter -TaskKey $TaskKey)) {
-        $validated = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $entry.ForkId
+    # Target discovery is an internal protected-index operation governed by the
+    # caller's branch:create authorization. Authorize the exact claim before
+    # opening each candidate envelope; public list/list-item access is not part
+    # of the branch-creation contract, and denied candidates stay undisclosed.
+    $indexEntries = @(Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey |
+        Where-Object { [string]$_.Status -ceq 'Pending' })
+    foreach ($entry in $indexEntries) {
+        try {
+            Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:claim' `
+                -TaskKey $TaskKey -ForkId ([string]$entry.ForkId) -BranchId $BranchId | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -match 'access was denied') { continue }
+            throw
+        }
+        $validated = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId ([string]$entry.ForkId)
+        if ($null -eq $validated) {
+            throw 'A Pending fork-recovery envelope could not be validated for the requested branch target.'
+        }
         if (@($validated.Record.branchCreationTargetDigests) -ccontains $targetDigest) {
             $targetEnvelopes.Add($validated)
         }
@@ -994,12 +1106,18 @@ function Get-GitHandoffForkRecoverySourceBinding {
         [Parameter(Mandatory = $true)][string] $CommonRevision)
     $sourceBranchId = [string]$Payload['Source Branch ID']
     $activeBranches = @($CommonRecord.activeBranches | ForEach-Object { [string]$_ })
-    $sourceBranch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $sourceBranchId
+    $sourceBranchRead = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $sourceBranchId
+    $sourceBranch = if ($null -eq $sourceBranchRead) { $null } else {
+        [pscustomobject]@{Revision=[string]$sourceBranchRead.Revision;Record=$sourceBranchRead.Record;
+            Fields=$sourceBranchRead.Record.fields;ForkPoint=[string]$sourceBranchRead.Record.forkPoint;
+            ContinuationGeneration=[int64]$sourceBranchRead.Record.fields['Continuation Generation']}
+    }
     if ($activeBranches.Count -eq 0) {
         if ($null -ne $sourceBranch) {
             throw 'A common-only fork cannot use an existing source branch while the common Active index is empty.'
         }
-        return [pscustomobject]@{BranchId=$sourceBranchId;Revision=$null;ForkPoint=$null;ContinuationGeneration=$null}
+        return [pscustomobject]@{BranchId=$sourceBranchId;Revision=$null;FenceRevision=$null;ForkPoint=$null;
+            ContinuationGeneration=$null;Record=$null}
     }
     if ($activeBranches -cnotcontains $sourceBranchId) {
         throw 'Fork recovery Source Branch ID must be one exact branch in the live common Active index.'
@@ -1015,8 +1133,69 @@ function Get-GitHandoffForkRecoverySourceBinding {
         [string]$sourceSnapshot['Source'] -cne [string]$sourceBranch.Fields['Source']) {
         throw 'Fork recovery Source Snapshot does not match the live source branch Current and Source.'
     }
-    return [pscustomobject]@{BranchId=$sourceBranchId;Revision=[string]$sourceBranch.Revision;
-        ForkPoint=[string]$sourceBranch.ForkPoint;ContinuationGeneration=[int64]$sourceBranch.ContinuationGeneration}
+    return [pscustomobject]@{BranchId=$sourceBranchId;Revision=[string]$sourceBranch.Revision;FenceRevision=$null;
+        ForkPoint=[string]$sourceBranch.ForkPoint;ContinuationGeneration=[int64]$sourceBranch.ContinuationGeneration;
+        Record=$sourceBranch.Record}
+}
+
+function Assert-GitHandoffForkRecoverySourceFence {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)] $Payload,[Parameter(Mandatory = $true)] $Control)
+    $sourceBranchId = [string]$Payload['Source Branch ID']
+    $sourceRevision = if ($Control.Record.Contains('sourceBranchRevision')) {
+        [string]$Control.Record.sourceBranchRevision
+    } else { '' }
+    $fenceRevision = if ($Control.Record.Contains('sourceBranchFenceRevision')) {
+        [string]$Control.Record.sourceBranchFenceRevision
+    } else { '' }
+    if (@($Payload['Verified Active Branches']).Count -eq 0) {
+        if (-not [string]::IsNullOrWhiteSpace($sourceRevision) -or
+            -not [string]::IsNullOrWhiteSpace($fenceRevision) -or
+            ($Control.Record.Contains('sourceBranchForkPoint') -and $null -ne $Control.Record.sourceBranchForkPoint) -or
+            ($Control.Record.Contains('sourceContinuationGeneration') -and $null -ne $Control.Record.sourceContinuationGeneration)) {
+            throw 'A common-only fork recovery must not contain an existing-source branch fence.'
+        }
+        return $true
+    }
+    if ($sourceBranchId -cnotin @($Payload['Verified Active Branches'] | ForEach-Object { [string]$_ }) -or
+        [string]$Control.Record.sourceBranchId -cne $sourceBranchId -or
+        [string]::IsNullOrWhiteSpace($sourceRevision) -or $sourceRevision -cnotmatch '^[0-9a-f]{40,64}$' -or
+        [string]::IsNullOrWhiteSpace($fenceRevision) -or $fenceRevision -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'An existing-source fork recovery lacks its exact captured and fenced source revisions; reconcile or migrate this Pending record.'
+    }
+
+    $sourceRef = Get-HandoffRecordRef -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $sourceBranchId
+    $sourceReadback = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $sourceBranchId
+    if ($null -eq $sourceReadback) { throw 'The bound existing source branch disappeared after fork admission.' }
+    & git -C $Adapter.RepositoryRoot merge-base --is-ancestor $fenceRevision ([string]$sourceReadback.Revision) 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The live existing source branch no longer descends from the atomic fork-admission fence.'
+    }
+    $fenceCommitContent = @(& git -C $Adapter.RepositoryRoot cat-file -p $fenceRevision 2>$null)
+    $fenceCommitExitCode = $LASTEXITCODE
+    $fenceParentLines = @($fenceCommitContent | Where-Object { [string]$_ -match '^parent ' })
+    $capturedTree = [string](& git -C $Adapter.RepositoryRoot show -s --format=%T $sourceRevision 2>$null)
+    $capturedTreeExitCode = $LASTEXITCODE
+    $fenceTree = [string](& git -C $Adapter.RepositoryRoot show -s --format=%T $fenceRevision 2>$null)
+    $fenceTreeExitCode = $LASTEXITCODE
+    if ($fenceCommitExitCode -ne 0 -or $fenceParentLines.Count -ne 1 -or
+        [string]$fenceParentLines[0].Substring(7) -cne $sourceRevision -or
+        $capturedTreeExitCode -ne 0 -or $fenceTreeExitCode -ne 0 -or
+        $capturedTree -cnotmatch '^[0-9a-f]{40,64}$' -or $fenceTree -cne $capturedTree) {
+        throw 'The protected existing-source revision fence is not a same-content child of the captured source.'
+    }
+    $captured = Read-GitHandoffDocument -Adapter $Adapter -Ref $sourceRef -Revision $sourceRevision -FileName 'record.json'
+    $sourceSnapshot = $Payload['Source Snapshot']
+    if ($captured.recordKind -cne 'branch' -or $captured.authorityScope -cne [string]$Adapter.AuthorityScope -or
+        $captured.taskKey -cne $TaskKey -or $captured.branchId -cne $sourceBranchId -or
+        [string]$captured.forkPoint -cne [string]$Control.Record.sourceBranchForkPoint -or
+        [int64]$captured.fields['Continuation Generation'] -ne [int64]$Control.Record.sourceContinuationGeneration -or
+        [string]$captured.fields.Lifecycle -cne 'Active' -or
+        [string]$captured.fields.Current -cne [string]$sourceSnapshot['Current'] -or
+        [string]$captured.fields.Source -cne [string]$sourceSnapshot['Source']) {
+        throw 'The captured existing source does not attest the Pending recovery snapshot and branch identity.'
+    }
+    return $true
 }
 
 function New-GitHandoffForkRecovery {
@@ -1028,6 +1207,10 @@ function New-GitHandoffForkRecovery {
     $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:create' -TaskKey $TaskKey -ForkId $ForkId
     if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'Fork recovery creation requires a nonempty display actor label.' }
     Assert-HandoffForkRecoveryPayload -Payload $Payload
+    if (@($Payload['Verified Active Branches']).Count -eq 0 -and
+        [string]::IsNullOrWhiteSpace([string]$Payload['Step Operation IDs']['finish'])) {
+        throw 'A common-only fork-recovery payload must bind its stable finish Operation ID before the Pending envelope is created.'
+    }
     $envelopeEvidence = Get-HandoffForkRecoveryEnvelopeEvidence -Payload $Payload
     $recordId = Get-HandoffForkRecoveryId -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     $digest = Get-HandoffSha256 -Value (([ordered]@{authorityScope=[string]$Adapter.AuthorityScope;
@@ -1039,6 +1222,14 @@ function New-GitHandoffForkRecovery {
         $common = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
         if ($null -eq $common) { throw 'Fork recovery requires the exact common Task Key.' }
         $verifiedCommonRevision = [string]$common.Revision
+        # Read the common lease before scanning the protected index. If another
+        # admission races this scan, both writers still lease this same common
+        # revision and the atomic four-ref push lets only one win.
+        $otherPendingRecoveries = @(Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey |
+            Where-Object { $_.Status -ceq 'Pending' -and [string]$_.ForkId -cne $ForkId })
+        if ($otherPendingRecoveries.Count -gt 0) {
+            throw 'A Pending fork recovery already exists for this exact Task Key; reconcile it before creating another Fork ID.'
+        }
         $actualActive = @($common.Record.activeBranches | Sort-Object -Unique)
         $declaredActive = @($Payload['Verified Active Branches'] | ForEach-Object { [string]$_ } | Sort-Object -Unique)
         if (($actualActive | ConvertTo-Json -Compress) -cne ($declaredActive | ConvertTo-Json -Compress)) {
@@ -1049,6 +1240,33 @@ function New-GitHandoffForkRecovery {
         }
         $sourceBinding = Get-GitHandoffForkRecoverySourceBinding -Adapter $Adapter -TaskKey $TaskKey `
             -Payload $Payload -CommonRecord $common.Record -CommonRevision $verifiedCommonRevision
+        $sourceBranchRef = $null
+        $sourceBranchFenceCommit = $null
+        if ($null -ne $sourceBinding.Revision) {
+            $sourceBranchRef = Get-HandoffRecordRef -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey `
+                -BranchId $sourceBinding.BranchId
+            $sourceFetchOutput = @(& git -C $Adapter.RepositoryRoot fetch --quiet --no-tags `
+                $Adapter.RemoteName ([string]$sourceBinding.Revision) 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not fetch the authorized captured source revision for its admission fence: $($sourceFetchOutput -join ' ')"
+            }
+            $fetchedSourceRevision = [string](& git -C $Adapter.RepositoryRoot rev-parse FETCH_HEAD 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $fetchedSourceRevision -cne [string]$sourceBinding.Revision) {
+                throw 'The fetched existing-source commit does not match the exact captured source revision.'
+            }
+            $sourceTree = [string](& git -C $Adapter.RepositoryRoot show -s --format=%T $sourceBinding.Revision 2>$null)
+            $sourceTreeExitCode = $LASTEXITCODE
+            if ($sourceTreeExitCode -ne 0 -or $sourceTree -cnotmatch '^[0-9a-f]{40,64}$') {
+                throw "Could not read the exact captured existing-source tree for its admission fence (revision '$($sourceBinding.Revision)', exit $sourceTreeExitCode, tree '$sourceTree')."
+            }
+            $sourceFenceArgs = @('-C',[string]$Adapter.RepositoryRoot,'commit-tree',$sourceTree,
+                '-p',[string]$sourceBinding.Revision,'-m','Fence exact source for fork recovery admission')
+            $sourceBranchFenceCommit = [string](& git @sourceFenceArgs 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $sourceBranchFenceCommit -cnotmatch '^[0-9a-f]{40,64}$') {
+                throw 'Could not create the exact existing-source admission fence commit.'
+            }
+            $sourceBinding.FenceRevision = $sourceBranchFenceCommit
+        }
         $createdAt = [DateTimeOffset]::UtcNow.ToString('o')
         $envelopeDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-envelope';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;status='Pending';
@@ -1066,7 +1284,8 @@ function New-GitHandoffForkRecovery {
         $controlDocument = [ordered]@{schemaVersion=1;recordKind='fork-recovery-control';recordId=$recordId;
             authorityScope=[string]$Adapter.AuthorityScope;taskKey=$TaskKey;forkId=$ForkId;
             sourceBranchId=[string]$Payload['Source Branch ID'];sourceAclLocator=[string]$Payload['Source Branch ID'];
-            sourceBranchRevision=$sourceBinding.Revision;sourceBranchForkPoint=$sourceBinding.ForkPoint;
+            sourceBranchRevision=$sourceBinding.Revision;sourceBranchFenceRevision=$sourceBinding.FenceRevision;
+            sourceBranchForkPoint=$sourceBinding.ForkPoint;
             sourceContinuationGeneration=$sourceBinding.ContinuationGeneration;
             branchCreationOperations=$envelopeEvidence.BranchCreationOperations;
             expectedBranchPayloadDigests=$envelopeEvidence.ExpectedBranchPayloadDigests;
@@ -1083,13 +1302,18 @@ function New-GitHandoffForkRecovery {
         $indexCommit = New-GitHandoffCommit -Adapter $Adapter -Document $indexDocument -FileName 'index.json'
         $commonFenceCommit = New-GitHandoffCommit -Adapter $Adapter -Document $common.Record `
             -Parent $verifiedCommonRevision -FileName 'record.json'
-        $pushOutput = @(& git -C $Adapter.RepositoryRoot push --quiet --atomic `
-            "--force-with-lease=${envelopeRef}:" "--force-with-lease=${controlRef}:" `
-            "--force-with-lease=${indexRef}:" "--force-with-lease=$($common.Ref):${verifiedCommonRevision}" `
-            $Adapter.RemoteName "${envelopeCommit}:${envelopeRef}" "${controlCommit}:${controlRef}" `
-            "${indexCommit}:${indexRef}" "${commonFenceCommit}:$($common.Ref)" 2>&1)
+        $atomicLeases = @("--force-with-lease=${envelopeRef}:","--force-with-lease=${controlRef}:",
+            "--force-with-lease=${indexRef}:","--force-with-lease=$($common.Ref):${verifiedCommonRevision}")
+        $atomicRefspecs = @("${envelopeCommit}:${envelopeRef}","${controlCommit}:${controlRef}",
+            "${indexCommit}:${indexRef}","${commonFenceCommit}:$($common.Ref)")
+        if ($null -ne $sourceBranchFenceCommit) {
+            $atomicLeases += "--force-with-lease=${sourceBranchRef}:$($sourceBinding.Revision)"
+            $atomicRefspecs += "${sourceBranchFenceCommit}:${sourceBranchRef}"
+        }
+        $pushOutput = @(& git -C $Adapter.RepositoryRoot push --quiet --atomic @atomicLeases `
+            $Adapter.RemoteName @atomicRefspecs 2>&1)
         if ($LASTEXITCODE -ne 0) {
-            throw "Fork recovery envelope, protected control, pending index, and common revision fence were not atomically created: $($pushOutput -join ' ')"
+            throw "Fork recovery envelope, protected control, pending index, and exact common/source revision fences were not atomically created: $($pushOutput -join ' ')"
         }
         $envelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
         $control = Read-GitHandoffForkRecoveryControl -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
@@ -1098,13 +1322,29 @@ function New-GitHandoffForkRecovery {
             Read-GitHandoffDocument -Adapter $Adapter -Ref $indexRef -Revision $indexRevision -FileName 'index.json'
         }
         $commonReadback = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+        $sourceReadback = if ($null -eq $sourceBranchFenceCommit) { $null } else {
+            Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $sourceBinding.BranchId
+        }
+        $sourceFenceIsCurrent = $null -eq $sourceBranchFenceCommit
+        $sourceFenceIsAncestor = $null -eq $sourceBranchFenceCommit
+        if ($null -ne $sourceReadback) {
+            $sourceFenceIsCurrent = [string]$sourceReadback.Revision -ceq $sourceBranchFenceCommit
+            $sourceFenceIsAncestor = $sourceFenceIsCurrent
+            if (-not $sourceFenceIsCurrent) {
+                & git -C $Adapter.RepositoryRoot merge-base --is-ancestor `
+                    $sourceBranchFenceCommit ([string]$sourceReadback.Revision) 2>$null
+                $sourceFenceIsAncestor = ($LASTEXITCODE -eq 0)
+            }
+        }
         if ($null -eq $envelope -or $envelope.Revision -cne $envelopeCommit -or
             $null -eq $control -or $control.Revision -cne $controlCommit -or
             $indexRevision -cne $indexCommit -or $null -eq $indexReadback -or
             [string]$indexReadback.status -cne 'Pending' -or
             [string]$indexReadback.envelopeRevision -cne $envelopeCommit -or
-            $null -eq $commonReadback -or [string]$commonReadback.Revision -cne $commonFenceCommit) {
-            throw "Fork recovery '$ForkId' atomic envelope, control, pending index, and common revision fence were not read back."
+            $null -eq $commonReadback -or [string]$commonReadback.Revision -cne $commonFenceCommit -or
+            ($null -ne $sourceBranchFenceCommit -and ($null -eq $sourceReadback -or
+                (-not $sourceFenceIsCurrent -and -not $sourceFenceIsAncestor)))) {
+            throw "Fork recovery '$ForkId' atomic envelope, control, pending index, and common/source revision fences were not read back."
         }
     }
     if ($envelope.Status -ceq 'Abandoned') {
@@ -1156,6 +1396,8 @@ function New-GitHandoffForkRecovery {
             ($envelopeEvidence.ExpectedBranchPayloadDigests | ConvertTo-Json -Compress)) {
         throw 'A different protected recovery control already owns this Fork ID.'
     }
+    [void](Assert-GitHandoffForkRecoverySourceFence -Adapter $Adapter -TaskKey $TaskKey `
+        -Payload $Payload -Control $control)
     $existing = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -ne $existing) {
         if ($existing.Record.creationOperationId -cne $OperationId -or $existing.Record.payloadDigest -cne $digest) {
@@ -1201,6 +1443,141 @@ function New-GitHandoffForkRecovery {
     return $readback
 }
 
+function Get-GitHandoffForkRecoveryTargetVerification {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)] $Recovery,[Parameter(Mandatory = $true)] $CommonReadback,
+        [switch] $RequireActive)
+    foreach ($entry in $Recovery.Control.branchCreationOperations.GetEnumerator()) {
+        $branchId = [string]$entry.Key
+        $branchReadback = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $branchId
+        if ($null -eq $branchReadback -or $branchReadback.Record.forkRecovery.forkId -cne [string]$Recovery.ForkId -or
+            $branchReadback.Record.forkRecovery.creationOperationId -cne [string]$entry.Value -or
+            $branchReadback.Record.forkRecovery.expectedBranchPayloadDigest -cne
+                [string]$Recovery.Control.expectedBranchPayloadDigests[$branchId]) {
+            throw "Fork recovery target '$branchId' was not created from its bound operation and payload."
+        }
+        $creationFields = [ordered]@{Current=$branchReadback.Record.fields.Current;Source=$branchReadback.Record.fields.Source;
+            Lifecycle=$branchReadback.Record.fields.Lifecycle;'Work State'=$branchReadback.Record.fields['Work State']}
+        if ((Get-HandoffForkBranchPayloadDigest -ForkPoint ([string]$branchReadback.Record.forkPoint) -Fields $creationFields) -cne
+            [string]$Recovery.Control.expectedBranchPayloadDigests[$branchId]) {
+            throw "Fork recovery target '$branchId' no longer matches its attested creation payload."
+        }
+        if ($RequireActive -and [string]$branchReadback.Record.fields.Lifecycle -cne 'Active') {
+            throw "Fork recovery target '$branchId' must remain Active until common-only recovery is completed."
+        }
+        if ([string]$branchReadback.Record.fields.Lifecycle -ceq 'Active' -and
+            @($CommonReadback.ActiveBranches) -cnotcontains $branchId) {
+            throw "Fork recovery target '$branchId' is not present in the common Active index."
+        }
+    }
+    return $CommonReadback
+}
+
+function Get-GitHandoffForkRecoveryCommonConversionAudit {
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ForkId,[Parameter(Mandatory = $true)] $Recovery,
+        [Parameter(Mandatory = $true)][string] $OperationId,[Parameter(Mandatory = $true)][string] $Actor,
+        [switch] $RequireCommittedOperation,[switch] $SkipEventValidation)
+    $reason = "Fork recovery '$ForkId': common-only confirmed-baseline conversion"
+    if ([string]$Recovery.Status -cnotin @('Pending','Completed') -or $Recovery.EnvelopeStatus -cne 'Pending') {
+        throw "Fork recovery '$ForkId' must remain Pending during its common-only conversion."
+    }
+    if (@($Recovery.Payload['Verified Active Branches']).Count -ne 0 -or
+        @($Recovery.Payload['Intended Branch IDs']).Count -lt 1 -or
+        @($Recovery.Payload['Intended Branch IDs'] | Where-Object { [string]$_ -ceq [string]$Recovery.Payload['Source Branch ID'] }).Count -ne 1) {
+        throw "Fork recovery '$ForkId' is not a common-only first-fork recovery."
+    }
+    if ([string]$Recovery.Payload['Step Operation IDs']['finish'] -cne $OperationId) {
+        throw "Fork recovery '$ForkId' common-only conversion must use its exact bound finish Operation ID."
+    }
+    $pending = @(Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey |
+        Where-Object { [string]$_.Status -ceq 'Pending' })
+    if ($pending.Count -ne 1 -or [string]$pending[0].ForkId -cne $ForkId) {
+        throw 'A common-only conversion requires its exact Fork ID to be the sole Pending recovery for this Task Key.'
+    }
+    $common = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+    if ($null -eq $common) { throw 'Common-only fork conversion requires the exact common record.' }
+    $commonFieldsMatchBaseline = ([string]$common.Record.fields.Current -ceq [string]$Recovery.Payload['Shared Baseline'].Current -and
+        [string]$common.Record.fields.Source -ceq [string]$Recovery.Payload['Shared Baseline'].Source)
+    $operation = $common.Record.operations[$OperationId]
+    if ($null -eq $operation) {
+        if ($RequireCommittedOperation) {
+            throw "Fork recovery '$ForkId' cannot complete before its bound common-only conversion operation is committed."
+        }
+        if ((Get-HandoffCommonSemanticDigest -CommonRecord $common.Record) -cne
+            [string]$Recovery.Control.commonSemanticDigest) {
+            throw "Fork recovery '$ForkId' common semantics drifted before its attested baseline conversion."
+        }
+    }
+    else {
+        $changes = [ordered]@{Current=[string]$Recovery.Payload['Shared Baseline'].Current;
+            Source=[string]$Recovery.Payload['Shared Baseline'].Source}
+        $expectedDigest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope) `
+            -RecordKind common -TaskKey $TaskKey -Changes $changes -Actor $Actor -Reason $reason -DecisionConfirmed:$false
+        if (-not $commonFieldsMatchBaseline -or [string]$operation.payloadDigest -cne $expectedDigest -or
+            [string]$operation.reason -cne $reason -or [string]$operation.actor -cne $Actor -or
+            [string]::IsNullOrWhiteSpace([string]$operation.verifiedPrincipal) -or $operation.decisionConfirmed -ne $false) {
+            throw "Fork recovery '$ForkId' has no exact durable common-only baseline conversion binding."
+        }
+        $changesSeen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($change in @($operation.changedFields)) {
+            $field = [string]$change.field
+            if ($field -cnotin @('Current','Source') -or -not $changesSeen.Add($field) -or
+                -not (Test-HandoffValueEqual -Left $change.new -Right $changes[$field]) -or
+                (Test-HandoffValueEqual -Left $change.previous -Right $change.new)) {
+                throw "Fork recovery '$ForkId' conversion operation contains an invalid common field change."
+            }
+        }
+        if (@($operation.eventIntents).Count -ne $changesSeen.Count) {
+            throw "Fork recovery '$ForkId' conversion operation does not have one durable event intent per changed field."
+        }
+        $origin = Get-GitHandoffOperationOrigin -Adapter $Adapter -Current $common -OperationId $OperationId
+        if ([string]$origin.Record.fields.Current -cne [string]$Recovery.Payload['Shared Baseline'].Current -or
+            [string]$origin.Record.fields.Source -cne [string]$Recovery.Payload['Shared Baseline'].Source) {
+            throw "Fork recovery '$ForkId' conversion operation origin does not contain the exact shared baseline."
+        }
+        if (-not $SkipEventValidation) {
+            foreach ($field in $changesSeen) {
+                $event = Get-GitHandoffEvent -Adapter $Adapter -TaskKey $TaskKey -RecordKind common `
+                    -OperationId $OperationId -Field $field
+                $intent = @($operation.eventIntents | Where-Object { [string]$_.field -ceq $field })
+                if ($intent.Count -ne 1 -or $null -eq $event -or
+                    [string]$event.PayloadDigest -cne [string]$operation.payloadDigest -or
+                    [string]$event.RecordRevision -cne [string]$origin.Revision -or
+                    [string]$event.Reason -cne $reason -or [string]$event.Actor -cne $Actor -or
+                    [string]$event.VerifiedPrincipal -cne [string]$operation.verifiedPrincipal -or
+                    [string]$event.Field -cne $field -or
+                    -not (Test-HandoffValueEqual -Left $event.NewState -Right $changes[$field]) -or
+                    -not (Test-HandoffValueEqual -Left $event.PreviousState -Right $intent[0].previousState)) {
+                    throw "Fork recovery '$ForkId' common conversion event '$OperationId/$field' is missing or mismatched."
+                }
+            }
+        }
+    }
+    $commonReadback = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
+    if ($null -eq $commonReadback) { throw 'Fork recovery completion requires the exact common record.' }
+    [void](Get-GitHandoffForkRecoveryTargetVerification -Adapter $Adapter -TaskKey $TaskKey `
+        -Recovery $Recovery -CommonReadback $commonReadback -RequireActive)
+    return [pscustomobject]@{Recovery=$Recovery;Common=$commonReadback;Operation=$operation;Reason=$reason}
+}
+
+function Set-GitHandoffForkRecoveryCommonBaseline {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $ForkId,[Parameter(Mandatory = $true)][string] $ExpectedCommonRevision,
+        [Parameter(Mandatory = $true)][string] $OperationId,[string] $Actor='configured-adapter')
+    Assert-HandoffOperationId -OperationId $OperationId
+    Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:complete' -TaskKey $TaskKey -ForkId $ForkId | Out-Null
+    $recovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $recovery) { throw "Fork recovery '$ForkId' was not found." }
+    $reason = "Fork recovery '$ForkId': common-only confirmed-baseline conversion"
+    $changes = [ordered]@{Current=[string]$recovery.Payload['Shared Baseline'].Current;
+        Source=[string]$recovery.Payload['Shared Baseline'].Source}
+    return Invoke-GitHandoffFieldsMutation -Adapter $Adapter -RecordKind common -TaskKey $TaskKey `
+        -ExpectedRevision $ExpectedCommonRevision -Changes $changes -OperationId $OperationId `
+        -Actor $Actor -Reason $reason -ForkRecoveryConversionId $ForkId -PersistNoOpOperation
+}
+
 function Complete-GitHandoffForkRecovery {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
@@ -1210,27 +1587,39 @@ function Complete-GitHandoffForkRecovery {
     $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'fork-recovery:complete' -TaskKey $TaskKey -ForkId $ForkId
     $current = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
     if ($null -eq $current) { throw 'The exact fork-recovery record was not found.' }
+    $initialEnvelope = Read-GitHandoffForkRecoveryEnvelope -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    $initialIndex = Read-GitHandoffForkRecoveryIndex -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkId
+    if ($null -eq $initialEnvelope -or $null -eq $initialIndex) {
+        throw "Fork recovery '$ForkId' payload-free envelope or protected index is missing."
+    }
+    if ($current.Status -ceq 'Completed' -and $initialEnvelope.Status -ceq 'Completed' -and $initialIndex.Status -ceq 'Completed') {
+        if ($current.Record.completionOperationId -cne $OperationId -or
+            $initialEnvelope.Record.completionOperationId -cne $OperationId -or
+            [string]$initialIndex.Record.envelopeRevision -cne [string]$initialEnvelope.Revision) {
+            throw 'Fork recovery is already terminal under a different or mismatched completion operation.'
+        }
+        return $current
+    }
     $commonReadback = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
     if ($null -eq $commonReadback) { throw 'Fork recovery completion requires the exact common record.' }
-    foreach ($entry in $current.Control.branchCreationOperations.GetEnumerator()) {
-        $branchId = [string]$entry.Key
-        $branchReadback = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $branchId
-        if ($null -eq $branchReadback -or $branchReadback.Record.forkRecovery.forkId -cne $ForkId -or
-            $branchReadback.Record.forkRecovery.creationOperationId -cne [string]$entry.Value -or
-            $branchReadback.Record.forkRecovery.expectedBranchPayloadDigest -cne
-                [string]$current.Control.expectedBranchPayloadDigests[$branchId]) {
-            throw "Fork recovery target '$branchId' was not created from its bound operation and payload."
+    if (@($current.Payload['Verified Active Branches']).Count -eq 0) {
+        $finishOperationId = [string]$current.Payload['Step Operation IDs']['finish']
+        if ([string]::IsNullOrWhiteSpace($finishOperationId)) {
+            throw "Fork recovery '$ForkId' common-only payload does not bind a finish Operation ID; it remains Pending for exact authorized reconciliation or migration, and the adapter will not infer an ID."
         }
-        $creationFields = [ordered]@{Current=$branchReadback.Record.fields.Current;Source=$branchReadback.Record.fields.Source;
-            Lifecycle=$branchReadback.Record.fields.Lifecycle;'Work State'=$branchReadback.Record.fields['Work State']}
-        if ((Get-HandoffForkBranchPayloadDigest -ForkPoint ([string]$branchReadback.Record.forkPoint) -Fields $creationFields) -cne
-            [string]$current.Control.expectedBranchPayloadDigests[$branchId]) {
-            throw "Fork recovery target '$branchId' no longer matches its attested creation payload."
+        $conversionOperation = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
+        if ($null -eq $conversionOperation) { throw 'Fork recovery common-only conversion record is missing.' }
+        $conversion = $conversionOperation.Record.operations[$finishOperationId]
+        if ($null -eq $conversion) {
+            throw "Fork recovery '$ForkId' cannot complete before its bound common-only conversion operation is committed."
         }
-        if ([string]$branchReadback.Record.fields.Lifecycle -ceq 'Active' -and
-            @($commonReadback.ActiveBranches) -cnotcontains $branchId) {
-            throw "Fork recovery target '$branchId' is not present in the common Active index."
-        }
+        [void](Get-GitHandoffForkRecoveryCommonConversionAudit -Adapter $Adapter -TaskKey $TaskKey `
+            -ForkId $ForkId -Recovery $current -OperationId $finishOperationId -Actor ([string]$conversion.actor) `
+            -RequireCommittedOperation)
+    }
+    else {
+        [void](Get-GitHandoffForkRecoveryTargetVerification -Adapter $Adapter -TaskKey $TaskKey `
+            -Recovery $current -CommonReadback $commonReadback)
     }
     if ($current.Status -ceq 'Completed') {
         if ($current.Record.completionOperationId -cne $OperationId) { throw 'Fork recovery is already completed by another operation.' }
@@ -1453,7 +1842,8 @@ function Get-HandoffIntegrationStatus {
 }
 
 function New-HandoffOperation {
-    param([string] $PayloadDigest,[string] $OperationId,[Parameter(Mandatory = $true)][array] $ChangedFields,
+    param([string] $PayloadDigest,[string] $OperationId,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][array] $ChangedFields,
         [Parameter(Mandatory = $true)][string] $AuthorityScope,
         [Parameter(Mandatory = $true)][string] $VerifiedPrincipal,
         [Parameter(Mandatory = $true)][string] $RecordKind,[Parameter(Mandatory = $true)][string] $RecordId,
@@ -1461,8 +1851,12 @@ function New-HandoffOperation {
         [string] $Reason='initial checkpoint',[bool] $DecisionConfirmed=$false,[string] $DecisionCommonRevision,
         [string] $DecisionBranchRevision,[string] $DecisionBranchContentSha256,
         [Nullable[int64]] $DecisionBranchContinuationGeneration,
+        [switch] $AllowEmptyChangedFields,
         [switch] $Internal)
     Assert-HandoffOperationId -OperationId $OperationId -Internal:$Internal
+    if ($ChangedFields.Count -eq 0 -and -not $AllowEmptyChangedFields) {
+        throw 'A durable Handoff operation must contain a changed field unless its caller explicitly records a bound no-op.'
+    }
     $occurredAt = [DateTimeOffset]::UtcNow.ToString('o')
     $eventIntents = @(
         foreach ($change in $ChangedFields) {
@@ -2145,8 +2539,12 @@ function Invoke-GitHandoffFieldsMutation {
         [Parameter(Mandatory = $true)][string] $ExpectedRevision,[Parameter(Mandatory = $true)] $Changes,
         [Parameter(Mandatory = $true)][string] $OperationId,[switch] $SuppressActivity,[switch] $DecisionConfirmed,
         [string] $DecisionCommonRevision,[switch] $ExplicitContinuation,[string] $Actor='configured-adapter',
-        [string] $Reason,[switch] $InternalOperation,[switch] $LifecycleReconciliation)
+        [string] $Reason,[switch] $InternalOperation,[switch] $LifecycleReconciliation,
+        [string] $ForkRecoveryConversionId,[switch] $PersistNoOpOperation)
     Assert-HandoffOperationId -OperationId $OperationId -Internal:$InternalOperation
+    if ($PersistNoOpOperation -and [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
+        throw 'Only a bound fork-recovery common conversion may persist a no-op operation.'
+    }
     $verifiedPrincipal = Assert-GitHandoffAuthorized -Adapter $Adapter -Action "${RecordKind}:update" -TaskKey $TaskKey -BranchId $BranchId
     Assert-HandoffFieldsSafe -Fields $Changes -RecordKind $RecordKind -DecisionConfirmed:$DecisionConfirmed
     if (@($Changes.Keys | Where-Object { $_ -cin @('Lifecycle','Work State','Branch Outcome') }).Count -gt 0 -and
@@ -2156,13 +2554,6 @@ function Invoke-GitHandoffFieldsMutation {
     if ([string]::IsNullOrWhiteSpace($Reason)) { $Reason = 'field checkpoint with traceable Source' }
     if ([string]::IsNullOrWhiteSpace($Actor)) { throw 'A Handoff field event requires an actor.' }
     if ($RecordKind -eq 'branch' -and [string]::IsNullOrWhiteSpace($BranchId)) { throw 'An exact Branch ID is required for its own record.' }
-    if ($RecordKind -eq 'branch') {
-        $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
-        $isPendingCreationArchive = ($Changes.Contains('Lifecycle') -and [string]$Changes['Lifecycle'] -ceq 'Archived')
-        if ($pendingRecoveryBlocker.HasPending -and -not $isPendingCreationArchive) {
-            throw 'A Pending fork recovery blocks branch mutation until every branch creation and index step is reconciled.'
-        }
-    }
     $hasBranchOutcome = ($RecordKind -eq 'branch' -and $Changes.Contains('Branch Outcome'))
     if ($hasBranchOutcome -and [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
         throw 'Branch Outcome requires the exact verified common decision revision.'
@@ -2179,6 +2570,24 @@ function Invoke-GitHandoffFieldsMutation {
     }
     $old = Read-GitHandoffRecord -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId
     if ($null -eq $old) { throw 'The exact Handoff record could not be found; no replacement was created.' }
+    if (-not [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
+        if ($RecordKind -cne 'common' -or $Changes.Count -ne 2 -or
+            @($Changes.Keys | Where-Object { [string]$_ -cnotin @('Current','Source') }).Count -gt 0 -or
+            [string]::IsNullOrWhiteSpace($Reason)) {
+            throw 'A fork-recovery common conversion may change only the attested Current and Source fields.'
+        }
+        $conversionRecovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkRecoveryConversionId
+        if ($null -eq $conversionRecovery) { throw "Fork recovery '$ForkRecoveryConversionId' was not found." }
+        $expectedConversionReason = "Fork recovery '$ForkRecoveryConversionId': common-only confirmed-baseline conversion"
+        if ($Reason -cne $expectedConversionReason -or
+            [string]$Changes.Current -cne [string]$conversionRecovery.Payload['Shared Baseline'].Current -or
+            [string]$Changes.Source -cne [string]$conversionRecovery.Payload['Shared Baseline'].Source) {
+            throw "Fork recovery '$ForkRecoveryConversionId' conversion does not match its attested common baseline."
+        }
+        [void](Get-GitHandoffForkRecoveryCommonConversionAudit -Adapter $Adapter -TaskKey $TaskKey `
+            -ForkId $ForkRecoveryConversionId -Recovery $conversionRecovery -OperationId $OperationId -Actor $Actor `
+            -SkipEventValidation)
+    }
     if ($RecordKind -eq 'branch' -and $ExplicitContinuation) {
         if (-not $Changes.Contains('Continuation Generation') -or
             [int64]$Changes['Continuation Generation'] -ne ([int64]$old.Record.fields['Continuation Generation'] + 1)) {
@@ -2205,6 +2614,12 @@ function Invoke-GitHandoffFieldsMutation {
         # decision, reviewed-content, or generation check can reject the retry.
         Complete-GitHandoffEvents -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey `
             -BranchId $BranchId -OperationId $OperationId | Out-Null
+        if (-not [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
+            $conversionRecovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkRecoveryConversionId
+            [void](Get-GitHandoffForkRecoveryCommonConversionAudit -Adapter $Adapter -TaskKey $TaskKey `
+                -ForkId $ForkRecoveryConversionId -Recovery $conversionRecovery -OperationId $OperationId -Actor $Actor `
+                -RequireCommittedOperation)
+        }
     }
     if ($hasDecisionBranchBindings) {
         Assert-GitHandoffDecisionBranchBindingsForWrite -Adapter $Adapter -TaskKey $TaskKey `
@@ -2290,7 +2705,19 @@ function Invoke-GitHandoffFieldsMutation {
         else { $newRecord.fields[$fieldName] = $next }
     }
     Assert-HandoffRequiredFields -Fields $newRecord.fields -RecordKind $RecordKind
-    if ($actualChanges.Count -eq 0) {
+    if ($RecordKind -eq 'common' -and $actualChanges.Count -gt 0) {
+        $semanticChanges = @($actualChanges | Where-Object { [string]$_.field -cne 'Active Branches' })
+        if ($semanticChanges.Count -gt 0 -and [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
+            $hasPendingRecovery = @(
+                Read-GitHandoffPendingForkRecoveryIndexEntries -Adapter $Adapter -TaskKey $TaskKey |
+                    Where-Object { [string]$_.Status -ceq 'Pending' }
+            ).Count -gt 0
+            if ($hasPendingRecovery) {
+                throw 'A Pending fork recovery blocks common semantic changes until its bound common-only conversion is reconciled.'
+            }
+        }
+    }
+    if ($actualChanges.Count -eq 0 -and -not $PersistNoOpOperation) {
         if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
             Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
                 -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
@@ -2308,10 +2735,18 @@ function Invoke-GitHandoffFieldsMutation {
             DecisionBranchContentSha256=$decisionBranchContentSha256;
             DecisionBranchContinuationGeneration=$decisionBranchContinuationGeneration}
     }
+    $branchMutationFence = $null
+    if ($RecordKind -eq 'branch' -and $actualChanges.Count -gt 0) {
+        # Every new branch-record commit shares the common CAS cursor with fork
+        # admission. The cursor read happens before its protected Pending scan.
+        $branchMutationFence = New-GitHandoffBranchMutationFence -Adapter $Adapter -TaskKey $TaskKey `
+            -BranchId $BranchId -Changes $Changes
+    }
     $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray() `
         -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal -RecordKind $RecordKind `
         -RecordId ([string]$old.Record.recordId) -Source $newRecord.fields.Source `
         -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed) `
+        -AllowEmptyChangedFields:$PersistNoOpOperation `
         -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision `
         -DecisionBranchContentSha256 $decisionBranchContentSha256 `
         -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration -Internal:$InternalOperation
@@ -2321,11 +2756,13 @@ function Invoke-GitHandoffFieldsMutation {
         @($actualChanges | Where-Object { $_.field -cne 'Active Branches' }).Count -gt 0) {
         $newRecord.lastActivityAt = $operation.occurredAt
     }
-    $commonFenceCommit = $null
     $liveCommon = $null
     if ($RecordKind -eq 'branch' -and -not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
         $liveCommon = Read-GitHandoffRecord -Adapter $Adapter -RecordKind common -TaskKey $TaskKey
         if ($null -eq $liveCommon) { throw 'The exact common decision record disappeared before the decision-bound branch write.' }
+        if ([string]$liveCommon.Revision -cne [string]$branchMutationFence.ExpectedCommonRevision) {
+            throw 'The common revision changed while preparing the branch mutation fence; re-read before retrying.'
+        }
         Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
             -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
         $liveBinding = Assert-GitHandoffDecisionBranchBinding -Adapter $Adapter -TaskKey $TaskKey `
@@ -2333,14 +2770,17 @@ function Invoke-GitHandoffFieldsMutation {
         if ([string]$liveBinding.CurrentRevision -cne [string]$old.Revision) {
             throw "Reviewed branch '$BranchId' changed before the decision-bound branch write; re-read before retrying."
         }
-        $commonFenceCommit = New-GitHandoffCommit -Adapter $Adapter -Document $liveCommon.Record `
-            -Parent $liveCommon.Revision -FileName 'record.json'
     }
     $commit = New-GitHandoffCommit -Adapter $Adapter -Document $newRecord -Parent $old.Revision -FileName 'record.json'
-    if ($null -ne $commonFenceCommit) {
+    if ($null -ne $branchMutationFence) {
         Push-GitHandoffBranchMutationIfRevisions -Adapter $Adapter -BranchRef $old.Ref `
-            -ExpectedBranchRevision $ExpectedRevision -BranchCommit $commit -CommonRef $liveCommon.Ref `
-            -ExpectedCommonRevision $liveCommon.Revision -CommonFenceCommit $commonFenceCommit | Out-Null
+            -ExpectedBranchRevision $ExpectedRevision -BranchCommit $commit `
+            -CommonRef $branchMutationFence.CommonRef `
+            -ExpectedCommonRevision $branchMutationFence.ExpectedCommonRevision `
+            -CommonFenceCommit $branchMutationFence.CommonFenceCommit `
+            -WriteDescription $(if ($isArchive) { 'branch archive' } elseif (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
+                'decision-bound branch'
+            } else { 'branch mutation' }) | Out-Null
     }
     else {
         Push-GitHandoffIfRevision -Adapter $Adapter -Ref $old.Ref -ExpectedRevision $ExpectedRevision -Commit $commit | Out-Null
@@ -2350,6 +2790,12 @@ function Invoke-GitHandoffFieldsMutation {
         throw "Operation ID '$OperationId' may have committed, but record readback is unverified."
     }
     Complete-GitHandoffEvents -Adapter $Adapter -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -OperationId $OperationId | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
+        $conversionRecovery = Get-GitHandoffForkRecovery -Adapter $Adapter -TaskKey $TaskKey -ForkId $ForkRecoveryConversionId
+        [void](Get-GitHandoffForkRecoveryCommonConversionAudit -Adapter $Adapter -TaskKey $TaskKey `
+            -ForkId $ForkRecoveryConversionId -Recovery $conversionRecovery -OperationId $OperationId -Actor $Actor `
+            -RequireCommittedOperation)
+    }
     if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
         Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
             -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
@@ -2470,10 +2916,6 @@ function Set-GitHandoffBranchLifecycle {
     if ([string]::IsNullOrWhiteSpace($Reason)) {
         $Reason = if ($Lifecycle -ceq 'Archived') { 'archive the exact peer after the validated Gate' }
             else { 'restore the exact peer on explicit continuation' }
-    }
-    $pendingRecoveryBlocker = Test-GitHandoffPendingForkRecoveryBlocker -Adapter $Adapter -TaskKey $TaskKey
-    if ($pendingRecoveryBlocker.HasPending -and $Lifecycle -cne 'Archived') {
-        throw 'A Pending fork recovery blocks branch lifecycle mutation until every branch creation and index step is reconciled.'
     }
     $common = Get-GitHandoffCommon -Adapter $Adapter -TaskKey $TaskKey
     $branch = Get-GitHandoffBranch -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId
@@ -2697,7 +3139,8 @@ function Start-GitHandoffBranchContinuation {
 }
 
 Export-ModuleMember -Function New-GitHandoffAdapter,Get-GitHandoffCommon,Get-GitHandoffBranch,Get-GitHandoffEvent,
-    Get-GitHandoffForkRecovery,Get-GitHandoffPendingForkRecoveries,New-GitHandoffForkRecovery,Complete-GitHandoffForkRecovery,
+    Get-GitHandoffForkRecovery,Get-GitHandoffPendingForkRecoveries,New-GitHandoffForkRecovery,
+    Set-GitHandoffForkRecoveryCommonBaseline,Complete-GitHandoffForkRecovery,
     Abandon-GitHandoffForkRecovery,
     Get-GitHandoffBranchReviewBinding,New-GitHandoffCommon,New-GitHandoffBranch,Set-GitHandoffFields,Set-GitHandoffBranchLifecycle,
     Start-GitHandoffBranchContinuation
