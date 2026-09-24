@@ -30,10 +30,17 @@ function Get-LegacyNotionCanonicalChanges {
         [array] $Changes
     )
 
+    $changeIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $normalized = @(
         foreach ($change in $Changes) {
             if ([bool]$change.merged) {
                 continue
+            }
+
+            $changeIdProperty = $change.PSObject.Properties['id']
+            $changeId = if ($null -eq $changeIdProperty) { '' } else { [string]$changeIdProperty.Value }
+            if ([string]::IsNullOrWhiteSpace($changeId) -or -not $changeIds.Add($changeId)) {
+                throw 'Legacy Notion unmerged change IDs must be non-empty and unique.'
             }
 
             $createdTicks = ConvertTo-LegacyNotionUtcTicks -Timestamp ([string]$change.created_time)
@@ -41,7 +48,7 @@ function Get-LegacyNotionCanonicalChanges {
             [PSCustomObject]@{
                 Change = $change
                 EffectiveTicks = [Math]::Max($createdTicks, $lastEditedTicks)
-                ChangeId = [string]$change.id
+                ChangeId = $changeId
                 LastEditedTicks = $lastEditedTicks
                 MergedOrdinal = if ([bool]$change.merged) { 1 } else { 0 }
                 Field = [string]$change.field

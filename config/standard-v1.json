@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "a403abdf038a3346d775431a6908a71cc3d35a5b",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/a403abdf038a3346d775431a6908a71cc3d35a5b",
-    "archiveSha256": "17154929fadfa63487263db1efcb78f4948195af9c11c25a66432eff3411b2d3",
+    "commit": "8a944f4a74a054cb0353f22ab22c459dc9dc18ef",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/8a944f4a74a054cb0353f22ab22c459dc9dc18ef",
+    "archiveSha256": "99ba8cae62c80db9da8876b5a7e49dfdd499ca863c006bfd2a411a5d4e7dbcc0",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -29,15 +29,15 @@
       },
       {
         "path": "docs/standards/schemas/validation-security-gate-v1.schema.json",
-        "sha256": "56979baa08f3ec5534e3a17f925d53e69accd4cdc500872e92ca56b694044ea6"
+        "sha256": "a69e11d41697feae79f8322ce2115352af97cefd2eb0af809b4d47f241b3c3f2"
       },
       {
         "path": "docs/standards/skill-repository-review-matrix.md",
-        "sha256": "c345ad3ec32d1941df5c5757ce96b4430c0223b3f8ed99f2a4de7dc9923410f2"
+        "sha256": "315204afe428bb51cab5e815b2c40f6d0cbd55c81a3532ad59b686ae5e4c166c"
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "78a72aa8214acd5a5e202df34bbb20f8cfd841ab3d181de10645a777267cfd5d"
+        "sha256": "585d74097cca9413aba8c153be34ff53165c0acc058ef1fdbcf12ba8e954edb7"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -45,7 +45,7 @@
       },
       {
         "path": "docs/standards/validation-security-gate.json",
-        "sha256": "e303e8c3d484012022f5c4da694c3fe21ff02395b0b9b7e973a4234d4182f485"
+        "sha256": "81d4eadcb38a573f218b49d9c5555d609f89e13c2cf1ad63f0ee6422c9ecc33c"
       },
       {
         "path": "docs/standards/validation-toolchain.json",
@@ -53,7 +53,7 @@
       },
       {
         "path": "scripts/Invoke-StandardAuthorityGate.ps1",
-        "sha256": "c98d3f1b181ba0e7d3894729a8f1636984407c20454a27e0e383799c2f90425f"
+        "sha256": "22d70074762437daf926a1afe3ff1def2f57efed7c7a6b41f1c390d68cb664d7"
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
@@ -61,7 +61,7 @@
       },
       {
         "path": "scripts/Resolve-StandardValidationTool.ps1",
-        "sha256": "3744bc4549612e5997361315a8fd5e1ea803ade26052cf4eaf2ccdc1776fcf6e"
+        "sha256": "07cb7d9bf35aaee1e3d0fc8af1837582e588227cbcb2e29cd4a5e4b610754a15"
       },
       {
         "path": "docs/standards/schemas/standard-validation-adapter-v1.schema.json",
@@ -69,11 +69,11 @@
       },
       {
         "path": "docs/standards/schemas/standard-validation-evidence-v1.schema.json",
-        "sha256": "24d8b0f29f9bddd8af1bee02943fb46c72ca5d4a874727cb107ff68a39af12b9"
+        "sha256": "7abb4cea105eecc97f0b190930b77297336595ffb4d26cf04b0ea1071a79f483"
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "2b3d6da1c97c5542a9761445da9de5f101ada53e83cb1f17ee90c8b0d4929356"
+        "sha256": "503a93a443629eec6572c642fa324e3d5bd4b0b857ca3b1b3ae265e132f05404"
       },
       {
         "path": "docs/standards/trust-anchors/human-approval-public-key.xml",
@@ -85,7 +85,15 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "3cee28379d5612e4592f1755d8732e6b869018402b7d82efacd89fa10bcafd57"
+        "sha256": "a1ff12b3d2127975813df044495aa14763cd2b640fbdb2f0534975f3721eaaa2"
+      },
+      {
+        "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",
+        "sha256": "561e9bb167c1c4d5ce1a438eeca13df9d2623b8fe6dbb31973427f462f97eb55"
+      },
+      {
+        "path": "scripts/StandardSemanticBridge.psm1",
+        "sha256": "f61d3a4166b8e312d9f4090cb72e8af37056d88f2936cb22ecdd1fb389b191cc"
       },
       {
         "path": "docs/standards/schemas/upstream-adapter-v1.schema.json",
