@@ -701,6 +701,121 @@ Describe 'manage-task-handoff Skill contract' {
         @($result.Replay.Collisions.ChangeId | Sort-Object) | Should -Be @('change-20','change-21')
     }
 
+    # Scenario: A stable legacy result set repeats one immutable change ID across different fields and native times.
+    # Purpose: Reject ambiguous identity before any reconstructed view can be returned.
+    It 'InterT71_rejects_duplicate_unmerged_legacy_change_ids_without_publishing_a_view' {
+        $mainCase = $script:LegacyCases.mergeCases | Select-Object -First 1
+        $main = $mainCase.main | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $main | Add-Member -NotePropertyName id -NotePropertyValue 'handoff-duplicate-change-id'
+        $changes = @(
+            [PSCustomObject]@{
+                id = 'duplicate-change-id'
+                field = 'Current'
+                value = '"First checkpoint"'
+                merged = $false
+                created_time = '2026-09-01T04:02:00Z'
+                last_edited_time = '2026-09-01T04:03:00Z'
+            }
+            [PSCustomObject]@{
+                id = 'duplicate-change-id'
+                field = 'Scope'
+                value = '"Second scope"'
+                merged = $false
+                created_time = '2026-09-01T04:04:00Z'
+                last_edited_time = '2026-09-01T04:05:00Z'
+            }
+        )
+        $readerState = @{ mainReads = 0; changeReads = 0 }
+        $result = $null
+        $errorMessage = $null
+
+        try {
+            $result = Invoke-LegacyNotionReadOnlyReplay `
+                -Contract (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') | ConvertFrom-Json -Depth 30) `
+                -ReadMain {
+                    $readerState.mainReads++
+                    return $main
+                } `
+                -ReadUnmergedChanges {
+                    $readerState.changeReads++
+                    return $changes
+                }
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+        }
+
+        $errorMessage | Should -BeExactly 'Legacy Notion unmerged change IDs must be non-empty and unique.'
+        $result | Should -BeNullOrEmpty
+        $readerState.mainReads | Should -Be 1
+        $readerState.changeReads | Should -Be 1
+    }
+
+    # Scenario: An otherwise stable legacy read returns an unmerged change with a whitespace-only ID.
+    # Purpose: Reject a change without durable identity before producing a reconstructed view.
+    It 'InterT72_rejects_empty_unmerged_legacy_change_ids' {
+        $mainCase = $script:LegacyCases.mergeCases | Select-Object -First 1
+        $main = $mainCase.main | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $main | Add-Member -NotePropertyName id -NotePropertyValue 'handoff-empty-change-id'
+        $change = [PSCustomObject]@{
+            id = '  '
+            field = 'Current'
+            value = '"Checkpoint"'
+            merged = $false
+            created_time = '2026-09-01T04:02:00Z'
+            last_edited_time = '2026-09-01T04:03:00Z'
+        }
+        $errorMessage = $null
+
+        try {
+            Invoke-LegacyNotionReadOnlyReplay `
+                -Contract (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') | ConvertFrom-Json -Depth 30) `
+                -ReadMain { return $main } `
+                -ReadUnmergedChanges { return @($change) } | Out-Null
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+        }
+
+        $errorMessage | Should -BeExactly 'Legacy Notion unmerged change IDs must be non-empty and unique.'
+    }
+
+    # Scenario: Two unmerged changes have IDs that differ only by letter case.
+    # Purpose: Keep distinct case-sensitive identities while replaying both changes.
+    It 'InterT73_compares_legacy_change_ids_with_ordinal_identity' {
+        $mainCase = $script:LegacyCases.mergeCases | Select-Object -First 1
+        $main = $mainCase.main | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $main | Add-Member -NotePropertyName id -NotePropertyValue 'handoff-ordinal-change-ids'
+        $changes = @(
+            [PSCustomObject]@{
+                id = 'Change-case'
+                field = 'Current'
+                value = '"First checkpoint"'
+                merged = $false
+                created_time = '2026-09-01T04:02:00Z'
+                last_edited_time = '2026-09-01T04:03:00Z'
+            }
+            [PSCustomObject]@{
+                id = 'change-case'
+                field = 'Scope'
+                value = '"Second scope"'
+                merged = $false
+                created_time = '2026-09-01T04:04:00Z'
+                last_edited_time = '2026-09-01T04:05:00Z'
+            }
+        )
+
+        $result = Invoke-LegacyNotionReadOnlyReplay `
+            -Contract (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') | ConvertFrom-Json -Depth 30) `
+            -ReadMain { return $main } `
+            -ReadUnmergedChanges { return $changes }
+
+        $result.Status | Should -BeExactly 'Stable'
+        @($result.Replay.AppliedChangeIds).Count | Should -Be 2
+        $result.Replay.Fields.Current | Should -BeExactly 'First checkpoint'
+        $result.Replay.Fields.Scope | Should -BeExactly 'Second scope'
+    }
+
     It 'UnitT71_replays_legacy_merge_fixtures_through_the_production_helper' {
         $legacyContract = Get-Content -Raw (Join-Path $script:Skill 'references/legacy-notion-handoff-contract.json') |
             ConvertFrom-Json -Depth 30
