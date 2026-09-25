@@ -728,7 +728,9 @@ try {
                 # runner's fail-fast preference promote their captured stderr into terminating
                 # errors before Pester can evaluate the assertions.
                 $ErrorActionPreference = 'Continue'
-                $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 6> $pesterDiagnosticPath
+                # Imported candidate modules may emit benign warnings. Keep the
+                # typed JSON envelope as the only stdout record for the supervisor.
+                $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6> $pesterDiagnosticPath
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference

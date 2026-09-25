@@ -324,7 +324,7 @@ function Get-StandardValidationTextSha256 {
     }
 
     It 'prepares, signs, resumes, verifies, and rejects replay through the exact Validate.ps1 entrypoint' -Tag 'SemanticBridgeV2ConsumerE2E' {
-        if ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests' -and
+        if ($env:STANDARD_VALIDATION_STAGE_ID -cin @('repository-tests', 'supplemental-repository-tests') -and
             $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
             Set-ItResult -Skipped -Because 'Avoid recursive consumer E2E execution inside repository-pester.'
             return
