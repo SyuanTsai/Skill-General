@@ -35,8 +35,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-$script:AuthorityCommit = '06de4df93a73e5c7c89295efe4bcba10deaec4fa'
-$script:AuthorityArchiveSha256 = '5b5c96189a12acd14a2dba5ef01d15d79f233e9d440f691d932018c14fcb6072'
+$script:AuthorityCommit = '6b8cdd9a97f18916366f5ed522cc8b2eea6b9e49'
+$script:AuthorityArchiveSha256 = '572102db763b2e33a311cc31c30b3393ac3252903bba0deb7d1637c56e950969'
 $script:AuthorityFiles = [ordered]@{
     'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
     'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -57,7 +57,7 @@ $script:AuthorityFiles = [ordered]@{
     'docs/standards/standard-validation-contract-v1.json' = '11a811ab90179c742c727b0dcebf7e7c60c1f647f43f387a428bae4693637da5'
     'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
     'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-    'scripts/Invoke-StandardValidation.ps1' = 'a64c3c45132e1e6433bc20364317edc5b1a420f261e6eef81b29a32acda3bf58'
+    'scripts/Invoke-StandardValidation.ps1' = 'c8b21a4cb78c89e0670edaa2c85dc433f80c6262e8c16a228af0877547396b89'
     'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
     'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
     'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
@@ -721,19 +721,29 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
+            $pesterDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "sgv1-pester-$([guid]::NewGuid().ToString('N')).log"
             $previousErrorActionPreference = $ErrorActionPreference
             try {
                 # Tests intentionally exercise non-zero native child processes. Do not let the
                 # runner's fail-fast preference promote their captured stderr into terminating
                 # errors before Pester can evaluate the assertions.
                 $ErrorActionPreference = 'Continue'
-                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 6>$null
+                $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 6> $pesterDiagnosticPath
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
             if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
-                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
+                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) {
+                [Console]::Error.WriteLine("Pester totals: total=$($result.TotalCount), passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount).")
+                if (Test-Path -LiteralPath $pesterDiagnosticPath -PathType Leaf) {
+                    foreach ($line in @(Get-Content -LiteralPath $pesterDiagnosticPath -Tail 100)) {
+                        [Console]::Error.WriteLine([string]$line)
+                    }
+                }
+                throw 'Pester repository regression did not complete successfully.'
+            }
+            Remove-Item -LiteralPath $pesterDiagnosticPath -Force -ErrorAction SilentlyContinue
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
