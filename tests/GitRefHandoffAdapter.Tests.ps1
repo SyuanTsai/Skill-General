@@ -4,7 +4,7 @@
 Describe 'Optional Git-ref Task Handoff adapter' {
     BeforeAll {
         $script:Root = Split-Path -Parent $PSScriptRoot
-        Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -ErrorAction Stop
+        Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -DisableNameChecking -ErrorAction Stop
         $script:PriorCommonCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffCommon:Actor']
         $script:PriorBranchCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffBranch:Actor']
         $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = 'synthetic-test-writer'
@@ -793,7 +793,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_A_ENTERED = $EnteredA
                 $env:SYP_TEST_BARRIER_B_ENTERED = $EnteredB
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -812,7 +812,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_A_ENTERED = $EnteredA
                 $env:SYP_TEST_BARRIER_B_ENTERED = $EnteredB
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -928,7 +928,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_ADMISSION_ENTERED = $AdmissionEntered
                 $env:SYP_TEST_BARRIER_SOURCE_MUTATION_DONE = $SourceMutationDone
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -1147,7 +1147,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_UPDATE_ENTERED = $UpdateEntered
                 $env:SYP_TEST_BARRIER_ADMISSION_DONE = $AdmissionDone
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -1211,7 +1211,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_UPDATE_ENTERED = $UpdateEntered
                 $env:SYP_TEST_BARRIER_ADMISSION_DONE = $AdmissionDone
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -1693,7 +1693,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_ARCHIVE_ENTERED = $ArchiveEntered
                 $env:SYP_TEST_BARRIER_ADMISSION_ENTERED = $AdmissionEntered
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -1713,7 +1713,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_ARCHIVE_ENTERED = $ArchiveEntered
                 $env:SYP_TEST_BARRIER_ADMISSION_ENTERED = $AdmissionEntered
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -2110,7 +2110,7 @@ exit /b %ERRORLEVEL%
                 $env:SYP_TEST_BARRIER_ENTERED = $GitWrapperEntered
                 $env:SYP_TEST_BARRIER_BLOCK = $GitWrapperBlock
                 $env:SYP_TEST_REAL_GIT = $RealGit
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -2131,7 +2131,7 @@ exit /b %ERRORLEVEL%
 
             $recoveryJob = Start-Job -ScriptBlock {
                 param($ModulePath,$RepositoryRoot,$Payload)
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -2221,7 +2221,7 @@ exit 0
         try {
             $recoveryJob = Start-Job -ScriptBlock {
                 param($ModulePath,$RepositoryRoot,$Payload)
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -2243,7 +2243,7 @@ exit 0
 
             $abandonJob = Start-Job -ScriptBlock {
                 param($ModulePath,$RepositoryRoot,$ExpectedEnvelopeRevision)
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -3018,7 +3018,7 @@ exit /b %ERRORLEVEL%
                 param($ModulePath,$RepositoryRoot,$GitWrapperDir,$BarrierEntered,$BarrierBlock)
                 $env:Path = (($env:Path -split ';') | Where-Object { $_ -and $_ -ne $GitWrapperDir }) -join ';'
                 $env:SYP_TEST_BARRIER_ROLE = ''
-                Import-Module $ModulePath -Force
+                Import-Module $ModulePath -Force -DisableNameChecking
                 $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                     -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                     -Authorize { param($request) $true }
@@ -3451,7 +3451,7 @@ exit 0
         $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
         $archiveJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot)
-            Import-Module $ModulePath -Force
+            Import-Module $ModulePath -Force -DisableNameChecking
             $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                 -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                 -Authorize { param($request) $true }
@@ -3561,7 +3561,7 @@ exit 0
         $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
         $createJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot,$ForkPoint)
-            Import-Module $ModulePath -Force
+            Import-Module $ModulePath -Force -DisableNameChecking
             $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                 -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                 -Authorize { param($request) $true }
@@ -3659,7 +3659,7 @@ exit 0
         $modulePath = Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1'
         $restoreJob = Start-Job -ScriptBlock {
             param($ModulePath,$RepositoryRoot)
-            Import-Module $ModulePath -Force
+            Import-Module $ModulePath -Force -DisableNameChecking
             $adapter = New-GitHandoffAdapter -RepositoryRoot $RepositoryRoot -RemoteName origin `
                 -AuthorityScope 'synthetic-scope' -GetVerifiedPrincipal { 'synthetic-principal' } `
                 -Authorize { param($request) $true }
