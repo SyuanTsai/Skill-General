@@ -509,10 +509,10 @@ Describe 'manage-task-handoff Skill contract' {
             'conditional-common-write-with-branch-bindings',
             'common-readback-bind-origin-revision-and-decision-identity',
             'per-branch-common-and-reviewed-identity-precheck',
-            'branch-outcomes',
+            'atomic-decision-fenced-branch-outcomes',
             'per-branch-common-and-reviewed-identity-postcheck',
             'per-branch-common-and-reviewed-identity-precheck',
-            'archive-selected-and-superseded-branches',
+            'atomic-decision-fenced-archive-selected-and-superseded-branches',
             'per-branch-common-and-reviewed-identity-postcheck',
             'remove-archived-branches-from-active-index-using-latest-storage-revisions',
             'common-decision-reviewed-branch-and-active-index-readback'
@@ -530,6 +530,10 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.integration.acceptedStructuralRevisionMustPreserveDecisionIdentity | Should -BeTrue
         $script:Contract.integration.recheckCommonDecisionIdentityBeforeEachBranchMutation | Should -BeTrue
         $script:Contract.integration.recheckCommonDecisionIdentityAfterEachBranchMutation | Should -BeTrue
+        $script:Contract.integration.decisionDrivenBranchCommitRequiresAtomicCommonRevisionFence | Should -BeTrue
+        $script:Contract.integration.decisionFenceSharesCommonMutationCursor | Should -BeTrue
+        $script:Contract.integration.staleDecisionCannotCommitNewBranchOutcomeOrArchive | Should -BeTrue
+        $script:Contract.integration.postCommitDecisionChangeMayRequirePartialReconciliation | Should -BeTrue
         $script:Contract.integration.onCommonDecisionIdentityChangeDuringFinalization | Should -Be 'stop-and-reconcile-from-current-decision'
         $script:Contract.integration.finalizationBindsReviewedBranchOrigins | Should -BeTrue
         $script:Contract.integration.decisionPersistsBranchRevisionContentIdentityAndOutcome | Should -BeTrue

@@ -100,9 +100,9 @@ function New-SyntheticResumePlan {
             candidateId = '0' * 64
         }
         authority = [ordered]@{
-            revision = '8a944f4a74a054cb0353f22ab22c459dc9dc18ef'
+            revision = 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
             archivePath = Join-Path $runRoot 'authority.zip'
-            archiveSha256 = '99ba8cae62c80db9da8876b5a7e49dfdd499ca863c006bfd2a411a5d4e7dbcc0'
+            archiveSha256 = '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
             root = Join-Path ([IO.Path]::GetTempPath()) "sgv1-tools-$RunId\authority"
             runnerPath = Join-Path ([IO.Path]::GetTempPath()) "sgv1-tools-$RunId\authority\scripts\Invoke-StandardValidation.ps1"
             runnerSha256 = '0' * 64
@@ -366,7 +366,7 @@ function Get-StandardValidationTextSha256 {
         $plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100
         $plan.schemaVersion | Should -Be 1
         $plan.artifactType | Should -BeExactly 'standard-validation-consumer-run-plan-v1'
-        $plan.authority.revision | Should -BeExactly '8a944f4a74a054cb0353f22ab22c459dc9dc18ef'
+        $plan.authority.revision | Should -BeExactly 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
         $plan.execution.semanticTriggered | Should -BeTrue
         $plan.candidate.candidateId | Should -Match '^[0-9a-f]{64}$'
         $plan.candidate.contentSha256 | Should -Match '^[0-9a-f]{64}$'
