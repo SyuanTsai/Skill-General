@@ -724,7 +724,9 @@ exit 0
             -OperationId 'complete-bound-fork' | Out-Null
     }
 
-    It 'InterT29n_serializes_pending_fork_admission_per_task_key' {
+    # The barrier cases below use Windows .cmd Git wrappers. Pester reports them
+    # as skipped on other platforms while the Windows suite executes each one.
+    It 'InterT29n_serializes_pending_fork_admission_per_task_key' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't29h'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
@@ -867,7 +869,7 @@ exit /b %ERRORLEVEL%
         }
     }
 
-    It 'InterT29p_rejects_admission_when_existing_source_advances_before_atomic_fence' {
+    It 'InterT29p_rejects_admission_when_existing_source_advances_before_atomic_fence' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't29p'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
@@ -1064,7 +1066,7 @@ exit /b %ERRORLEVEL%
         }
     }
 
-    It 'InterT29q_serializes_unbound_active_branch_mutation_against_pending_admission' {
+    It 'InterT29q_serializes_unbound_active_branch_mutation_against_pending_admission' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't29q'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
@@ -1265,7 +1267,7 @@ exit /b %ERRORLEVEL%
         }
     }
 
-    It 'InterT29r_requires_common_read_for_branch_cursor_fence' {
+    It 'InterT29r_requires_common_read_for_branch_cursor_fence' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't29r'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
@@ -1626,7 +1628,7 @@ exit 0
         @(Get-GitHandoffPendingForkRecoveries -Adapter $reader -TaskKey 'demo:complete-without-list').Count | Should -Be 0
     }
 
-    It 'InterT29k_serializes_branch_archival_against_pending_recovery_admission' {
+    It 'InterT29k_serializes_branch_archival_against_pending_recovery_admission' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't29k'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
@@ -2052,7 +2054,7 @@ exit /b %ERRORLEVEL%
 
     # Scenario: A recovery admission and common archival both read the same Active common revision.
     # Purpose: The admission must fence the common revision before either writer can commit its decision.
-    It 'InterT2_serializes_recovery_admission_against_common_archival' {
+    It 'InterT2_serializes_recovery_admission_against_common_archival' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 't2-common-fence'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'writer-a'
@@ -2931,7 +2933,7 @@ exit 0
             -Reason 'an ordinary descendant cannot authorize finalization' } | Should -Throw '*did not originate*'
     }
 
-    It 'InterT84c_fences_decision_bound_branch_write_against_a_live_common_decision_change' {
+    It 'InterT84c_fences_decision_bound_branch_write_against_a_live_common_decision_change' -Skip:($env:OS -ne 'Windows_NT') {
         $root = Join-Path $TestDrive 'q84c'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
