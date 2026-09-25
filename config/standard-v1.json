@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "f6454d810c746bb9435345912e670f162e6f631f",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/f6454d810c746bb9435345912e670f162e6f631f",
-    "archiveSha256": "9ed2b95d8f16e551faa99ffad1fe6512e5fae71d811893ed8a19791f43a698e7",
+    "commit": "22f4fad1acc2498802618a8b95a2a6046c356277",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/22f4fad1acc2498802618a8b95a2a6046c356277",
+    "archiveSha256": "ce64cdc621edf3b977ad3966149c6d32d56a86e43e3f8bd4cca840459da932f2",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -85,7 +85,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "ada8e29c31ad1d57cf84c2f242ac0cd846ee2d7db18a185119a61b6ebe958250"
+        "sha256": "9d9fca37ec2b2517eae1a4ae4af0e26ad0d7d34828a9c301a62c3e5f48b3b20e"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

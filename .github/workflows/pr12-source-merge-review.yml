@@ -14,7 +14,7 @@ permissions:
 jobs:
   review-evidence:
     name: PR12 exact-head supervised review
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout isolated review driver
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
@@ -90,7 +90,7 @@ jobs:
           name: pr12-exact-head-source-merge-review
           path: |
             ${{ runner.temp }}/pr12-source-review-report.json
-            ${{ runner.temp }}/standard-v1-*/
+            ${{ runner.temp }}/sgv1-*/
             ${{ runner.temp }}/runs/
           if-no-files-found: warn
           retention-days: 30
