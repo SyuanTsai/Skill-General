@@ -35,8 +35,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-$script:AuthorityCommit = '6b8cdd9a97f18916366f5ed522cc8b2eea6b9e49'
-$script:AuthorityArchiveSha256 = '572102db763b2e33a311cc31c30b3393ac3252903bba0deb7d1637c56e950969'
+$script:AuthorityCommit = 'cb2da4bdfe3a6f95ce8080c551efa9ce17aceb3e'
+$script:AuthorityArchiveSha256 = 'dc5aadb4a2221d831fca6183df015d43f39edf4581baa8767bf8a61a26619c91'
 $script:AuthorityFiles = [ordered]@{
     'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
     'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -45,7 +45,7 @@ $script:AuthorityFiles = [ordered]@{
     'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
     'docs/standards/schemas/validation-security-gate-v1.schema.json' = '32aee32858cdb0f8fa7b01462af05ad2300cb247cd2e3ca769fa36ed1ac205a9'
     'docs/standards/skill-repository-review-matrix.md' = '315204afe428bb51cab5e815b2c40f6d0cbd55c81a3532ad59b686ae5e4c166c'
-    'docs/standards/skill-repository-standard.md' = '2b268aebaf40082de1eda3ed685a35121bc4833561d9ce05b35f72b5db3569a4'
+    'docs/standards/skill-repository-standard.md' = '282a635ac6a5d6aa5c39e1a05f2d045c968c29830f191303e7a68397aae672eb'
     'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
     'docs/standards/validation-security-gate.json' = '2d4ac30449981083d3f3eab850789e7115684f9dfecad48234bc91ffb678e674'
     'docs/standards/validation-toolchain.json' = '5925dcb1aea1e545b9787a29825e7a0cc03a04c777cd68ab44c9bdd7482ff579'
@@ -53,11 +53,11 @@ $script:AuthorityFiles = [ordered]@{
     'scripts/Resolve-PythonWheelClosure.py' = '7fa1511a3e3ba257c6d9e37f929f68e5684184a3a2756a3f9e765ccc6e69d208'
     'scripts/Resolve-StandardValidationTool.ps1' = 'b1b02443e1b752c415634aae4f9ca4770dc7850545f53102267b0645f6dc0bca'
     'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
-    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '93e67524c1e06306cf93877ef7db1370dd8a549974b89c0a23e3e3e00abb6a14'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '5e452ae802564c8c000e101b6ba7bb6127d63c79aa87ef3b48eb92290fc14551'
     'docs/standards/standard-validation-contract-v1.json' = '11a811ab90179c742c727b0dcebf7e7c60c1f647f43f387a428bae4693637da5'
     'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
     'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-    'scripts/Invoke-StandardValidation.ps1' = 'c8b21a4cb78c89e0670edaa2c85dc433f80c6262e8c16a228af0877547396b89'
+    'scripts/Invoke-StandardValidation.ps1' = '6cc55db214611a4e483d5b63a19c6b12359990fb368e815ce96a0acf82a94cad'
     'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
     'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
     'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
@@ -737,7 +737,7 @@ try {
                 [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) {
                 [Console]::Error.WriteLine("Pester totals: total=$($result.TotalCount), passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount).")
                 if (Test-Path -LiteralPath $pesterDiagnosticPath -PathType Leaf) {
-                    foreach ($line in @(Get-Content -LiteralPath $pesterDiagnosticPath -Tail 100)) {
+                    foreach ($line in @(Get-Content -LiteralPath $pesterDiagnosticPath)) {
                         [Console]::Error.WriteLine([string]$line)
                     }
                 }

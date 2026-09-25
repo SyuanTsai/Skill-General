@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "6b8cdd9a97f18916366f5ed522cc8b2eea6b9e49",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/6b8cdd9a97f18916366f5ed522cc8b2eea6b9e49",
-    "archiveSha256": "572102db763b2e33a311cc31c30b3393ac3252903bba0deb7d1637c56e950969",
+    "commit": "cb2da4bdfe3a6f95ce8080c551efa9ce17aceb3e",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/cb2da4bdfe3a6f95ce8080c551efa9ce17aceb3e",
+    "archiveSha256": "dc5aadb4a2221d831fca6183df015d43f39edf4581baa8767bf8a61a26619c91",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "2b268aebaf40082de1eda3ed685a35121bc4833561d9ce05b35f72b5db3569a4"
+        "sha256": "282a635ac6a5d6aa5c39e1a05f2d045c968c29830f191303e7a68397aae672eb"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -69,7 +69,7 @@
       },
       {
         "path": "docs/standards/schemas/standard-validation-evidence-v1.schema.json",
-        "sha256": "93e67524c1e06306cf93877ef7db1370dd8a549974b89c0a23e3e3e00abb6a14"
+        "sha256": "5e452ae802564c8c000e101b6ba7bb6127d63c79aa87ef3b48eb92290fc14551"
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
@@ -85,7 +85,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "c8b21a4cb78c89e0670edaa2c85dc433f80c6262e8c16a228af0877547396b89"
+        "sha256": "6cc55db214611a4e483d5b63a19c6b12359990fb368e815ce96a0acf82a94cad"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",
