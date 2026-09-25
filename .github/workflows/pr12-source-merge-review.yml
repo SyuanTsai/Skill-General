@@ -59,6 +59,11 @@ jobs:
           if ((& git -C $candidate rev-parse HEAD) -cne '1adba1e5fb5885d963e1e829f7044d814665ba73') {
             throw 'PR12 candidate checkout is not the exact reviewed head.'
           }
+          foreach ($name in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+            if ([string]$name -match '^(?i:npm_config_)') {
+              [Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
+            }
+          }
           $reportPath = Join-Path $env:RUNNER_TEMP 'pr12-source-review-report.json'
           & pwsh -NoProfile -NonInteractive -File $driver `
             -RepositoryRoot $candidate `
