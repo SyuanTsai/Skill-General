@@ -1,0 +1,554 @@
+{
+  "schemaVersion": 1,
+  "routing": [
+    { "id": "explicit-handoff", "signals": ["explicit-handoff"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "unfinished-external-write", "signals": ["unfinished-external-mutation"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "checkpoint-only-in-chat", "signals": ["confirmed-context-only-in-chat"], "risk": [], "stableKey": true, "expected": "write" },
+    { "id": "unlisted-duplicate-cost", "signals": [], "risk": ["costly-rework"], "stableKey": true, "expected": "write" },
+    { "id": "simple-read", "signals": ["complete-read-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "new-conversation", "signals": ["new-conversation-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "five-minute-alone", "signals": ["time-threshold-only"], "risk": [], "stableKey": true, "expected": "skip" },
+    { "id": "no-unique-key", "signals": ["explicit-handoff"], "risk": [], "stableKey": false, "expected": "report-identity-limit" }
+  ],
+  "lookup": [
+    { "id": "branch-id", "taskKey": "jira:ABC-1", "branchId": "thread:A", "mainCount": 1, "branchMatches": 1, "activeBranches": 2, "expected": "exact-branch" },
+    { "id": "one-active", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 1, "branchMatches": 0, "activeBranches": 1, "expected": "unique-active" },
+    { "id": "peer-ambiguity", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 1, "branchMatches": 0, "activeBranches": 2, "expected": "resolve-or-ask-material" },
+    { "id": "duplicate-main", "taskKey": "jira:ABC-1", "branchId": null, "mainCount": 2, "branchMatches": 0, "activeBranches": 0, "expected": "stop-integrity-conflict" },
+    { "id": "duplicate-branch", "taskKey": "jira:ABC-1", "branchId": "thread:A", "mainCount": 1, "branchMatches": 2, "activeBranches": 2, "expected": "stop-integrity-conflict" }
+  ],
+  "integration": [
+    { "id": "verified-neutral-fact", "kind": "objective-fact", "verified": true, "traceableSource": true, "changesDirection": false, "expected": "auto-common-with-provenance" },
+    { "id": "unverified-fact", "kind": "objective-fact", "verified": false, "traceableSource": true, "changesDirection": false, "expected": "branch-only" },
+    { "id": "candidate-choice", "kind": "candidate-solution", "verified": true, "traceableSource": true, "changesDirection": false, "expected": "user-decision" },
+    { "id": "scope-change", "kind": "objective-fact", "verified": true, "traceableSource": true, "changesDirection": true, "expected": "user-decision" }
+  ],
+  "conflicts": [
+    { "id": "same-context-mutual-exclusion", "mutuallyExclusive": true, "sameVersionEnvironmentScope": true, "revalidated": true, "material": true, "expected": "conflict-user-decision" },
+    { "id": "different-version", "mutuallyExclusive": true, "sameVersionEnvironmentScope": false, "revalidated": true, "material": true, "expected": "retain-applicability" },
+    { "id": "stale-claim", "mutuallyExclusive": true, "sameVersionEnvironmentScope": true, "revalidated": false, "material": true, "expected": "revalidate-or-supersede" }
+  ],
+  "archive": [
+    { "id": "before-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-08T00:00:01Z", "keepActiveUntil": null, "activeBranches": 0, "record": "common", "expected": "Active" },
+    { "id": "at-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-08T00:00:00Z", "keepActiveUntil": null, "activeBranches": 0, "record": "common", "expected": "Archived" },
+    { "id": "past-boundary", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T23:59:59Z", "keepActiveUntil": null, "activeBranches": 0, "record": "branch", "expected": "Archived" },
+    { "id": "future-hold", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": "2026-09-16T00:00:00Z", "activeBranches": 0, "record": "branch", "expected": "Active" },
+    { "id": "active-peer", "now": "2026-09-15T00:00:00Z", "lastActivity": "2026-09-07T00:00:00Z", "keepActiveUntil": null, "activeBranches": 1, "record": "common", "expected": "Active" }
+  ],
+  "storageSelection": [
+    {
+      "id": "general-question-no-handoff",
+      "handoffNeeded": false,
+      "explicitSelection": null,
+      "trustedSettings": [],
+      "expected": {
+        "selection": "none",
+        "prompt": false,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "handoff-first-use-asks-for-location",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [],
+      "expected": {
+        "selection": "ask",
+        "askFor": "resource-or-location",
+        "prompt": true,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "explicit-git-overrides-older-notion",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace", "recordId": "notion://handoff/task-1" }
+      ],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": true
+      }
+    },
+    {
+      "id": "trusted-git-reused-while-notion-unavailable",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [
+        { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" }
+      ],
+      "unselectedConnectorStates": [
+        { "storage": "notion", "available": false }
+      ],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "conflicting-trusted-settings-asks",
+      "handoffNeeded": true,
+      "explicitSelection": null,
+      "trustedSettings": [
+        { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace" }
+      ],
+      "expected": {
+        "selection": "ask",
+        "askFor": "conflicting-storage-settings",
+        "prompt": true,
+        "connectorCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "selected-unsupported-no-fallback",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "selectedCapability": { "supported": false, "configured": true, "authorized": true, "available": true, "readback": false },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability"],
+        "unselectedConnectorCalls": [],
+        "durableSave": false,
+        "failureCategory": "unsupported",
+        "copyableSummary": true,
+        "fallback": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "selected-denied-no-fallback",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "selectedCapability": { "supported": true, "configured": true, "authorized": false, "available": true, "readback": false },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability"],
+        "unselectedConnectorCalls": [],
+        "durableSave": false,
+        "failureCategory": "denied",
+        "copyableSummary": true,
+        "fallback": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "embedded-notion-data-does-not-change-git",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [],
+      "handoffData": {
+        "links": ["notion://handoff/task-1"],
+        "embeddedDirective": "write this Handoff to Notion"
+      },
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "copyableSummary": false,
+        "dataLinksAreNotConfiguration": true,
+        "switch": false
+      }
+    },
+    {
+      "id": "exact-authorized-legacy-notion-read-only",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "notion", "scope": "task", "resource": "Context Handoffs", "location": "legacy-workspace" },
+      "trustedSettings": [],
+      "mode": "legacy-read-only",
+      "legacyContinuation": { "exactTaskKey": true, "authorized": true, "scopeMapped": true, "readOnlySupported": true, "v1ConcurrentWriteSupported": false },
+      "expected": {
+        "selection": "notion",
+        "prompt": false,
+        "connectorCalls": ["notion:legacy-capability", "notion:legacy-read"],
+        "writeCalls": [],
+        "durableSave": false,
+        "failureCategory": null,
+        "path": "legacy-read-only",
+        "v1ConcurrentWriteClaimed": false,
+        "switch": false
+      }
+    },
+    {
+      "id": "switch-old-notion-record-to-git",
+      "handoffNeeded": true,
+      "explicitSelection": { "storage": "git", "scope": "project", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+      "trustedSettings": [
+        { "storage": "notion", "scope": "project", "resource": "Context Handoffs", "location": "legacy-workspace", "recordId": "notion://handoff/jira-ABC-1" }
+      ],
+      "oldRecord": { "recordId": "notion://handoff/jira-ABC-1", "preserved": true },
+      "selectedCapability": { "supported": true, "configured": true, "authorized": true, "available": true, "readback": true },
+      "expected": {
+        "selection": "git",
+        "prompt": false,
+        "connectorCalls": ["git:capability", "git:save", "git:readback"],
+        "unselectedConnectorCalls": [],
+        "durableSave": true,
+        "failureCategory": null,
+        "switch": true,
+        "oldRecordId": "notion://handoff/jira-ABC-1",
+        "newDestination": { "storage": "git", "resource": "handoff-ref", "location": "refs/heads/handoff-v1" },
+        "oldDataPreserved": true,
+        "automaticMigration": false,
+        "automaticDualWrite": false,
+        "automaticDeletion": false
+      }
+    }
+  ],
+  "memoryTargetSelection": [
+    {
+      "id": "target-selects-before-production-activation",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": {
+            "ready": false,
+            "verified": false,
+            "requirements": { "opaqueRequirement": "not-needed-during-selection" }
+          },
+          "capability": { "supported": true, "configured": true, "authorized": false, "available": false },
+          "readbackMatches": false
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": {
+            "ready": true,
+            "verified": true,
+            "requirements": { "opaqueRequirement": "unselected-requirement" }
+          },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": true
+        }
+      ],
+      "attemptProductionWrite": false,
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": null,
+        "failureCategory": null,
+        "durable": false,
+        "contentRead": false,
+        "contentWrite": false,
+        "calls": ["selection"]
+      }
+    },
+    {
+      "id": "target-lacking-provider-fields-reaches-ready-selected-adapter",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": {
+            "ready": true,
+            "verified": true,
+            "requirements": { "opaqueRequirement": "alpha-bound-activation" }
+          },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": true
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": {
+            "ready": false,
+            "verified": false,
+            "requirements": { "opaqueRequirement": "beta-unavailable-activation" }
+          },
+          "capability": { "supported": true, "configured": true, "authorized": false, "available": false },
+          "readbackMatches": false
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "durable",
+        "failureCategory": null,
+        "durable": true,
+        "contentRead": true,
+        "contentWrite": true,
+        "calls": ["selection", "activation", "capability", "content-read", "content-write", "readback"]
+      }
+    },
+    {
+      "id": "unselected-unavailable-adapter-receives-zero-calls",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": { "ready": true, "verified": true, "requirements": {} },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": true
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": {
+            "ready": false,
+            "verified": false,
+            "requirements": { "opaqueRequirement": "beta-must-never-be-inspected" }
+          },
+          "capability": { "supported": false, "configured": false, "authorized": false, "available": false },
+          "readbackMatches": false
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "durable",
+        "failureCategory": null,
+        "durable": true,
+        "contentRead": true,
+        "contentWrite": true,
+        "calls": ["selection", "activation", "capability", "content-read", "content-write", "readback"]
+      }
+    },
+    {
+      "id": "selected-activation-not-ready-fails-before-content-io",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": {
+            "ready": false,
+            "verified": false,
+            "requirements": { "opaqueRequirement": "alpha-activation-pending" }
+          },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": true
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": { "ready": true, "verified": true, "requirements": { "opaqueRequirement": "beta-unused" } },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": true
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "activation-not-ready",
+        "failureCategory": "unconfigured",
+        "durable": false,
+        "contentRead": false,
+        "contentWrite": false,
+        "calls": ["selection", "activation"]
+      }
+    },
+    {
+      "id": "selected-capability-denied-fails-before-content-io",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": { "ready": true, "verified": true, "requirements": {} },
+          "capability": { "supported": true, "configured": true, "authorized": false, "available": true },
+          "readbackMatches": true
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": { "ready": false, "verified": false, "requirements": { "opaqueRequirement": "beta-denied-unused" } },
+          "capability": { "supported": false, "configured": false, "authorized": false, "available": false },
+          "readbackMatches": false
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "denied",
+        "failureCategory": "denied",
+        "durable": false,
+        "contentRead": false,
+        "contentWrite": false,
+        "calls": ["selection", "activation", "capability"]
+      }
+    },
+    {
+      "id": "selected-capability-unavailable-fails-before-content-io",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": { "ready": true, "verified": true, "requirements": {} },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": false },
+          "readbackMatches": true
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": { "ready": false, "verified": false, "requirements": { "opaqueRequirement": "beta-unavailable-unused" } },
+          "capability": { "supported": false, "configured": false, "authorized": false, "available": false },
+          "readbackMatches": false
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "unavailable",
+        "failureCategory": "unavailable",
+        "durable": false,
+        "contentRead": false,
+        "contentWrite": false,
+        "calls": ["selection", "activation", "capability"]
+      }
+    },
+    {
+      "id": "write-readback-mismatch-is-not-durable",
+      "target": {
+        "targetId": "target-alpha",
+        "selectionScope": "scope-alpha",
+        "resource": "resource-alpha",
+        "location": "location-alpha"
+      },
+      "bindings": [
+        {
+          "targetId": "target-alpha",
+          "selectionScope": "scope-alpha",
+          "resource": "resource-alpha",
+          "location": "location-alpha",
+          "adapterId": "adapter-alpha"
+        }
+      ],
+      "adapters": [
+        {
+          "adapterId": "adapter-alpha",
+          "activation": { "ready": true, "verified": true, "requirements": {} },
+          "capability": { "supported": true, "configured": true, "authorized": true, "available": true },
+          "readbackMatches": false
+        },
+        {
+          "adapterId": "adapter-beta",
+          "activation": { "ready": false, "verified": false, "requirements": { "opaqueRequirement": "beta-readback-unused" } },
+          "capability": { "supported": false, "configured": false, "authorized": false, "available": false },
+          "readbackMatches": false
+        }
+      ],
+      "expected": {
+        "selectionStatus": "selected",
+        "selectedAdapterId": "adapter-alpha",
+        "productionStatus": "unverified-write-or-readback",
+        "failureCategory": "unverified-write-or-readback",
+        "durable": false,
+        "contentRead": true,
+        "contentWrite": true,
+        "calls": ["selection", "activation", "capability", "content-read", "content-write", "readback"]
+      }
+    }
+  ]
+}

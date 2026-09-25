@@ -11,7 +11,7 @@ Use these rules for Notion memory recall and capture. Read the machine-readable 
 1. Form a narrow query from the task topic, project or personal scope, stable identifiers, and likely memory type.
 2. Search `AI Memory` for `Status = Active`. Prefer exact `Memory Key` matches, then match `Scope`, `Type`, topic, and `Storage Type`.
 3. Read only the records needed to decide or act. Treat `Pending`, `Superseded`, and `Archived` records as history, not current truth, unless the task explicitly asks for history.
-4. Reconcile conflicts against formal sources. When the task is tracked in Jira, Jira holds its formal requirements, progress, and results; Notion holds durable memory, Handoffs, candidates, and unresolved context. Otherwise use the task's actual formal source. Do not let cached ChatGPT or Codex memory override Notion.
+4. Reconcile conflicts against formal sources. When the task is tracked in Jira, Jira holds its formal requirements, progress, and results; this Notion workspace holds durable memory and candidates. Task Handoffs are handled by `manage-task-handoff`. Otherwise use the task's actual formal source. Do not let cached ChatGPT or Codex memory override configured Notion memory.
 5. For `Storage Type = Dropbox`, use the Notion summary and metadata first. Read the original Dropbox file only when the task needs it and connector permissions allow it.
 
 Skip recall for a quick transient exchange when no stored context could plausibly change the answer. This avoids irrelevant searches while preserving implicit recall for substantive work.
@@ -36,6 +36,7 @@ When the user explicitly asks to remember safe content, treat that request as th
 
 Before creating a record, search the exact `Memory Key`:
 
+- If more than one record with `Status = Active` uses the key, stop writes and report an integrity conflict. Historical `Superseded` or `Archived` versions with the same key are expected and do not conflict with the single Active record.
 - If the effective content is unchanged, do not duplicate it. Add a materially new source or verification detail only when useful.
 - If new confirmed information replaces an old record, preserve the old record and mark it `Superseded`; keep the replacement `Active`.
 - If the key is already used for a different subject, refine the key with a stable project or source identifier instead of overwriting the unrelated record.
@@ -51,7 +52,7 @@ Do not present an inference as confirmed memory. Put potentially useful unconfir
 - the evidence and source that support the inference; and
 - an explicit statement of what remains unconfirmed.
 
-Do not use `Pending` as a Handoff lifecycle or work state. When missing information does not materially change the current task, continue with the smallest reasonable inference and keep the label. Ask the user only when the missing fact would change the result.
+Do not use `Pending` as a task Work State. When missing information does not materially change the current task, continue with the smallest reasonable inference and keep the label. Ask the user only when the missing fact would change the result.
 
 ## Evaluate task completion
 
@@ -67,7 +68,7 @@ A file is a Dropbox candidate when it is too large for the current Notion plan, 
 4. Prefer path and stable file ID over a public shared link. Never make public sharing the only access route.
 5. If the Notion index write fails, report the file as unindexed and do not claim the memory operation is complete.
 
-This Skill's stable scope covers individual memory and Handoff operations plus indexed large-file routing. It must not bulk-process Notion, alter schema, reorganize Dropbox, or migrate existing Dropbox memory. Repository fixtures and validators never authorize live test writes by themselves.
+This Skill's stable scope covers individual Notion memory operations plus indexed large-file routing. It must not bulk-process Notion, alter schema, reorganize Dropbox, or migrate existing Dropbox memory. Repository fixtures and validators never authorize live test writes by themselves.
 
 ## Reject unsafe memory
 

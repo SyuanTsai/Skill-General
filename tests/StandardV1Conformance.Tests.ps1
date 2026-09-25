@@ -24,6 +24,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($inventory.skills) | Should -Be @(
             'investigate-datadog-logs'
             'manage-notion-ai-memory'
+            'manage-task-handoff'
             'plan-production-change'
             'review-agent-skills'
             'verify-data-access-performance'
@@ -37,8 +38,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be 'a403abdf038a3346d775431a6908a71cc3d35a5b'
-        $adapter.authority.archiveSha256 | Should -Be '17154929fadfa63487263db1efcb78f4948195af9c11c25a66432eff3411b2d3'
+        $adapter.authority.commit | Should -Be 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
+        $adapter.authority.archiveSha256 | Should -Be '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -55,6 +56,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-StandardValidationTool.ps1'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Resolve-PythonWheelClosure.py'
         @($adapter.authority.files.path) | Should -Contain 'scripts/Invoke-StandardValidation.ps1'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json'
+        @($adapter.authority.files.path) | Should -Contain 'scripts/StandardSemanticBridge.psm1'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/standard-validation-contract-v1.json'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-validation-adapter-v1.schema.json'
         @($adapter.authority.files | Where-Object { $_.sha256 -notmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
@@ -69,7 +72,28 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $validator | Should -Match 'standard-validation-adapter\.json'
         $validator | Should -Match 'repository-test-general'
         $validator | Should -Match 'repository-test-pester'
+        $validator | Should -Match "id = 'repository-test-general'; kind = 'general'"
+        $validator | Should -Match "id = 'repository-test-pester'; kind = 'pester'"
         $validator | Should -Not -Match 'deviations\s*='
+    }
+
+    It 'keeps semantic v1 and development-harness forwarding while exposing v2 paths and key identity' {
+        $validator = Get-Content -LiteralPath $script:CanonicalValidatorPath -Raw
+        $validator | Should -Match '-DevelopmentHarness'
+        $validator | Should -Match 'if \(\$SemanticConsent\) \{ \$centralRunnerArgs \+= ''-SemanticConsent'' \}'
+        foreach ($parameter in @(
+            'SemanticProvider',
+            'SemanticPurpose',
+            'SemanticScope',
+            'SemanticEvidencePath',
+            'SemanticConsentRequestPath',
+            'SemanticConsentDecisionPath',
+            'SemanticPublicKeyPath',
+            'SemanticPublicKeyId'
+        )) {
+            $pair = '@(' + "'" + '-' + $parameter + "', " + '$' + $parameter + ')'
+            $validator | Should -Match ([regex]::Escape($pair))
+        }
     }
 
     It 'routes CI through the canonical validator without a second installer policy' {
@@ -80,13 +104,20 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
+        $workflow | Should -Match 'id: source-conformance'
+        $workflow | Should -Match 'if: \$\{\{ always\(\) \}\}'
+        $workflow | Should -Match 'source_conformance: \$\{\{ steps\.source-conformance\.outputs\.status \}\}'
+        $workflow | Should -Match '\$source\.sourceRevision -ceq \$env:GITHUB_SHA'
+        $workflow | Should -Match '\$source\.status -ceq ''passed'''
+        $workflow | Should -Match '\$report\.contract -ceq ''standard-validation-contract-v1'''
+        $workflow | Should -Match 'if \[\[ "\$result" != ''passed'' \]\]; then'
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
 
         foreach ($context in @('repository-contract', 'skill-validator', 'skill-tools')) {
             $pattern = "(?ms)^\s+{0}:\s+name:\s+{0}.*?needs:\s+- canonical-validation.*?{1}" -f `
                 [regex]::Escape($context),
-                [regex]::Escape("needs['canonical-validation'].result")
+                [regex]::Escape("needs['canonical-validation'].outputs.source_conformance")
             $workflow | Should -Match $pattern
         }
         $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'

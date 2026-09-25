@@ -17,6 +17,8 @@ permissions:
 jobs:
   canonical-validation:
     name: Skill-General Standard v1
+    outputs:
+      source_conformance: ${{ steps.source-conformance.outputs.status }}
     # Keep the pinned checkout action as a YAML scalar alias. The immutable P02
     # authority inventory currently classifies the literal `actions/checkout`
     # token as a local `check` command; GitHub resolves this alias before the
@@ -75,8 +77,46 @@ jobs:
           $outputPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
           & ./scripts/Validate.ps1 -ArtifactsRoot $env:RUNNER_TEMP -BaseCommit $baseCommit -ExpectedGoRuntimeVersion $env:STANDARD_GO_RUNTIME_VERSION -OutputPath $outputPath
 
-  # These jobs preserve the repository's existing required status contexts while
-  # keeping the canonical Standard v1 gate as the only validation policy.
+      - name: Route source conformance from canonical evidence
+        id: source-conformance
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $status = 'failed'
+          try {
+            $reportPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
+            if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
+              $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+              $source = $report.sourceConformance
+              $canonical = $source.canonicalValidation
+              if ($report.schemaVersion -eq 1 -and
+                  $report.evidence -ceq 'standard-validation-evidence-v1' -and
+                  $report.contract -ceq 'standard-validation-contract-v1' -and
+                  $report.candidate.sourceRevision -ceq $env:GITHUB_SHA -and
+                  $source.schemaVersion -eq 1 -and
+                  $source.contract -ceq 'standard-source-conformance-v1' -and
+                  $source.scope -ceq 'source-stages-1-5' -and
+                  $source.status -ceq 'passed' -and
+                  $source.sourceRevision -ceq $env:GITHUB_SHA -and
+                  $source.candidateId -ceq $report.candidate.candidateId -and
+                  $source.releaseEligible -eq $false -and
+                  @($source.failureReasons).Count -eq 0 -and
+                  $canonical.state -ceq $report.state -and
+                  $canonical.exitCode -eq $report.exitCode -and
+                  $canonical.releaseEligible -eq $report.releaseEligible -and
+                  $canonical.stage6Status -ceq $report.stages[5].status) {
+                $status = 'passed'
+              }
+            }
+          }
+          catch {
+            Write-Warning "Could not read source conformance evidence: $($_.Exception.Message)"
+          }
+          "status=$status" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Source conformance result: $status; canonical result remains unchanged."
+
+  # These jobs preserve the repository's existing required status contexts and
+  # route the central report's source-only projection for source integration.
   repository-contract:
     name: repository-contract
     if: ${{ always() }}
@@ -84,16 +124,16 @@ jobs:
       - canonical-validation
     runs-on: ubuntu-latest
     steps:
-      - name: Mirror canonical Standard v1 result
+      - name: Mirror source conformance result
         shell: bash
         run: |
           set -euo pipefail
-          result='${{ needs['canonical-validation'].result }}'
-          if [[ "$result" != 'success' ]]; then
-            echo "Canonical Standard v1 validation result: $result"
+          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
+          if [[ "$result" != 'passed' ]]; then
+            echo "Source conformance result: $result"
             exit 1
           fi
-          echo 'Canonical Standard v1 validation passed.'
+          echo 'Central source conformance passed.'
 
   skill-validator:
     name: skill-validator
@@ -102,16 +142,16 @@ jobs:
       - canonical-validation
     runs-on: ubuntu-latest
     steps:
-      - name: Mirror canonical Standard v1 result
+      - name: Mirror source conformance result
         shell: bash
         run: |
           set -euo pipefail
-          result='${{ needs['canonical-validation'].result }}'
-          if [[ "$result" != 'success' ]]; then
-            echo "Canonical Standard v1 validation result: $result"
+          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
+          if [[ "$result" != 'passed' ]]; then
+            echo "Source conformance result: $result"
             exit 1
           fi
-          echo 'Canonical Standard v1 validation passed.'
+          echo 'Central source conformance passed.'
 
   skill-tools:
     name: skill-tools
@@ -120,13 +160,13 @@ jobs:
       - canonical-validation
     runs-on: ubuntu-latest
     steps:
-      - name: Mirror canonical Standard v1 result
+      - name: Mirror source conformance result
         shell: bash
         run: |
           set -euo pipefail
-          result='${{ needs['canonical-validation'].result }}'
-          if [[ "$result" != 'success' ]]; then
-            echo "Canonical Standard v1 validation result: $result"
+          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
+          if [[ "$result" != 'passed' ]]; then
+            echo "Source conformance result: $result"
             exit 1
           fi
-          echo 'Canonical Standard v1 validation passed.'
+          echo 'Central source conformance passed.'
