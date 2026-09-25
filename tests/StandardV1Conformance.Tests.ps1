@@ -38,8 +38,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be '8a944f4a74a054cb0353f22ab22c459dc9dc18ef'
-        $adapter.authority.archiveSha256 | Should -Be '99ba8cae62c80db9da8876b5a7e49dfdd499ca863c006bfd2a411a5d4e7dbcc0'
+        $adapter.authority.commit | Should -Be 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
+        $adapter.authority.archiveSha256 | Should -Be '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -72,6 +72,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $validator | Should -Match 'standard-validation-adapter\.json'
         $validator | Should -Match 'repository-test-general'
         $validator | Should -Match 'repository-test-pester'
+        $validator | Should -Match "id = 'repository-test-general'; kind = 'general'"
+        $validator | Should -Match "id = 'repository-test-pester'; kind = 'pester'"
         $validator | Should -Not -Match 'deviations\s*='
     }
 
@@ -102,13 +104,20 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
+        $workflow | Should -Match 'id: source-conformance'
+        $workflow | Should -Match 'if: \$\{\{ always\(\) \}\}'
+        $workflow | Should -Match 'source_conformance: \$\{\{ steps\.source-conformance\.outputs\.status \}\}'
+        $workflow | Should -Match '\$source\.sourceRevision -ceq \$env:GITHUB_SHA'
+        $workflow | Should -Match '\$source\.status -ceq ''passed'''
+        $workflow | Should -Match '\$report\.contract -ceq ''standard-validation-contract-v1'''
+        $workflow | Should -Match 'if \[\[ "\$result" != ''passed'' \]\]; then'
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
 
         foreach ($context in @('repository-contract', 'skill-validator', 'skill-tools')) {
             $pattern = "(?ms)^\s+{0}:\s+name:\s+{0}.*?needs:\s+- canonical-validation.*?{1}" -f `
                 [regex]::Escape($context),
-                [regex]::Escape("needs['canonical-validation'].result")
+                [regex]::Escape("needs['canonical-validation'].outputs.source_conformance")
             $workflow | Should -Match $pattern
         }
         $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'
