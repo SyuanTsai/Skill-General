@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33",
-    "archiveSha256": "7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1",
+    "commit": "1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693",
+    "archiveSha256": "a60053f2fa7bfd8a1da862687cf4e8e808fe782baa71a8634def67d0c34a2223",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "da48b1c29000bfc2c80a8f1d5068034b61c63a0c013f270a59bb6ff674415e4e"
+        "sha256": "89a2f2b8db3e9b5602507b30f5adbee45ea07a8a80dcbb8022acd3866f69deef"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -53,7 +53,7 @@
       },
       {
         "path": "scripts/Invoke-StandardAuthorityGate.ps1",
-        "sha256": "2ba65c6fcc91b34400044e58398096f242c86302a5a307e6581917bee30decef"
+        "sha256": "e5e8050df56dd60af7d9eec04fda2e05e331fded18bc69257431c2a11f39a9e9"
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
@@ -69,11 +69,11 @@
       },
       {
         "path": "docs/standards/schemas/standard-validation-evidence-v1.schema.json",
-        "sha256": "5482b69c75613a8025be267b5f52b4c47839f8d5a268db9de27414dfd7303121"
+        "sha256": "87e15ae6acc4f9d00e2f54877be480276dc82dcd08fe9b465fc4394c901b1ee9"
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "b68849e986153732c65b4b02a1431f22d2f985781fe5c6299d18d97cd188b57d"
+        "sha256": "2fdb9501495daea762b62fb070c1b3f48b7df571ed794a7bd5ef50b5d2fe25bc"
       },
       {
         "path": "docs/standards/trust-anchors/human-approval-public-key.xml",
@@ -85,7 +85,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "c7078b18a8bea240be4710aa6c0080b22bda7756ee120bfa705ef83c3489dbd1"
+        "sha256": "ea487ac447c00572e36e3e80b686e98144534be3ad0496aaa9ef3f305b1197b9"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

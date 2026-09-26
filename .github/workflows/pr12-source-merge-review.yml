@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
+name: PR12 source merge review evidence
+
+on:
+  push:
+    branches:
+      - codex/SYP-212-pr12-exception-integration
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-evidence:
+    name: PR12 exact-head supervised review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated review driver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+        with:
+          path: driver
+          persist-credentials: false
+
+      - name: Checkout exact PR12 candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+        with:
+          ref: 8505829a6e985aaf4cf7bb7265e3352ae40df53e
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up approved Go runtime
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 'stable'
+          check-latest: true
+          cache: false
+
+      - name: Capture resolved stable Go runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $versionOutput = @(& go version)
+          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -ne 1 -or
+              [string]$versionOutput[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
+            throw "setup-go did not provide one stable Go runtime version. Evidence='$($versionOutput -join ' | ')'"
+          }
+          "STANDARD_GO_RUNTIME_VERSION=$($Matches.version)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run exact-head supplemental review under the central supervisor
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $driver = Join-Path $env:GITHUB_WORKSPACE 'driver/scripts/Validate.ps1'
+          if ((& git -C $candidate rev-parse HEAD) -cne '8505829a6e985aaf4cf7bb7265e3352ae40df53e') {
+            throw 'PR12 candidate checkout is not the exact reviewed head.'
+          }
+          foreach ($name in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+            if ([string]$name -match '^(?i:npm_config_)') {
+              [Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
+            }
+          }
+          $reportPath = Join-Path $env:RUNNER_TEMP 'pr12-source-review-report.json'
+          & pwsh -NoProfile -NonInteractive -File $driver `
+            -RepositoryRoot $candidate `
+            -ArtifactsRoot $env:RUNNER_TEMP `
+            -BaseCommit '5b5c1cd48f16a7e33443ce323b1a0825af1ef908' `
+            -ExpectedGoRuntimeVersion $env:STANDARD_GO_RUNTIME_VERSION `
+            -OutputPath $reportPath `
+            -SourceMergeExceptionReview
+          $validationExit = $LASTEXITCODE
+          if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "Central review report was not produced (exit $validationExit)."
+          }
+          $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+          $proposal = $report.sourceMergeExceptionProposal
+          if ($validationExit -ne 20 -or $report.state -cne 'FAILED' -or $report.exitCode -ne 20 -or
+              $report.candidate.sourceRevision -cne '8505829a6e985aaf4cf7bb7265e3352ae40df53e' -or
+              $proposal.sourceRevision -cne $report.candidate.sourceRevision -or
+              $proposal.candidateId -cne $report.candidate.candidateId -or
+              $proposal.testFixtureOnly -ne $false -or
+              $proposal.canonicalState -cne 'FAILED' -or $proposal.canonicalExitCode -ne 20 -or
+              $proposal.sourceConformanceStatus -cne 'failed' -or $proposal.releaseEligible -ne $false -or
+              $proposal.supplementalStage -cne 'supplemental-repository-tests' -or
+              $report.stages[3].status -cne 'failed' -or $report.stages[4].status -cne 'not-run' -or
+              $report.stages[5].status -cne 'not-run' -or $report.sourceConformance.status -cne 'failed' -or
+              $report.releaseEligible -ne $false -or $proposal.status -cne 'eligible-for-policy-review' -or
+              @($proposal.failureReasons).Count -ne 0) {
+            throw "Review invariants failed; canonical exit=$validationExit, proposal=$($proposal.status), reasons=$($proposal.failureReasons -join ',')."
+          }
+          Write-Host 'Exact-head supervised supplemental review is eligible for human policy review; canonical validation remains FAILED/20.'
+
+      - name: Preserve review report and supervisor evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr12-exact-head-source-merge-review
+          path: |
+            ${{ runner.temp }}/pr12-source-review-report.json
+            ${{ runner.temp }}/sgv1-*/
+            ${{ runner.temp }}/runs/
+          if-no-files-found: warn
+          retention-days: 30

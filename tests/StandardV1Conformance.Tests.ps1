@@ -31,15 +31,17 @@ Describe 'Skill-General Standard v1 reference implementation' {
         )
     }
 
-    It 'pins one immutable authority snapshot and required file inventory' {
+    # Scenario: the isolated review driver pins the same codeload revision and digest as its central validator.
+    # Purpose: reject stale authority identity after repinning to the exact reviewed PR55 commit.
+    It 'UnitT20_pins_one_immutable_authority_snapshot_and_required_file_inventory' {
         Test-Path -LiteralPath $script:AdapterPath -PathType Leaf | Should -BeTrue
         $adapter = Get-Content -LiteralPath $script:AdapterPath -Raw | ConvertFrom-Json
 
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
-        $adapter.authority.archiveSha256 | Should -Be '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
+        $adapter.authority.commit | Should -Be '1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693'
+        $adapter.authority.archiveSha256 | Should -Be 'a60053f2fa7bfd8a1da862687cf4e8e808fe782baa71a8634def67d0c34a2223'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -121,6 +123,18 @@ Describe 'Skill-General Standard v1 reference implementation' {
             $workflow | Should -Match $pattern
         }
         $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'
+    }
+
+    # Scenario: a protected bridge invocation is staged for review before an authority provider exists.
+    # Purpose: preserve the three required source contexts on the canonical route until adoption is approved.
+    It 'InterT90_keeps_protected_bridge_wiring_inactive_and_required_routes_canonical' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $workflow | Should -Match '(?ms)id: protected-source-merge-candidate\s+if: \$\{\{ false \}\}'
+        $workflow | Should -Match 'protected-authority-unavailable'
+        $workflow | Should -Match 'source_conformance: \$\{\{ steps\.source-conformance\.outputs\.status \}\}'
+        foreach ($context in @('repository-contract', 'skill-validator', 'skill-tools')) {
+            $workflow | Should -Match ("(?ms)^  {0}:.*?outputs\.source_conformance" -f [regex]::Escape($context))
+        }
     }
 
     It 'keeps public validation documentation on the canonical entry point' {
