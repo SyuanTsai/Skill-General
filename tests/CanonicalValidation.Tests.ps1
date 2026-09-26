@@ -52,6 +52,14 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
     }
 
+    # Scenario: a protected workflow runs a reviewed base driver against a newer PR candidate.
+    # Purpose: the driver must read the authority pin from its own checkout before validating candidate content.
+    It 'UnitT15_reads_authority_config_from_the_driver_checkout' {
+        $script:Validator | Should -Match '\$configRoot = Split-Path -Parent \$PSScriptRoot'
+        $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$configRoot ''config/standard-v1\.json''\)'
+        $script:Validator | Should -Not -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
+    }
+
     It 'verifies authority before resolving or executing any validation tool' {
         $archiveIndex = $script:Validator.IndexOf('Expand-Archive')
         $archiveHashIndex = $script:Validator.IndexOf('Authority archive SHA-256 does not match')
