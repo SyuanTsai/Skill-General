@@ -40,8 +40,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be '1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693'
-        $adapter.authority.archiveSha256 | Should -Be 'a60053f2fa7bfd8a1da862687cf4e8e808fe782baa71a8634def67d0c34a2223'
+        $adapter.authority.commit | Should -Be 'cb5673ba2fd4a68ccaf917db43673937bec0677a'
+        $adapter.authority.archiveSha256 | Should -Be 'caf931ed55ad1ae923022eaf3137ae53eefce7b5e2c80a5708511d623a3a860b'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
