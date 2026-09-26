@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33",
-    "archiveSha256": "7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1",
+    "commit": "e69c453888db93e2d2697ea7f0b11df13cd1b8d2",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/e69c453888db93e2d2697ea7f0b11df13cd1b8d2",
+    "archiveSha256": "5d2cbab098b86c4310b713cbc17ce00e5b08a53cffe37ce98f16a9f2244c29f5",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "da48b1c29000bfc2c80a8f1d5068034b61c63a0c013f270a59bb6ff674415e4e"
+        "sha256": "c85562f017a09b4f4daa8dd3a1fcbd1d34714eb711ed9c011642247c8d3be61e"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -49,11 +49,11 @@
       },
       {
         "path": "docs/standards/validation-toolchain.json",
-        "sha256": "5925dcb1aea1e545b9787a29825e7a0cc03a04c777cd68ab44c9bdd7482ff579"
+        "sha256": "1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed"
       },
       {
         "path": "scripts/Invoke-StandardAuthorityGate.ps1",
-        "sha256": "2ba65c6fcc91b34400044e58398096f242c86302a5a307e6581917bee30decef"
+        "sha256": "e5e8050df56dd60af7d9eec04fda2e05e331fded18bc69257431c2a11f39a9e9"
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
@@ -61,7 +61,7 @@
       },
       {
         "path": "scripts/Resolve-StandardValidationTool.ps1",
-        "sha256": "b1b02443e1b752c415634aae4f9ca4770dc7850545f53102267b0645f6dc0bca"
+        "sha256": "3bdda55964acb92fb32d06ffdbf6f98c9397b1857a88271c398b3f28e4bd6295"
       },
       {
         "path": "docs/standards/schemas/standard-validation-adapter-v1.schema.json",
@@ -69,11 +69,15 @@
       },
       {
         "path": "docs/standards/schemas/standard-validation-evidence-v1.schema.json",
-        "sha256": "5482b69c75613a8025be267b5f52b4c47839f8d5a268db9de27414dfd7303121"
+        "sha256": "8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee"
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "b68849e986153732c65b4b02a1431f22d2f985781fe5c6299d18d97cd188b57d"
+        "sha256": "014e82d2db4f3a95be53f5120460790fc613f32b13d06f4e43f4a41dd89f53ee"
+      },
+      {
+        "path": "docs/standards/pr12-source-merge-adoption.json",
+        "sha256": "4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175"
       },
       {
         "path": "docs/standards/trust-anchors/human-approval-public-key.xml",
@@ -85,7 +89,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "c7078b18a8bea240be4710aa6c0080b22bda7756ee120bfa705ef83c3489dbd1"
+        "sha256": "8f6ce80bbe3447d83f1222877f0e3ff17aa8d45888892e62ea50dc7ec6047dc2"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

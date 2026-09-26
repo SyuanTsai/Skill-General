@@ -100,9 +100,9 @@ function New-SyntheticResumePlan {
             candidateId = '0' * 64
         }
         authority = [ordered]@{
-            revision = 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
+            revision = $script:ExpectedAuthorityRevision
             archivePath = Join-Path $runRoot 'authority.zip'
-            archiveSha256 = '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
+            archiveSha256 = $script:ExpectedAuthorityArchiveSha256
             root = Join-Path ([IO.Path]::GetTempPath()) "sgv1-tools-$RunId\authority"
             runnerPath = Join-Path ([IO.Path]::GetTempPath()) "sgv1-tools-$RunId\authority\scripts\Invoke-StandardValidation.ps1"
             runnerSha256 = '0' * 64
@@ -162,6 +162,9 @@ function Invoke-SyntheticResume {
 
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
         $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Validate.ps1'
+        $authorityConfig = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:ExpectedAuthorityRevision = [string]$authorityConfig.authority.commit
+        $script:ExpectedAuthorityArchiveSha256 = [string]$authorityConfig.authority.archiveSha256
     }
 
     It 'preserves helper inputs across the dot-sourced central runner parameter scope' {
@@ -366,7 +369,7 @@ function Get-StandardValidationTextSha256 {
         $plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 100
         $plan.schemaVersion | Should -Be 1
         $plan.artifactType | Should -BeExactly 'standard-validation-consumer-run-plan-v1'
-        $plan.authority.revision | Should -BeExactly 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
+        $plan.authority.revision | Should -BeExactly $script:ExpectedAuthorityRevision
         $plan.execution.semanticTriggered | Should -BeTrue
         $plan.candidate.candidateId | Should -Match '^[0-9a-f]{64}$'
         $plan.candidate.contentSha256 | Should -Match '^[0-9a-f]{64}$'

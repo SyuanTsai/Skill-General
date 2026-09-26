@@ -38,8 +38,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
-        $adapter.authority.archiveSha256 | Should -Be '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
+        $adapter.authority.commit | Should -Be 'e69c453888db93e2d2697ea7f0b11df13cd1b8d2'
+        $adapter.authority.archiveSha256 | Should -Be '5d2cbab098b86c4310b713cbc17ce00e5b08a53cffe37ce98f16a9f2244c29f5'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -59,6 +59,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json'
         @($adapter.authority.files.path) | Should -Contain 'scripts/StandardSemanticBridge.psm1'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/standard-validation-contract-v1.json'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/pr12-source-merge-adoption.json'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-validation-adapter-v1.schema.json'
         @($adapter.authority.files | Where-Object { $_.sha256 -notmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
         $adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
@@ -107,7 +108,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'id: source-conformance'
         $workflow | Should -Match 'if: \$\{\{ always\(\) \}\}'
         $workflow | Should -Match 'source_conformance: \$\{\{ steps\.source-conformance\.outputs\.status \}\}'
-        $workflow | Should -Match '\$source\.sourceRevision -ceq \$env:GITHUB_SHA'
+        $workflow | Should -Match '\$source\.sourceRevision -ceq \$env:EXPECTED_SOURCE_SHA'
         $workflow | Should -Match '\$source\.status -ceq ''passed'''
         $workflow | Should -Match '\$report\.contract -ceq ''standard-validation-contract-v1'''
         $workflow | Should -Match 'if \[\[ "\$result" != ''passed'' \]\]; then'
@@ -121,6 +122,25 @@ Describe 'Skill-General Standard v1 reference implementation' {
             $workflow | Should -Match $pattern
         }
         $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'
+    }
+
+    # Scenario: a protected base workflow evaluates the exact PR12 head while the source branch keeps its approved SHA.
+    # Purpose: bind any merge-only check to trusted workflow code and the event's immutable source revision.
+    It 'InterT20_binds_protected_source_check_to_base_driver_and_exact_pr_head' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $workflow | Should -Match 'EXPECTED_SOURCE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}'
+        $workflow | Should -Match 'ref:\s*\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}'
+        $workflow | Should -Match 'ref:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}'
+        $workflow | Should -Match 'git -C \$candidate merge-base \$env:PULL_REQUEST_BASE_SHA HEAD'
+        $workflow | Should -Match "working-directory: driver"
+        $workflow | Should -Match '\$driverArgs = @\{'
+        $workflow | Should -Not -Match '\$driverArgs = @\('
+        $workflow | Should -Match '& \./scripts/Validate\.ps1 @driverArgs'
+        $workflow | Should -Match '66c466540480306c7f5346338d70d036bddb4930'
+        $workflow | Should -Match 'sourceMergeDecision'
+        $workflow | Should -Match 'protected-source-merge-decision-v1'
+        $workflow | Should -Match 'releaseEligible -eq \$false'
+        $workflow | Should -Match 'persist-credentials:\s*false'
     }
 
     It 'keeps public validation documentation on the canonical entry point' {
