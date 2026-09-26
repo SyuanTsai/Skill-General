@@ -724,7 +724,6 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
-            $pesterDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "sgv1-pester-$([guid]::NewGuid().ToString('N')).log"
             $previousErrorActionPreference = $ErrorActionPreference
             try {
                 # Tests intentionally exercise non-zero native child processes. Do not let the
@@ -733,22 +732,13 @@ try {
                 $ErrorActionPreference = 'Continue'
                 # Imported candidate modules may emit benign warnings. Keep the
                 # typed JSON envelope as the only stdout record for the supervisor.
-                $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6> $pesterDiagnosticPath
+                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 3>$null 6>$null
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
             if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
-                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) {
-                [Console]::Error.WriteLine("Pester totals: total=$($result.TotalCount), passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount).")
-                if (Test-Path -LiteralPath $pesterDiagnosticPath -PathType Leaf) {
-                    foreach ($line in @(Get-Content -LiteralPath $pesterDiagnosticPath)) {
-                        [Console]::Error.WriteLine([string]$line)
-                    }
-                }
-                throw 'Pester repository regression did not complete successfully.'
-            }
-            Remove-Item -LiteralPath $pesterDiagnosticPath -Force -ErrorAction SilentlyContinue
+                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
