@@ -123,6 +123,18 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Not -Match '(?ms)repository-contract:.*?Run .*skill-validator|skill-validator:.*?Run .*skill-tools'
     }
 
+    # Scenario: a protected bridge invocation is staged for review before an authority provider exists.
+    # Purpose: preserve the three required source contexts on the canonical route until adoption is approved.
+    It 'InterT90_keeps_protected_bridge_wiring_inactive_and_required_routes_canonical' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $workflow | Should -Match '(?ms)id: protected-source-merge-candidate\s+if: \$\{\{ false \}\}'
+        $workflow | Should -Match 'protected-authority-unavailable'
+        $workflow | Should -Match 'source_conformance: \$\{\{ steps\.source-conformance\.outputs\.status \}\}'
+        foreach ($context in @('repository-contract', 'skill-validator', 'skill-tools')) {
+            $workflow | Should -Match ("(?ms)^  {0}:.*?outputs\.source_conformance" -f [regex]::Escape($context))
+        }
+    }
+
     It 'keeps public validation documentation on the canonical entry point' {
         $readme = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'README.md') -Raw
         $readme | Should -Match 'scripts/Validate\.ps1'

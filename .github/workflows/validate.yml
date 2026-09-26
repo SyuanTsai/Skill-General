@@ -115,6 +115,15 @@ jobs:
           "status=$status" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "Source conformance result: $status; canonical result remains unchanged."
 
+      # Candidate insertion point for a separately reviewed protected authority.
+      # This step has no output and cannot alter the source_conformance route.
+      - name: Protected source merge bridge candidate (inactive)
+        id: protected-source-merge-candidate
+        if: ${{ false }}
+        shell: pwsh
+        run: |
+          throw 'protected-authority-unavailable'
+
   # These jobs preserve the repository's existing required status contexts and
   # route the central report's source-only projection for source integration.
   repository-contract:
