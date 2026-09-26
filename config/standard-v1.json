@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "cb5673ba2fd4a68ccaf917db43673937bec0677a",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/cb5673ba2fd4a68ccaf917db43673937bec0677a",
-    "archiveSha256": "caf931ed55ad1ae923022eaf3137ae53eefce7b5e2c80a5708511d623a3a860b",
+    "commit": "e69c453888db93e2d2697ea7f0b11df13cd1b8d2",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/e69c453888db93e2d2697ea7f0b11df13cd1b8d2",
+    "archiveSha256": "5d2cbab098b86c4310b713cbc17ce00e5b08a53cffe37ce98f16a9f2244c29f5",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "c3b117ba50f7b771c58e3c073d165ed3002e7e13ee5b11599e08d8317c87b38f"
+        "sha256": "c85562f017a09b4f4daa8dd3a1fcbd1d34714eb711ed9c011642247c8d3be61e"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -69,11 +69,15 @@
       },
       {
         "path": "docs/standards/schemas/standard-validation-evidence-v1.schema.json",
-        "sha256": "2c1c7372ae15aa2f500a3e47fad897bed9af52a5ab8ae972deec61fbd76469fb"
+        "sha256": "8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee"
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "88e2c9acb04bd1deaba37e2b1ce8d97278deba482390e06e1924226ee0ca2394"
+        "sha256": "014e82d2db4f3a95be53f5120460790fc613f32b13d06f4e43f4a41dd89f53ee"
+      },
+      {
+        "path": "docs/standards/pr12-source-merge-adoption.json",
+        "sha256": "4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175"
       },
       {
         "path": "docs/standards/trust-anchors/human-approval-public-key.xml",
@@ -85,7 +89,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "586f1fbe06de4201ee2fc6bb64b6fbff3326e28fabd159de84dbe5cf231c381c"
+        "sha256": "8f6ce80bbe3447d83f1222877f0e3ff17aa8d45888892e62ea50dc7ec6047dc2"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

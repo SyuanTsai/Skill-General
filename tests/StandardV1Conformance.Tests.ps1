@@ -38,8 +38,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be 'cb5673ba2fd4a68ccaf917db43673937bec0677a'
-        $adapter.authority.archiveSha256 | Should -Be 'caf931ed55ad1ae923022eaf3137ae53eefce7b5e2c80a5708511d623a3a860b'
+        $adapter.authority.commit | Should -Be 'e69c453888db93e2d2697ea7f0b11df13cd1b8d2'
+        $adapter.authority.archiveSha256 | Should -Be '5d2cbab098b86c4310b713cbc17ce00e5b08a53cffe37ce98f16a9f2244c29f5'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -59,6 +59,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json'
         @($adapter.authority.files.path) | Should -Contain 'scripts/StandardSemanticBridge.psm1'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/standard-validation-contract-v1.json'
+        @($adapter.authority.files.path) | Should -Contain 'docs/standards/pr12-source-merge-adoption.json'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/schemas/standard-validation-adapter-v1.schema.json'
         @($adapter.authority.files | Where-Object { $_.sha256 -notmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
         $adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
