@@ -26,6 +26,22 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.routing.elapsedTimeAloneTriggersWrite | Should -BeFalse
     }
 
+    It 'ContractT11_keeps_core_recording_independent_of_optional_storage' {
+        $record = $script:Contract.recordInterface
+        $record.entryPoint | Should -Be 'scripts/HandoffRecordCore.psm1:Invoke-HandoffRecordCore'
+        $record.acceptsCallerSuppliedSources | Should -BeTrue
+        $record.sourceAllowlist | Should -BeNullOrEmpty
+        $record.requiresExternalTarget | Should -BeFalse
+        $record.requiresOwnerOrOperator | Should -BeFalse
+        $record.requiresMandatoryLocalBackend | Should -BeFalse
+        $record.callsExternalConnector | Should -BeFalse
+        $record.durableClaimByCore | Should -BeFalse
+        $record.externalHandlingOwnedByCaller | Should -BeTrue
+        $record.existingAdapterMappingOptional | Should -BeTrue
+        $script:Contract.storageSelection.appliesOnlyToOptionalExternalAdapterIO | Should -BeTrue
+        $script:Contract.memoryTargetSelection.appliesOnlyToOptionalExternalAdapterIO | Should -BeTrue
+    }
+
     # Contract decision-table test only: interpret structured cases without connectors or E2E calls.
     It 'ContractT80_storage_selection_decision_table' {
         $selectionContract = $script:Contract.storageSelection

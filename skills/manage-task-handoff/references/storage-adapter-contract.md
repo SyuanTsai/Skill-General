@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Storage adapter contract
 
-The adopting user chooses storage, a formal authority for each task type, an access-control policy, an opaque Authority Scope, and how the logical common record, branch records, fork recovery, and append-only events map to physical objects. Notion, Jira, GitHub, local files, or a database may be adapters; no one platform is a mandatory authority. The adopter also sets an inactivity period, activity-time representation, and conflict retry limit. This Skill does not create schemas or grant remote permissions.
+This contract applies when the caller elects external adapter I/O. Core record receipt requires no storage selection, physical location, or mandatory local backend. For optional I/O, the adopting user chooses storage, a formal authority for each task type, an access-control policy, an opaque Authority Scope, and how the logical common record, branch records, fork recovery, and append-only events map to physical objects. Notion, Jira, GitHub, local files, or a database may be adapters; no one platform is a mandatory authority. The adopter also sets an inactivity period, activity-time representation, and conflict retry limit. This Skill does not create schemas or grant remote permissions.
 
 ## Provider-agnostic memory-target selection
 
