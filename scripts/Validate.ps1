@@ -735,7 +735,7 @@ try {
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
+            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
                 [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) {
                 [Console]::Error.WriteLine("Pester totals: total=$($result.TotalCount), passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount).")
                 if (Test-Path -LiteralPath $pesterDiagnosticPath -PathType Leaf) {
@@ -751,7 +751,7 @@ try {
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
             )
             if ($testInventory.Count -eq 0) { throw 'Pester did not receive a non-empty test inventory.' }
-            New-Envelope -ActiveSkills $activeSkills -Additional @{ testInventory = $testInventory; testResult = [ordered]@{ status = 'passed'; decision = 'PASS'; total = [int64]$result.TotalCount; passed = [int64]$result.PassedCount; skipped = [int64]$result.SkippedCount }; domainAdapterResult = [ordered]@{ status = 'passed'; decision = 'PASS'; result = 'Pester' } }
+            New-Envelope -ActiveSkills $activeSkills -Additional @{ testInventory = $testInventory; testResult = [ordered]@{ status = 'passed'; decision = 'PASS'; total = [int64]$result.TotalCount; passed = [int64]$result.PassedCount; skipped = [int64]$result.SkippedCount; failed = [int64]$result.FailedCount }; domainAdapterResult = [ordered]@{ status = 'passed'; decision = 'PASS'; result = 'Pester' } }
         }
     }
 }
