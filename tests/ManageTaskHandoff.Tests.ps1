@@ -383,7 +383,7 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload | Should -BeTrue
         $script:Contract.forkRecovery.envelopeListNeverLoadsPayload | Should -BeTrue
         @($script:Contract.forkRecovery.creationOrder) | Should -Be @(
-            'atomic-payload-free-pending-envelope-protected-control-and-pending-index',
+            'atomic-payload-free-pending-envelope-protected-control-pending-index-and-common-revision-fence',
             'isolated-snapshot-payload'
         )
         @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
@@ -393,9 +393,12 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.terminalEnvelopeAndPendingIndexAtomic | Should -BeTrue
         $script:Contract.forkRecovery.terminalSetReadbackRequired | Should -BeTrue
         $script:Contract.forkRecovery.commonFenceReleasedBeforeOrWithTerminalTransition | Should -BeTrue
+        $script:Contract.forkRecovery.initialCommonRevisionFenceAtomic | Should -BeTrue
+        $script:Contract.forkRecovery.commonRevisionFenceIsPayloadFreeNoOpCommit | Should -BeTrue
         @($script:Contract.forkRecovery.terminalIndexStatusValues) | Should -Be @('Completed','Abandoned')
         $script:Contract.forkRecovery.terminalIndexNoLongerBlocksRecall | Should -BeTrue
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
+        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Payload Revision'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target-Operation Bindings'
         @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Verified Common Revision At Creation'
@@ -407,24 +410,32 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.forkRecovery.protectedControlRecordSeparateFromEnvelopeAndPayload | Should -BeTrue
         $script:Contract.forkRecovery.initialEnvelopeControlAndPendingIndexAtomic | Should -BeTrue
         @($script:Contract.forkRecovery.initialAtomicSet) | Should -Be @(
-            'payload-free-pending-envelope','protected-control-record','protected-pending-index-entry'
+            'payload-free-pending-envelope','protected-control-record','protected-pending-index-entry','common-revision-fence'
         )
         @($script:Contract.forkRecovery.protectedControlRequiredEvidence) | Should -Be @(
-            'Source Branch ID','Branch Creation Operations','Expected Branch Creation Payload Digests',
+            'Source Branch ID','Source Branch Revision','Source Branch Fork Point','Source Continuation Generation',
+            'Branch Creation Operations','Expected Branch Creation Payload Digests',
             'Payload Object Identity','Payload Digest','Verified Common Revision At Creation','Source ACL Locator'
         )
         $script:Contract.forkRecovery.pendingListUsesAuthorizationIndexWithoutEnvelopeLoad | Should -BeTrue
         $script:Contract.forkRecovery.pendingListMayReturnOpaqueBlockingIndicator | Should -BeTrue
+        $script:Contract.forkRecovery.pendingIndexBlocksCommonArchivalIndependentOfItemVisibility | Should -BeTrue
+        $script:Contract.forkRecovery.sourceBranchAuthorizationBeforePayloadRead | Should -BeTrue
         $script:Contract.forkRecovery.payloadAttestationRequiredBeforeClaim | Should -BeTrue
+        $script:Contract.forkRecovery.payloadRevisionBoundInEnvelope | Should -BeTrue
+        $script:Contract.forkRecovery.payloadCreationAndAbandonmentShareEnvelopeRevision | Should -BeTrue
+        $script:Contract.forkRecovery.payloadAndEnvelopeUpdateAtomic | Should -BeTrue
         $script:Contract.forkRecovery.payloadAttestationExcludesMutableRecoveryStatus | Should -BeTrue
         $script:Contract.forkRecovery.terminalStatusStoredOutsideSnapshotAttestation | Should -BeTrue
         $script:Contract.forkRecovery.completionDoesNotRotateSnapshotPayloadDigest | Should -BeTrue
+        $script:Contract.forkRecovery.everyForkPointEqualsVerifiedCommonRevision | Should -BeTrue
+        $script:Contract.forkRecovery.liveSourceBranchBindingBeforeRecoveryAdmission | Should -BeTrue
         $script:Contract.forkRecovery.firstClaimAtomicallyFencesCommonRevision | Should -BeTrue
         $script:Contract.forkRecovery.existingBranchForkUsesSameCommonFence | Should -BeTrue
         $script:Contract.forkRecovery.branchCreateAtomicallyValidatesClaimBinding | Should -BeTrue
         $script:Contract.forkRecovery.branchCreateValidatesExpectedPayloadDigest | Should -BeTrue
         @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
-            'isolated-payload-absent','all-branch-creation-target-records-absent',
+            'isolated-payload-absent','envelope-payload-revision-absent','all-branch-creation-target-records-absent',
             'all-branch-creation-target-outcomes-absent','all-branch-creation-target-index-entries-absent'
         )
         $script:Contract.forkRecovery.abandonmentRequiresExactAuthorization | Should -BeTrue
