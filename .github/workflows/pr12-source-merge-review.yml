@@ -83,6 +83,9 @@ jobs:
               $proposal.sourceRevision -cne $report.candidate.sourceRevision -or
               $proposal.candidateId -cne $report.candidate.candidateId -or
               $proposal.testFixtureOnly -ne $false -or
+              $proposal.canonicalState -cne 'FAILED' -or $proposal.canonicalExitCode -ne 20 -or
+              $proposal.sourceConformanceStatus -cne 'failed' -or $proposal.releaseEligible -ne $false -or
+              $proposal.supplementalStage -cne 'supplemental-repository-tests' -or
               $report.stages[3].status -cne 'failed' -or $report.stages[4].status -cne 'not-run' -or
               $report.stages[5].status -cne 'not-run' -or $report.sourceConformance.status -cne 'failed' -or
               $report.releaseEligible -ne $false -or $proposal.status -cne 'eligible-for-policy-review' -or
