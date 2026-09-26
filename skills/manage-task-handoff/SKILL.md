@@ -1,6 +1,6 @@
 ---
 name: manage-task-handoff
-description: Receive, validate and record caller-supplied interruption-safe task Handoff data; optionally use an adopter-configured storage adapter when external I/O is requested. Use for explicit handoffs, unfinished writes, confirmed chat-only context, imminent session or context changes, blocked progress, or costly restart risk. Skip ordinary reads and new-conversation-only triggers.
+description: Create interruption-safe task Handoff records from caller-supplied data. Use when a task needs an explicit handoff, a checkpoint before interruption, branch progress, or recovery after blocked work. Storage adapters are optional. Skip ordinary reads and new-conversation-only triggers.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
