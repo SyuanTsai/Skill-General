@@ -93,6 +93,8 @@ jobs:
             throw "Review invariants failed; canonical exit=$validationExit, proposal=$($proposal.status), reasons=$($proposal.failureReasons -join ',')."
           }
           Write-Host 'Exact-head supervised supplemental review is eligible for human policy review; canonical validation remains FAILED/20.'
+          # The runner propagates the canonical child's intentional exit 20 unless this step exits explicitly.
+          exit 0
 
       - name: Preserve review report and supervisor evidence
         if: ${{ always() }}
