@@ -26,7 +26,10 @@ param(
     [string] $SemanticPublicKeyPath,
     [string] $SemanticPublicKeyId,
     [string] $SemanticRunPlanPath,
-    [switch] $SemanticTriggered
+    [switch] $SemanticTriggered,
+    [switch] $SourceMergeExceptionReview,
+    [switch] $ProtectedSourceMergeCheck,
+    [string] $ProtectedWorkflowRevision
 )
 
 Set-StrictMode -Version Latest
@@ -34,8 +37,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-$script:AuthorityCommit = 'e0e2b5047f0dee61419cdd1e3f8e4f2c3f7e5c33'
-$script:AuthorityArchiveSha256 = '7331677d2403ec74283b89bbc192cd7c1311d8722687d11bd1a3573658f717a1'
+$script:AuthorityCommit = 'cb5673ba2fd4a68ccaf917db43673937bec0677a'
+$script:AuthorityArchiveSha256 = 'caf931ed55ad1ae923022eaf3137ae53eefce7b5e2c80a5708511d623a3a860b'
 $script:AuthorityFiles = [ordered]@{
     'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
     'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -44,19 +47,19 @@ $script:AuthorityFiles = [ordered]@{
     'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
     'docs/standards/schemas/validation-security-gate-v1.schema.json' = '32aee32858cdb0f8fa7b01462af05ad2300cb247cd2e3ca769fa36ed1ac205a9'
     'docs/standards/skill-repository-review-matrix.md' = '315204afe428bb51cab5e815b2c40f6d0cbd55c81a3532ad59b686ae5e4c166c'
-    'docs/standards/skill-repository-standard.md' = 'da48b1c29000bfc2c80a8f1d5068034b61c63a0c013f270a59bb6ff674415e4e'
+    'docs/standards/skill-repository-standard.md' = 'c3b117ba50f7b771c58e3c073d165ed3002e7e13ee5b11599e08d8317c87b38f'
     'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
     'docs/standards/validation-security-gate.json' = '2d4ac30449981083d3f3eab850789e7115684f9dfecad48234bc91ffb678e674'
-    'docs/standards/validation-toolchain.json' = '5925dcb1aea1e545b9787a29825e7a0cc03a04c777cd68ab44c9bdd7482ff579'
-    'scripts/Invoke-StandardAuthorityGate.ps1' = '2ba65c6fcc91b34400044e58398096f242c86302a5a307e6581917bee30decef'
+    'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
+    'scripts/Invoke-StandardAuthorityGate.ps1' = 'e5e8050df56dd60af7d9eec04fda2e05e331fded18bc69257431c2a11f39a9e9'
     'scripts/Resolve-PythonWheelClosure.py' = '7fa1511a3e3ba257c6d9e37f929f68e5684184a3a2756a3f9e765ccc6e69d208'
-    'scripts/Resolve-StandardValidationTool.ps1' = 'b1b02443e1b752c415634aae4f9ca4770dc7850545f53102267b0645f6dc0bca'
+    'scripts/Resolve-StandardValidationTool.ps1' = '3bdda55964acb92fb32d06ffdbf6f98c9397b1857a88271c398b3f28e4bd6295'
     'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
-    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '5482b69c75613a8025be267b5f52b4c47839f8d5a268db9de27414dfd7303121'
-    'docs/standards/standard-validation-contract-v1.json' = 'b68849e986153732c65b4b02a1431f22d2f985781fe5c6299d18d97cd188b57d'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '2c1c7372ae15aa2f500a3e47fad897bed9af52a5ab8ae972deec61fbd76469fb'
+    'docs/standards/standard-validation-contract-v1.json' = '88e2c9acb04bd1deaba37e2b1ce8d97278deba482390e06e1924226ee0ca2394'
     'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
     'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-    'scripts/Invoke-StandardValidation.ps1' = 'c7078b18a8bea240be4710aa6c0080b22bda7756ee120bfa705ef83c3489dbd1'
+    'scripts/Invoke-StandardValidation.ps1' = '586f1fbe06de4201ee2fc6bb64b6fbff3326e28fabd159de84dbe5cf231c381c'
     'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
     'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
     'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
@@ -720,25 +723,37 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
+            $pesterDiagnosticPath = Join-Path ([IO.Path]::GetTempPath()) "sgv1-pester-$([guid]::NewGuid().ToString('N')).log"
             $previousErrorActionPreference = $ErrorActionPreference
             try {
                 # Tests intentionally exercise non-zero native child processes. Do not let the
                 # runner's fail-fast preference promote their captured stderr into terminating
                 # errors before Pester can evaluate the assertions.
                 $ErrorActionPreference = 'Continue'
-                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 6>$null
+                # Imported candidate modules may emit benign warnings. Keep the
+                # typed JSON envelope as the only stdout record for the supervisor.
+                $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6> $pesterDiagnosticPath
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
-                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
+            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
+                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) {
+                [Console]::Error.WriteLine("Pester totals: total=$($result.TotalCount), passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount).")
+                if (Test-Path -LiteralPath $pesterDiagnosticPath -PathType Leaf) {
+                    foreach ($line in @(Get-Content -LiteralPath $pesterDiagnosticPath)) {
+                        [Console]::Error.WriteLine([string]$line)
+                    }
+                }
+                throw 'Pester repository regression did not complete successfully.'
+            }
+            Remove-Item -LiteralPath $pesterDiagnosticPath -Force -ErrorAction SilentlyContinue
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
             )
             if ($testInventory.Count -eq 0) { throw 'Pester did not receive a non-empty test inventory.' }
-            New-Envelope -ActiveSkills $activeSkills -Additional @{ testInventory = $testInventory; testResult = [ordered]@{ status = 'passed'; decision = 'PASS'; total = [int64]$result.TotalCount; passed = [int64]$result.PassedCount; skipped = [int64]$result.SkippedCount }; domainAdapterResult = [ordered]@{ status = 'passed'; decision = 'PASS'; result = 'Pester' } }
+            New-Envelope -ActiveSkills $activeSkills -Additional @{ testInventory = $testInventory; testResult = [ordered]@{ status = 'passed'; decision = 'PASS'; total = [int64]$result.TotalCount; passed = [int64]$result.PassedCount; skipped = [int64]$result.SkippedCount; failed = [int64]$result.FailedCount }; domainAdapterResult = [ordered]@{ status = 'passed'; decision = 'PASS'; result = 'Pester' } }
         }
     }
 }
@@ -1006,6 +1021,12 @@ try {
     $gitPath = Get-ResolvedGitPath
     $pwshPath = Get-ResolvedPowerShellPath
     $candidateCommit = Resolve-GitRevision -GitPath $gitPath -Root $repoRoot -Revision 'HEAD' -Context 'Candidate revision'
+    if ($ProtectedSourceMergeCheck -and
+        (-not $SourceMergeExceptionReview -or
+         $candidateCommit -cne '66c466540480306c7f5346338d70d036bddb4930' -or
+         $ProtectedWorkflowRevision -cnotmatch '^[0-9a-f]{40}$')) {
+        throw 'Protected source merge check requires the exact PR12 head and protected workflow revision.'
+    }
     $dirty = @(& $gitPath -C $repoRoot status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Canonical validation requires a clean immutable candidate commit.' }
     $baseInput = if ([string]::IsNullOrWhiteSpace($BaseCommit)) { 'HEAD^' } else { $BaseCommit }
@@ -1013,7 +1034,8 @@ try {
     & $gitPath -C $repoRoot merge-base --is-ancestor $baseRevision $candidateCommit
     if ($LASTEXITCODE -ne 0 -or $baseRevision -ceq $candidateCommit) { throw 'Base commit must be a distinct ancestor of the immutable candidate.' }
 
-    $config = Read-JsonFile -Path (Join-Path $repoRoot 'config/standard-v1.json') -Context 'config/standard-v1.json'
+    $configRoot = if ($SourceMergeExceptionReview) { Split-Path -Parent $PSScriptRoot } else { $repoRoot }
+    $config = Read-JsonFile -Path (Join-Path $configRoot 'config/standard-v1.json') -Context 'config/standard-v1.json'
     Assert-AuthorityConfig -Config $config
     $activeSkillIds = Get-ActiveSkillIds -Root $repoRoot
     $eventName = Get-EventName
@@ -1149,6 +1171,8 @@ try {
         skillToolsEntryPointSha256 = [string]$receipts.'skill-tools'.entryPointSha256
         skillSpectorPath = [IO.Path]::GetFullPath([string]$receipts.skillspector.executablePath)
         skillSpectorSha256 = [string]$receipts.skillspector.executableSha256
+        skillSpectorReceiptPath = [IO.Path]::GetFullPath((Join-Path $runRoot 'receipt-skillspector.json'))
+        skillSpectorReceiptSha256 = Get-FileSha256 -Path (Join-Path $runRoot 'receipt-skillspector.json')
         pesterModulePath = [IO.Path]::GetFullPath([string]$receipts.pester.modulePath)
         pesterModuleSha256 = [string]$receipts.pester.executableSha256
         pesterVersion = [string]$receipts.pester.resolvedVersion
@@ -1326,6 +1350,15 @@ try {
         @('-SemanticPublicKeyId', $SemanticPublicKeyId)
     )) {
         if (-not [string]::IsNullOrWhiteSpace([string]$pair[1])) { $centralRunnerArgs += @($pair[0],$pair[1]) }
+    }
+    if ($SourceMergeExceptionReview) { $centralRunnerArgs += '-SourceMergeExceptionReview' }
+    if ($ProtectedSourceMergeCheck) {
+        $centralRunnerArgs += @(
+            '-ProtectedSourceMergeCheck',
+            '-ProtectedCentralRevision', $script:AuthorityCommit,
+            '-ProtectedWorkflowRevision', $ProtectedWorkflowRevision,
+            '-ProtectedAuthorityArchiveSha256', $script:AuthorityArchiveSha256
+        )
     }
     & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs
     $centralExitCode = $LASTEXITCODE
