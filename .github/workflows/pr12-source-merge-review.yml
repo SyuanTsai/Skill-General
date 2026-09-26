@@ -25,7 +25,7 @@ jobs:
       - name: Checkout exact PR12 candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
         with:
-          ref: 8505829a6e985aaf4cf7bb7265e3352ae40df53e
+          ref: 66c466540480306c7f5346338d70d036bddb4930
           path: candidate
           fetch-depth: 0
           persist-credentials: false
@@ -56,7 +56,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $driver = Join-Path $env:GITHUB_WORKSPACE 'driver/scripts/Validate.ps1'
-          if ((& git -C $candidate rev-parse HEAD) -cne '8505829a6e985aaf4cf7bb7265e3352ae40df53e') {
+          if ((& git -C $candidate rev-parse HEAD) -cne '66c466540480306c7f5346338d70d036bddb4930') {
             throw 'PR12 candidate checkout is not the exact reviewed head.'
           }
           foreach ($name in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
@@ -79,7 +79,7 @@ jobs:
           $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
           $proposal = $report.sourceMergeExceptionProposal
           if ($validationExit -ne 20 -or $report.state -cne 'FAILED' -or $report.exitCode -ne 20 -or
-              $report.candidate.sourceRevision -cne '8505829a6e985aaf4cf7bb7265e3352ae40df53e' -or
+              $report.candidate.sourceRevision -cne '66c466540480306c7f5346338d70d036bddb4930' -or
               $proposal.sourceRevision -cne $report.candidate.sourceRevision -or
               $proposal.candidateId -cne $report.candidate.candidateId -or
               $proposal.testFixtureOnly -ne $false -or
