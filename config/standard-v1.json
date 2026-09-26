@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "2c1254b8420cb3c2511f1a757dc338cb738fd4da",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/2c1254b8420cb3c2511f1a757dc338cb738fd4da",
-    "archiveSha256": "35785731f1a5da00f5062423b7f86223749c52c087592c32bdeea829d844cfc0",
+    "commit": "1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693",
+    "archiveSha256": "a60053f2fa7bfd8a1da862687cf4e8e808fe782baa71a8634def67d0c34a2223",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -73,7 +73,7 @@
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "11a811ab90179c742c727b0dcebf7e7c60c1f647f43f387a428bae4693637da5"
+        "sha256": "2fdb9501495daea762b62fb070c1b3f48b7df571ed794a7bd5ef50b5d2fe25bc"
       },
       {
         "path": "docs/standards/trust-anchors/human-approval-public-key.xml",
@@ -85,7 +85,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "73b3a53cded45ee2d1c117c4b1be42daeafcfa961bcd3d7dfcc2eeee470c63a4"
+        "sha256": "ea487ac447c00572e36e3e80b686e98144534be3ad0496aaa9ef3f305b1197b9"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

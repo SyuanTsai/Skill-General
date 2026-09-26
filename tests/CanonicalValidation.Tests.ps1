@@ -7,8 +7,8 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator = Get-Content -LiteralPath $script:ValidatorPath -Raw
         $script:Adapter = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw |
             ConvertFrom-Json -Depth 20
-        $script:ExpectedAuthorityCommit = '2c1254b8420cb3c2511f1a757dc338cb738fd4da'
-        $script:ExpectedAuthorityArchiveSha256 = '35785731f1a5da00f5062423b7f86223749c52c087592c32bdeea829d844cfc0'
+        $script:ExpectedAuthorityCommit = '1a46452beaadd8f55d6fd1eab9f6c8f8d4f78693'
+        $script:ExpectedAuthorityArchiveSha256 = 'a60053f2fa7bfd8a1da862687cf4e8e808fe782baa71a8634def67d0c34a2223'
         $script:ExpectedAuthorityFiles = [ordered]@{
             'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
             'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -26,10 +26,10 @@ Describe 'Canonical Standard v1 validation adapter' {
             'scripts/Resolve-StandardValidationTool.ps1' = 'b1b02443e1b752c415634aae4f9ca4770dc7850545f53102267b0645f6dc0bca'
             'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
             'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '87e15ae6acc4f9d00e2f54877be480276dc82dcd08fe9b465fc4394c901b1ee9'
-            'docs/standards/standard-validation-contract-v1.json' = '11a811ab90179c742c727b0dcebf7e7c60c1f647f43f387a428bae4693637da5'
+            'docs/standards/standard-validation-contract-v1.json' = '2fdb9501495daea762b62fb070c1b3f48b7df571ed794a7bd5ef50b5d2fe25bc'
             'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
             'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-            'scripts/Invoke-StandardValidation.ps1' = '73b3a53cded45ee2d1c117c4b1be42daeafcfa961bcd3d7dfcc2eeee470c63a4'
+            'scripts/Invoke-StandardValidation.ps1' = 'ea487ac447c00572e36e3e80b686e98144534be3ad0496aaa9ef3f305b1197b9'
             'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
             'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
             'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
