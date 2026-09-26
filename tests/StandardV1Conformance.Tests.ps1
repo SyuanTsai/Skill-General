@@ -132,6 +132,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'ref:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}'
         $workflow | Should -Match 'git -C \$candidate merge-base \$env:PULL_REQUEST_BASE_SHA HEAD'
         $workflow | Should -Match "working-directory: driver"
+        $workflow | Should -Match '\$driverArgs = @\{'
+        $workflow | Should -Not -Match '\$driverArgs = @\('
         $workflow | Should -Match '& \./scripts/Validate\.ps1 @driverArgs'
         $workflow | Should -Match '66c466540480306c7f5346338d70d036bddb4930'
         $workflow | Should -Match 'sourceMergeDecision'

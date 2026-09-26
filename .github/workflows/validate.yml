@@ -96,14 +96,19 @@ jobs:
           if ((& git -C $candidate rev-parse HEAD) -cne $env:EXPECTED_SOURCE_SHA) {
             throw 'Candidate checkout does not match the exact GitHub event source SHA.'
           }
-          $driverArgs = @('-RepositoryRoot', $candidate, '-ArtifactsRoot', $env:RUNNER_TEMP,
-            '-BaseCommit', $baseCommit, '-ExpectedGoRuntimeVersion', $env:STANDARD_GO_RUNTIME_VERSION,
-            '-OutputPath', $outputPath)
+          $driverArgs = @{
+            RepositoryRoot = $candidate
+            ArtifactsRoot = $env:RUNNER_TEMP
+            BaseCommit = $baseCommit
+            ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION
+            OutputPath = $outputPath
+          }
           if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and
               $env:EXPECTED_SOURCE_SHA -ceq '66c466540480306c7f5346338d70d036bddb4930' -and
               $env:GITHUB_REF -match '^refs/pull/12/merge$') {
-            $driverArgs += @('-SourceMergeExceptionReview', '-ProtectedSourceMergeCheck',
-              '-ProtectedWorkflowRevision', $env:PULL_REQUEST_BASE_SHA)
+            $driverArgs.SourceMergeExceptionReview = $true
+            $driverArgs.ProtectedSourceMergeCheck = $true
+            $driverArgs.ProtectedWorkflowRevision = $env:PULL_REQUEST_BASE_SHA
           }
           & ./scripts/Validate.ps1 @driverArgs
 
