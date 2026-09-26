@@ -41,6 +41,20 @@ Describe 'Handoff receive and record core' {
         $secretResult.Record | Should -BeNullOrEmpty
     }
 
+    It 'rejects executable properties in caller data without evaluating them' {
+        $script:probeCalls = 0
+        $record = [pscustomobject]@{
+            'Authority Scope' = 'scope-a'; 'Task Key' = 'task-1'; Intent = 'finish'; Scope = 'local'
+            Current = 'checked'; Source = 'caller'; Lifecycle = 'Active'; 'Work State' = 'Running'
+        }
+        $record | Add-Member -MemberType ScriptProperty -Name Probe -Value { $script:probeCalls++; 'unsafe' }
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record $record -OperationId 'op-1'
+        $actual.Status | Should -Be 'Rejected'
+        $actual.Reason | Should -Be 'invalid-input-shape'
+        $script:probeCalls | Should -Be 0
+        $actual.ExternalCalls | Should -Be 0
+    }
+
     It 'rejects duplicate identity and stale revision without touching another branch' {
         $record = [pscustomobject]@{
             'Authority Scope' = 'scope-a'; 'Task Key' = 'task-1'; 'Branch ID' = 'branch-a'

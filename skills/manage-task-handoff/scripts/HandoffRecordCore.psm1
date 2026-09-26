@@ -38,6 +38,30 @@ function Test-HandoffSensitiveField {
     return $false
 }
 
+function Test-HandoffPlainData {
+    param($Value, [int]$Depth = 0)
+    if ($Depth -gt 16) { return $false }
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) { return $true }
+    if ($Value -is [array]) {
+        foreach ($item in $Value) { if (-not (Test-HandoffPlainData $item ($Depth + 1))) { return $false } }
+        return $true
+    }
+    if ($Value.GetType() -eq [hashtable] -or $Value.GetType() -eq [System.Collections.Specialized.OrderedDictionary]) {
+        foreach ($key in $Value.Keys) {
+            if ($key -isnot [string] -or -not (Test-HandoffPlainData $Value[$key] ($Depth + 1))) { return $false }
+        }
+        return $true
+    }
+    if ($Value -is [pscustomobject]) {
+        foreach ($property in $Value.PSObject.Properties) {
+            if ($property.MemberType -ne 'NoteProperty') { return $false }
+            if (-not (Test-HandoffPlainData $property.Value ($Depth + 1))) { return $false }
+        }
+        return $true
+    }
+    return $false
+}
+
 function Invoke-HandoffRecordCore {
     [CmdletBinding()]
     param(
@@ -51,6 +75,12 @@ function Invoke-HandoffRecordCore {
     )
 
     $empty = @()
+    if (-not (Test-HandoffPlainData $Record) -or
+        -not (Test-HandoffPlainData $ExistingRecords) -or
+        -not (Test-HandoffPlainData $ParentRecord) -or
+        -not (Test-HandoffPlainData $CallerResult)) {
+        return New-HandoffRecordResponse 'Rejected' 'invalid-input-shape' $null $empty $null
+    }
     $required = if ($Kind -eq 'Common') {
         @('Authority Scope', 'Task Key', 'Intent', 'Scope', 'Current', 'Source', 'Lifecycle', 'Work State')
     } else {

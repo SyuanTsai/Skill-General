@@ -37,7 +37,7 @@
     "callsExternalConnector": false,
     "outputs": ["proposed-record", "proposed-field-change-intents", "caller-reported-outcome"],
     "durableClaimByCore": false,
-    "validationFailures": ["missing-required-field", "sensitive-field", "invalid-state", "invalid-generation", "duplicate-identity", "invalid-association", "revision-conflict", "invalid-caller-result"],
+    "validationFailures": ["invalid-input-shape", "missing-required-field", "sensitive-field", "invalid-state", "invalid-generation", "duplicate-identity", "invalid-association", "revision-conflict", "invalid-caller-result"],
     "externalHandlingOwnedByCaller": true,
     "existingAdapterMappingOptional": true
   },
