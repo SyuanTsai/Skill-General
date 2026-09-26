@@ -1034,7 +1034,10 @@ try {
     & $gitPath -C $repoRoot merge-base --is-ancestor $baseRevision $candidateCommit
     if ($LASTEXITCODE -ne 0 -or $baseRevision -ceq $candidateCommit) { throw 'Base commit must be a distinct ancestor of the immutable candidate.' }
 
-    $configRoot = if ($SourceMergeExceptionReview) { Split-Path -Parent $PSScriptRoot } else { $repoRoot }
+    # The authority pin belongs to the executing driver checkout. A PR
+    # candidate may contain a newer config, but it cannot select this run's
+    # trusted central archive before that config reaches the protected base.
+    $configRoot = Split-Path -Parent $PSScriptRoot
     $config = Read-JsonFile -Path (Join-Path $configRoot 'config/standard-v1.json') -Context 'config/standard-v1.json'
     Assert-AuthorityConfig -Config $config
     $activeSkillIds = Get-ActiveSkillIds -Root $repoRoot

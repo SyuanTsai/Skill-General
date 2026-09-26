@@ -164,7 +164,7 @@ jobs:
                     $source.status -ceq 'failed' -and
                     $proposal.status -ceq 'eligible-for-policy-review' -and
                     $proposal.releaseEligible -eq $false -and
-                    $decision.contract -ceq 'inactive-protected-source-merge-route-v1' -and
+                    $decision.contract -ceq 'protected-source-merge-decision-v1' -and
                     $decision.status -ceq 'eligible-for-protected-check' -and
                     $decision.fixtureRoute -ceq 'rejected' -and
                     $decision.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and

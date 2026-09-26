@@ -137,6 +137,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '& \./scripts/Validate\.ps1 @driverArgs'
         $workflow | Should -Match '66c466540480306c7f5346338d70d036bddb4930'
         $workflow | Should -Match 'sourceMergeDecision'
+        $workflow | Should -Match 'protected-source-merge-decision-v1'
         $workflow | Should -Match 'releaseEligible -eq \$false'
         $workflow | Should -Match 'persist-credentials:\s*false'
     }
