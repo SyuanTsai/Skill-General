@@ -150,6 +150,28 @@ exit 0
         else { $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = $script:PriorBranchCreationActorDefault }
     }
 
+    # The ref namespace is persisted data. Keep exact bytes stable when changing
+    # string interpolation or command continuation syntax in the adapter.
+    It 'UnitT01_preserves_exact_scoped_ref_bytes_across_delimited_identities' {
+        $root = Join-Path $TestDrive 'ref-byte-contract'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'writer' -AuthorityScope 'scope:west / 1'
+        $module = Get-Module GitRefHandoffAdapter
+        $refs = & $module {
+            param($Adapter)
+            @(
+                (Get-HandoffRecordRef -Adapter $Adapter -RecordKind common -TaskKey 'task:alpha / mix')
+                (Get-HandoffRecordRef -Adapter $Adapter -RecordKind branch -TaskKey 'task:alpha / mix' -BranchId 'branch:one / B')
+                (Get-HandoffForkRecoveryRef -Adapter $Adapter -TaskKey 'task:alpha / mix' -ForkId 'fork:two / C')
+            )
+        } $a
+        $refs | Should -Be @(
+            'refs/heads/handoff-v1/records/0b4823bf9ac816f4b817dc5c2fdeec94750c0fb548d32234d213dce803f9d53c/common'
+            'refs/heads/handoff-v1/records/0b4823bf9ac816f4b817dc5c2fdeec94750c0fb548d32234d213dce803f9d53c/branch/3409f38f5564ee33dcdd3006b833991ee1c1ce529529a447d7086a0f4f8e61a6'
+            'refs/heads/handoff-v1/recovery/0b4823bf9ac816f4b817dc5c2fdeec94750c0fb548d32234d213dce803f9d53c/b8e2b2e4221f34fa6d0cc40406e696118caa2ed4e7a19319dc41e377ce60a03c'
+        )
+    }
+
     # Scenario: Two adopters use the same remote and Task Key under different scopes, while another caller is denied.
     # Purpose: Bind physical identity to Authority Scope and require trusted-principal policy checks before record access.
     It 'InterT05_authorizes_every_scoped_identity_without_cross_scope_lookup' {
