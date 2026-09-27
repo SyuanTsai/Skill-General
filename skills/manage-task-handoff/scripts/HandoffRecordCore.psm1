@@ -78,6 +78,51 @@ function Test-HandoffPlainData {
     return $false
 }
 
+function Get-HandoffMapEntries {
+    param($Value)
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) {
+            [pscustomobject]@{ Name = [string]$key; Data = $Value[$key] }
+        }
+    } else {
+        foreach ($property in $Value.PSObject.Properties) {
+            [pscustomobject]@{ Name = [string]$property.Name; Data = $property.Value }
+        }
+    }
+}
+
+function Test-HandoffSamePlainData {
+    param($Left, $Right, [int]$Depth = 0)
+    if ($Depth -gt 16) { return $false }
+    if ($null -eq $Left -or $null -eq $Right) { return ($null -eq $Left -and $null -eq $Right) }
+    if ($Left -is [array]) {
+        if ($Right -isnot [array] -or $Left.Count -ne $Right.Count) { return $false }
+        for ($index = 0; $index -lt $Left.Count; $index++) {
+            if (-not (Test-HandoffSamePlainData $Left[$index] $Right[$index] ($Depth + 1))) { return $false }
+        }
+        return $true
+    }
+    if ($Right -is [array]) { return $false }
+    $leftIsMap = $Left -is [System.Collections.IDictionary] -or $Left -is [pscustomobject]
+    $rightIsMap = $Right -is [System.Collections.IDictionary] -or $Right -is [pscustomobject]
+    if ($leftIsMap -or $rightIsMap) {
+        if (-not $leftIsMap -or -not $rightIsMap) { return $false }
+        $leftEntries = @(Get-HandoffMapEntries $Left)
+        $rightEntries = @(Get-HandoffMapEntries $Right)
+        if ($leftEntries.Count -ne $rightEntries.Count) { return $false }
+        foreach ($entry in $leftEntries) {
+            $matches = @($rightEntries | Where-Object { [string]::Equals($_.Name, $entry.Name, [StringComparison]::Ordinal) })
+            if ($matches.Count -ne 1 -or
+                -not (Test-HandoffSamePlainData $entry.Data $matches[0].Data ($Depth + 1))) { return $false }
+        }
+        return $true
+    }
+    if ($Left.GetType() -ne $Right.GetType()) { return $false }
+    if ($Left -is [string]) { return [string]::Equals($Left, $Right, [StringComparison]::Ordinal) }
+    if ($Left -is [ValueType]) { return $Left.Equals($Right) }
+    return $false
+}
+
 function Invoke-HandoffRecordCore {
     [CmdletBinding()]
     param(
@@ -247,7 +292,7 @@ function Invoke-HandoffRecordCore {
             $old = Get-HandoffField $previous $field
             $new = Get-HandoffField $Record $field
             if ($null -eq $old -and $null -eq $new) { continue }
-            if ((ConvertTo-Json -InputObject $old -Depth 20 -Compress) -cne (ConvertTo-Json -InputObject $new -Depth 20 -Compress)) {
+            if (-not (Test-HandoffSamePlainData $old $new)) {
                 [pscustomobject]@{
                     'Authority Scope' = $scope
                     'Task Key' = $task

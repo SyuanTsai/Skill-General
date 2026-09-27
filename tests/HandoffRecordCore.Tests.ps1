@@ -280,6 +280,37 @@ Describe 'Handoff receive and record core' {
         (Invoke-HandoffRecordCore -Kind Common -Record $restored -ExistingRecords @($old) -ExpectedRevision 'stale' -OperationId 'op-stale-restore').Reason | Should -Be 'revision-conflict'
     }
 
+    It 'compares mapping content without key order while preserving value, key case and array order' {
+        $old = New-TestCommon; $old.Revision = 'r1'; $old['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $old.Source = [ordered]@{ document='guide'; nested=[ordered]@{ revision='r1'; flags=@('a','b') } }
+        $reordered = New-TestCommon; $reordered['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $reordered.Source = [ordered]@{ nested=[ordered]@{ flags=@('a','b'); revision='r1' }; document='guide' }
+        $noOp = Invoke-HandoffRecordCore -Kind Common -Record $reordered -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-reordered'
+        $noOp.Reason | Should -Be 'activity-refresh-without-material-change'
+        $noOp.Events.Count | Should -Be 0
+        $reordered['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $same = Invoke-HandoffRecordCore -Kind Common -Record $reordered -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-same-map'
+        $same.Status | Should -Be 'Accepted'
+        @($same.Events | Where-Object Field -eq 'Source').Count | Should -Be 0
+        $reordered.Source = [pscustomobject]@{ nested = [pscustomobject]@{ flags=@('a','b'); revision='r1' }; document='guide' }
+        $objectMap = Invoke-HandoffRecordCore -Kind Common -Record $reordered -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-object-map'
+        $objectMap.Status | Should -Be 'Accepted'
+        @($objectMap.Events | Where-Object Field -eq 'Source').Count | Should -Be 0
+
+        $changed = New-TestCommon; $changed['Last Activity At'] = '2026-09-27T00:00:00Z'
+        foreach ($source in @(
+            ([ordered]@{ document='guide'; nested=[ordered]@{ revision='r2'; flags=@('a','b') } }),
+            ([ordered]@{ document='guide'; nested=[ordered]@{ revision='r1'; flags=@('b','a') } }),
+            ([ordered]@{ Document='guide'; nested=[ordered]@{ revision='r1'; flags=@('a','b') } })
+        )) {
+            $changed.Source = $source
+            $actual = Invoke-HandoffRecordCore -Kind Common -Record $changed -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-changed-map'
+            $actual.Status | Should -Be 'Accepted'
+            @($actual.Events | Where-Object Field -eq 'Source').Count | Should -Be 1
+            @($actual.Events | Where-Object Field -eq 'Last Activity At').Count | Should -Be 1
+        }
+    }
+
     It 'rejects non-string or malformed identities in record, parent and existing records' {
         $record = New-TestBranch; $record['Authority Scope'] = @{ id='scope-a' }
         $parent = New-TestCommon; $parent['Authority Scope'] = @{ id='different' }
