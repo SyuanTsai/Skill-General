@@ -273,6 +273,11 @@ function Invoke-HandoffRecordCore {
             $nextGeneration -gt ([decimal]$previousGeneration + 1)) {
             return New-HandoffRecordResponse 'Rejected' 'generation-conflict' $null $empty $null
         }
+        if ((Get-HandoffField $previous 'Lifecycle') -ceq 'Archived' -and
+            (($lifecycle -ceq 'Active' -and $nextGeneration -ne ([decimal]$previousGeneration + 1)) -or
+             ($lifecycle -ceq 'Archived' -and $nextGeneration -ne $previousGeneration))) {
+            return New-HandoffRecordResponse 'Rejected' 'restore-generation-conflict' $null $empty $null
+        }
     }
 
     $callerOutcome = $null

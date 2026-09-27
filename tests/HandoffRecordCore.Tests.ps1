@@ -202,6 +202,27 @@ Describe 'Handoff receive and record core' {
         @($accepted.Events | Where-Object Field -eq 'Continuation Generation').Count | Should -Be 1
     }
 
+    It 'restores an archived branch only with an atomic next-generation continuation' {
+        $old = New-TestBranch; $old.Revision = 'r1'; $old.Lifecycle = 'Archived'; $old['Continuation Generation'] = 2
+        $sameGeneration = New-TestBranch; $sameGeneration['Continuation Generation'] = 2
+        $withoutFence = Invoke-HandoffRecordCore -Kind Branch -Record $sameGeneration -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-restore-without-fence'
+        $withoutFence.Status | Should -Be 'Rejected'
+        $withoutFence.Events.Count | Should -Be 0
+
+        $stillArchived = New-TestBranch; $stillArchived.Lifecycle = 'Archived'; $stillArchived['Continuation Generation'] = 3
+        $incrementOnly = Invoke-HandoffRecordCore -Kind Branch -Record $stillArchived -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-increment-without-restore'
+        $incrementOnly.Status | Should -Be 'Rejected'
+        $incrementOnly.Events.Count | Should -Be 0
+
+        $restored = New-TestBranch; $restored['Continuation Generation'] = 3
+        $accepted = Invoke-HandoffRecordCore -Kind Branch -Record $restored -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-restore-with-fence'
+        $accepted.Status | Should -Be 'Accepted'
+        @($accepted.Events | Where-Object Field -eq 'Lifecycle').Count | Should -Be 1
+        @($accepted.Events | Where-Object Field -eq 'Continuation Generation').Count | Should -Be 1
+        $accepted.Durable | Should -BeFalse
+        $accepted.ExternalCalls | Should -Be 0
+    }
+
     It 'does not refresh activity for a no-op, structural index change or archive alone' {
         $old = New-TestCommon; $old.Revision = 'r1'; $old['Last Activity At'] = '2026-09-20T00:00:00Z'
         foreach ($change in @('none', 'index', 'archive')) {
