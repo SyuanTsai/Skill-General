@@ -650,14 +650,27 @@ try {
     $candidateRoot = [IO.Path]::GetFullPath([string]$env:STANDARD_VALIDATION_CANDIDATE_ROOT)
     if ($Mode -eq 'skill-validator') {
         Assert-FileIdentity -Path ([string]$toolchain.centralRunnerPath) -Sha256 ([string]$toolchain.centralRunnerSha256) -Context 'central validation runner'
-        $sharedReportFunction = & {
+        $sharedReportFunctions = & {
             param($RunnerPath, $CandidateRoot, $ToolchainPath)
             . $RunnerPath -DefineFunctionsOnly -CandidateRoot $CandidateRoot -AdapterPath $ToolchainPath `
                 -ArtifactsRoot ([IO.Path]::GetFullPath((Get-Location).Path)) -SourceRepository 'https://example.test' `
                 -SourceRevision ('0' * 40) -BaseRevision ('0' * 40)
-            (Get-Command Assert-StandardValidationSkillValidatorReport -CommandType Function).ScriptBlock
+            $exports = @{}
+            foreach ($name in @(
+                'Get-StandardValidationFullPath',
+                'Get-StandardValidationCaseVariant',
+                'Get-StandardValidationPathCaseBehavior',
+                'Get-StandardValidationPathComparison',
+                'Test-StandardValidationSameResolvedPath',
+                'Assert-StandardValidationSkillValidatorReport'
+            )) {
+                $exports[$name] = (Get-Command $name -CommandType Function -ErrorAction Stop).ScriptBlock
+            }
+            return $exports
         } ([string]$toolchain.centralRunnerPath) $candidateRoot $ToolchainPath
-        Set-Item -Path function:Assert-StandardValidationSkillValidatorReport -Value $sharedReportFunction
+        foreach ($name in $sharedReportFunctions.Keys) {
+            Set-Item -Path "function:$name" -Value $sharedReportFunctions[$name]
+        }
     }
     $activeSkills = Get-ActiveSkills
     $candidateId = [string]$env:STANDARD_VALIDATION_CANDIDATE_ID
