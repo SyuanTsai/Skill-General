@@ -207,7 +207,9 @@ function Invoke-HandoffRecordCore {
         if ([string](Get-HandoffField $Record 'Fork Point') -cne $previousForkPoint) {
             return New-HandoffRecordResponse 'Rejected' 'fork-point-conflict' $null $empty $null
         }
-        if ((Get-HandoffField $Record 'Continuation Generation') -lt $previousGeneration) {
+        $nextGeneration = Get-HandoffField $Record 'Continuation Generation'
+        if ($nextGeneration -lt $previousGeneration -or
+            $nextGeneration -gt ([decimal]$previousGeneration + 1)) {
             return New-HandoffRecordResponse 'Rejected' 'generation-conflict' $null $empty $null
         }
     }

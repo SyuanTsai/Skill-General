@@ -190,6 +190,12 @@ Describe 'Handoff receive and record core' {
         $staleResult.Record | Should -BeNullOrEmpty
         $staleResult.Events.Count | Should -Be 0
 
+        $skipped = New-TestBranch; $skipped['Continuation Generation'] = 4
+        $skippedResult = Invoke-HandoffRecordCore -Kind Branch -Record $skipped -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-skip-generation'
+        $skippedResult.Status | Should -Be 'Rejected'
+        $skippedResult.Reason | Should -Be 'generation-conflict'
+        $skippedResult.Events.Count | Should -Be 0
+
         $continued = New-TestBranch; $continued['Continuation Generation'] = 3
         $accepted = Invoke-HandoffRecordCore -Kind Branch -Record $continued -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-next-generation'
         $accepted.Status | Should -Be 'Accepted'
