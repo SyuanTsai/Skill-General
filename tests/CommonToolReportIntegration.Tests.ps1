@@ -66,4 +66,19 @@ Describe 'General child uses central package tool report rules' {
         $envelope.decision | Should -Be 'PASS'
         $envelope.candidateIdentity | Should -Be ('a' * 64)
     }
+
+    # Scenario: the same report is supplied with a forged central runner digest.
+    # Purpose: a candidate cannot substitute an unverified shared validator and still receive PASS.
+    It 'InterT30_rejects_a_mismatched_central_runner_before_tool_execution' -Skip:([string]::IsNullOrWhiteSpace($env:SYP154_CANDIDATE_AUTHORITY_ROOT)) {
+        $reportPath = Join-Path $script:testRoot 'report.json'
+        [IO.File]::WriteAllText($reportPath, (@{ skill_dir = $script:skillRoot; passed = $true; errors = 0; warnings = 0; results = @(@{ level = 'pass'; file = 'SKILL.md' }) } | ConvertTo-Json -Depth 10 -Compress))
+        $env:SYP154_TEST_TOOL_REPORT = $reportPath
+        $toolchain = Get-Content -LiteralPath $script:toolchainPath -Raw | ConvertFrom-Json
+        $toolchain.centralRunnerSha256 = '0' * 64
+        [IO.File]::WriteAllText($script:toolchainPath, ($toolchain | ConvertTo-Json -Compress))
+        $forgedToolchainHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $script:toolchainPath).Hash.ToLowerInvariant()
+        $output = & $script:pwshPath -NoProfile -NonInteractive -File $script:childPath -Mode skill-validator -ToolchainPath $script:toolchainPath -ToolchainSha256 $forgedToolchainHash 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ($output -join "`n") | Should -Match 'central validation runner changed or is missing'
+    }
 }
