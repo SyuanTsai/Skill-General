@@ -561,19 +561,10 @@ function Invoke-NativeJson {
 }
 function Assert-SkillValidatorReport {
     param([Parameter(Mandatory = $true)] $Report, [Parameter(Mandatory = $true)][string] $SkillRoot, [Parameter(Mandatory = $true)][string[]] $Inventory, [Parameter(Mandatory = $true)][string] $SkillId)
-    $skillDirectory = [string](Get-Property -Object $Report -Name 'skill_dir' -Context 'skill-validator report')
-    $passed = Get-Property -Object $Report -Name 'passed' -Context 'skill-validator report'
-    $errors = Get-Property -Object $Report -Name 'errors' -Context 'skill-validator report'
-    $warnings = Get-Property -Object $Report -Name 'warnings' -Context 'skill-validator report'
-    $results = @(Get-Property -Object $Report -Name 'results' -Context 'skill-validator report')
-    if (-not (Test-PathEqual -Left $skillDirectory -Right $SkillRoot) -or $passed -isnot [bool] -or -not $passed -or
-        [int64]$errors -ne 0 -or [int64]$warnings -ne 0 -or $results.Count -eq 0) {
-        throw "skill-validator did not produce a clean candidate-bound report for '$SkillId'."
-    }
+    $results = @(Assert-StandardValidationSkillValidatorReport -Report $Report -SkillRoot $SkillRoot -SkillId $SkillId)
     $findings = @()
     foreach ($result in $results) {
-        $level = [string](Get-Property -Object $result -Name 'level' -Context 'skill-validator result').ToLowerInvariant()
-        if ($level -notin @('pass', 'info')) { throw "skill-validator returned a blocking or malformed result for '$SkillId'." }
+        $level = [string](Get-Property -Object $result -Name 'level' -Context 'skill-validator result')
         if ($null -ne $result.PSObject.Properties['file']) {
             [void](Resolve-ReportedFilePath -Value $result.file -SkillRoot $SkillRoot -ExpectedPaths $Inventory -Context 'skill-validator result file')
         }
@@ -657,6 +648,17 @@ try {
     $toolchain = Read-Json -Path $ToolchainPath -Context 'run-owned validation toolchain'
     Assert-FileIdentity -Path $ToolchainPath -Sha256 $ToolchainSha256 -Context 'run-owned validation toolchain'
     $candidateRoot = [IO.Path]::GetFullPath([string]$env:STANDARD_VALIDATION_CANDIDATE_ROOT)
+    if ($Mode -eq 'skill-validator') {
+        Assert-FileIdentity -Path ([string]$toolchain.centralRunnerPath) -Sha256 ([string]$toolchain.centralRunnerSha256) -Context 'central validation runner'
+        $sharedReportFunction = & {
+            param($RunnerPath, $CandidateRoot, $ToolchainPath)
+            . $RunnerPath -DefineFunctionsOnly -CandidateRoot $CandidateRoot -AdapterPath $ToolchainPath `
+                -ArtifactsRoot ([IO.Path]::GetFullPath((Get-Location).Path)) -SourceRepository 'https://example.test' `
+                -SourceRevision ('0' * 40) -BaseRevision ('0' * 40)
+            (Get-Command Assert-StandardValidationSkillValidatorReport -CommandType Function).ScriptBlock
+        } ([string]$toolchain.centralRunnerPath) $candidateRoot $ToolchainPath
+        Set-Item -Path function:Assert-StandardValidationSkillValidatorReport -Value $sharedReportFunction
+    }
     $activeSkills = Get-ActiveSkills
     $candidateId = [string]$env:STANDARD_VALIDATION_CANDIDATE_ID
     if ([string]::IsNullOrWhiteSpace($candidateId)) { throw 'Central runner did not provide a candidate identity.' }
@@ -1153,6 +1155,8 @@ try {
     Remove-Item -LiteralPath 'Env:GITHUB_TOKEN', 'Env:GH_TOKEN' -Force -ErrorAction SilentlyContinue
 
     $toolchain = [ordered]@{
+        centralRunnerPath = [IO.Path]::GetFullPath($centralRunnerPath)
+        centralRunnerSha256 = Get-FileSha256 -Path $centralRunnerPath
         upstreamAdapterValidatorPath = [IO.Path]::GetFullPath($upstreamAdapterPath)
         upstreamAdapterValidatorSha256 = Get-FileSha256 -Path $upstreamAdapterPath
         upstreamPolicyPath = [IO.Path]::GetFullPath($upstreamPolicyPath)
