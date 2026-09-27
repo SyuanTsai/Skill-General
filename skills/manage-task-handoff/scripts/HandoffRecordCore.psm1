@@ -159,6 +159,21 @@ function Invoke-HandoffRecordCore {
         $workState -isnot [string] -or $workState -cnotin @('Running', 'Awaiting Review', 'Interrupted', 'Blocked', 'Failed')) {
         return New-HandoffRecordResponse 'Rejected' 'invalid-state' $null $empty $null
     }
+    if ($Kind -eq 'Common' -and $lifecycle -ceq 'Archived') {
+        $activeBranchIndex = Get-HandoffField $Record 'Active Branches'
+        if ($null -ne $activeBranchIndex -and $activeBranchIndex.Count -gt 0) {
+            return New-HandoffRecordResponse 'Rejected' 'active-branch-protects-common' $null $empty $null
+        }
+        foreach ($existing in $ExistingRecords) {
+            $existingBranch = Get-HandoffField $existing 'Branch ID'
+            if ($existingBranch -is [string] -and -not [string]::IsNullOrWhiteSpace($existingBranch) -and
+                (Get-HandoffField $existing 'Authority Scope') -ceq (Get-HandoffField $Record 'Authority Scope') -and
+                (Get-HandoffField $existing 'Task Key') -ceq (Get-HandoffField $Record 'Task Key') -and
+                (Get-HandoffField $existing 'Lifecycle') -cne 'Archived') {
+                return New-HandoffRecordResponse 'Rejected' 'active-branch-protects-common' $null $empty $null
+            }
+        }
+    }
     if ($Kind -eq 'Branch') {
         $generation = Get-HandoffField $Record 'Continuation Generation'
         if ($generation -isnot [int] -and $generation -isnot [long]) {
@@ -254,7 +269,26 @@ function Invoke-HandoffRecordCore {
             @('Continuation Generation', 'Current', 'Source', 'Work State',
               'Candidate Conclusion', 'Applicability Scope', 'Branch Outcome', 'Keep Active Until')
         }
-        if (@($events | Where-Object { $materialFields -ccontains $_.Field }).Count -eq 0) {
+        $materialChange = @($events | Where-Object { $materialFields -ccontains $_.Field }).Count -gt 0
+        $activeBranchActivity = $false
+        if (-not $materialChange -and $Kind -eq 'Common') {
+            $activity = Get-HandoffField $Record 'Last Activity At'
+            $activeBranches = Get-HandoffField $Record 'Active Branches'
+            if ($activity -is [string] -and -not [string]::IsNullOrWhiteSpace($activity)) {
+                foreach ($existing in $ExistingRecords) {
+                    $existingBranch = Get-HandoffField $existing 'Branch ID'
+                    if ($existingBranch -is [string] -and $activeBranches -ccontains $existingBranch -and
+                        (Get-HandoffField $existing 'Authority Scope') -ceq $scope -and
+                        (Get-HandoffField $existing 'Task Key') -ceq $task -and
+                        (Get-HandoffField $existing 'Lifecycle') -ceq 'Active' -and
+                        (Get-HandoffField $existing 'Last Activity At') -ceq $activity) {
+                        $activeBranchActivity = $true
+                        break
+                    }
+                }
+            }
+        }
+        if (-not $materialChange -and -not $activeBranchActivity) {
             return New-HandoffRecordResponse 'Rejected' 'activity-refresh-without-material-change' $null $empty $null
         }
     }

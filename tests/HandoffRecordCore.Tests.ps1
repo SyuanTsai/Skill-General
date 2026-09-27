@@ -227,6 +227,34 @@ Describe 'Handoff receive and record core' {
         $branchRejected.Reason | Should -Be 'activity-refresh-without-material-change'
         $continued = New-TestBranch; $continued['Continuation Generation'] = 1; $continued['Last Activity At'] = '2026-09-27T00:00:00Z'
         (Invoke-HandoffRecordCore -Kind Branch -Record $continued -ExistingRecords @($branchOld) -ExpectedRevision 'r2' -OperationId 'op-branch-continue').Status | Should -Be 'Accepted'
+
+        $commonOld = New-TestCommon; $commonOld.Revision = 'r3'; $commonOld['Active Branches'] = @('branch-a'); $commonOld['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $commonNew = New-TestCommon; $commonNew['Active Branches'] = @('branch-a'); $commonNew['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $activeBranch = New-TestBranch; $activeBranch['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $propagated = Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $activeBranch) -ExpectedRevision 'r3' -OperationId 'op-branch-activity'
+        $propagated.Status | Should -Be 'Accepted'
+        @($propagated.Events | Where-Object Field -eq 'Last Activity At').Count | Should -Be 1
+
+        $foreign = New-TestBranch; $foreign['Task Key'] = 'other-task'; $foreign['Last Activity At'] = '2026-09-27T00:00:00Z'
+        (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $foreign) -ExpectedRevision 'r3' -OperationId 'op-foreign').Reason | Should -Be 'activity-refresh-without-material-change'
+        $archived = New-TestBranch; $archived.Lifecycle = 'Archived'; $archived['Last Activity At'] = '2026-09-27T00:00:00Z'
+        (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $archived) -ExpectedRevision 'r3' -OperationId 'op-archived').Reason | Should -Be 'activity-refresh-without-material-change'
+    }
+
+    It 'does not archive a common handoff while its active branch index is populated' {
+        $record = New-TestCommon; $record.Lifecycle = 'Archived'; $record['Active Branches'] = @('branch-a')
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record $record -OperationId 'op-archive'
+        $actual.Status | Should -Be 'Rejected'
+        $actual.Reason | Should -Be 'active-branch-protects-common'
+        $actual.Record | Should -BeNullOrEmpty
+        $actual.Events.Count | Should -Be 0
+
+        $record['Active Branches'] = @()
+        (Invoke-HandoffRecordCore -Kind Common -Record $record -OperationId 'op-empty-index').Status | Should -Be 'Accepted'
+        $activePeer = New-TestBranch
+        (Invoke-HandoffRecordCore -Kind Common -Record $record -ExistingRecords @($activePeer) -OperationId 'op-stale-index').Reason | Should -Be 'active-branch-protects-common'
+        $activePeer.Lifecycle = 'Archived'
+        (Invoke-HandoffRecordCore -Kind Common -Record $record -ExistingRecords @($activePeer) -OperationId 'op-archived-peer').Status | Should -Be 'Accepted'
     }
 
     It 'rejects non-string or malformed identities in record, parent and existing records' {
