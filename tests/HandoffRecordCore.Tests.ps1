@@ -3,6 +3,7 @@
 Describe 'Handoff receive and record core' {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot '../skills/manage-task-handoff/scripts/HandoffRecordCore.psm1') -Force
+        . (Join-Path $PSScriptRoot 'helpers/ProviderAgnosticMemoryTargetAdapter.ps1')
         function New-TestCommon {
             return @{ 'Authority Scope'='scope-a'; 'Task Key'='task-1'; Intent='finish'; Scope='test'; Current='same'; Source='caller'; Lifecycle='Active'; 'Work State'='Running' }
         }
@@ -27,6 +28,60 @@ Describe 'Handoff receive and record core' {
             $actual.ExternalCalls | Should -Be 0
             $actual.Durable | Should -BeFalse
             $actual.Events.Count | Should -BeGreaterThan 0
+        }
+    }
+
+    It 'CoreT12 crosses caller resource and optional memory target without authorizing content I/O' {
+        $target = [pscustomobject]@{
+            targetId = 'memory-fixture'; selectionScope = 'task'; resource = 'fixture-store'; location = 'entry-1'
+        }
+        $binding = [pscustomobject]@{
+            targetId = 'memory-fixture'; selectionScope = 'task'; resource = 'fixture-store'; location = 'entry-1'
+            adapterId = 'fixture-adapter'
+        }
+        foreach ($sourceResourceSelected in @($false, $true)) {
+            foreach ($memoryTargetSelected in @($false, $true)) {
+                $source = if ($sourceResourceSelected) {
+                    [pscustomobject]@{ Kind = 'external-resource'; Key = 'resource-42' }
+                } else { 'caller' }
+                $record = [pscustomobject]@{
+                    'Authority Scope' = 'scope-a'; 'Task Key' = 'task-1'; Intent = 'finish'; Scope = 'test'
+                    Current = 'candidate'; Source = $source; Lifecycle = 'Active'; 'Work State' = 'Running'
+                }
+                $callerStatus = if ($memoryTargetSelected) { 'denied' } else { 'unknown' }
+                $actual = Invoke-HandoffRecordCore -Kind Common -Record $record `
+                    -OperationId "op-$sourceResourceSelected-$memoryTargetSelected" `
+                    -CallerResult ([pscustomobject]@{ Status = $callerStatus })
+                $case = "source=$sourceResourceSelected target=$memoryTargetSelected"
+                $actual.Status | Should -Be 'Accepted' -Because $case
+                $actual.CallerOutcome | Should -Be $callerStatus -Because $case
+                $actual.ExternalCalls | Should -Be 0 -Because $case
+                $actual.Durable | Should -BeFalse -Because $case
+                @($actual.Events | Where-Object Status -cne 'proposed').Count | Should -Be 0 -Because $case
+                if ($sourceResourceSelected) {
+                    $actual.Record.Source.Key | Should -Be 'resource-42' -Because $case
+                } else {
+                    $actual.Record.Source | Should -Be 'caller' -Because $case
+                }
+
+                $adapter = New-ProviderAgnosticMemoryAdapterDouble -Spec ([pscustomobject]@{
+                    adapterId = 'fixture-adapter'
+                })
+                if ($memoryTargetSelected) {
+                    $selection = Invoke-ProviderAgnosticMemoryTargetSelection -Target $target `
+                        -Bindings @($binding) -Adapters @($adapter) -Content $actual.Record
+                    $selection.SelectionStatus | Should -Be 'selected' -Because $case
+                    $selection.SelectedAdapterId | Should -Be 'fixture-adapter' -Because $case
+                    @($selection.Calls) | Should -Be @('selection') -Because $case
+                    $selection.Durable | Should -BeFalse -Because $case
+                    $selection.ContentRead | Should -BeFalse -Because $case
+                    $selection.ContentWrite | Should -BeFalse -Because $case
+                    $adapter.ActivationRequirementsInspected | Should -BeFalse -Because $case
+                    $adapter.CapabilityInspected | Should -BeFalse -Because $case
+                } else {
+                    @($adapter.Calls).Count | Should -Be 0 -Because $case
+                }
+            }
         }
     }
 
