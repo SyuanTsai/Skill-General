@@ -244,6 +244,18 @@ function Invoke-HandoffRecordCore {
             }
         }
     )
+    if ($null -ne $previous -and @($events | Where-Object { $_.Field -ceq 'Last Activity At' }).Count -gt 0) {
+        $materialFields = if ($Kind -eq 'Common') {
+            @('Intent', 'Scope', 'Current', 'Source', 'Work State', 'Integrated Decisions',
+              'Decision Branch Bindings', 'Conflict', 'Keep Active Until')
+        } else {
+            @('Continuation Generation', 'Current', 'Source', 'Work State',
+              'Candidate Conclusion', 'Applicability Scope', 'Branch Outcome', 'Keep Active Until')
+        }
+        if (@($events | Where-Object { $materialFields -ccontains $_.Field }).Count -eq 0) {
+            return New-HandoffRecordResponse 'Rejected' 'activity-refresh-without-material-change' $null $empty $null
+        }
+    }
     return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome
 }
 

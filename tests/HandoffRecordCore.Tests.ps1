@@ -196,6 +196,33 @@ Describe 'Handoff receive and record core' {
         @($accepted.Events | Where-Object Field -eq 'Continuation Generation').Count | Should -Be 1
     }
 
+    It 'does not refresh activity for a no-op, structural index change or archive alone' {
+        $old = New-TestCommon; $old.Revision = 'r1'; $old['Last Activity At'] = '2026-09-20T00:00:00Z'
+        foreach ($change in @('none', 'index', 'archive')) {
+            $record = New-TestCommon
+            $record['Last Activity At'] = '2026-09-27T00:00:00Z'
+            if ($change -eq 'index') { $record['Active Branches'] = @('branch-a') }
+            if ($change -eq 'archive') { $record.Lifecycle = 'Archived' }
+            $actual = Invoke-HandoffRecordCore -Kind Common -Record $record -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId "op-$change"
+            $actual.Status | Should -Be 'Rejected' -Because $change
+            $actual.Reason | Should -Be 'activity-refresh-without-material-change' -Because $change
+            $actual.Record | Should -BeNullOrEmpty -Because $change
+            $actual.Events.Count | Should -Be 0 -Because $change
+        }
+        $material = New-TestCommon; $material.Current = 'new progress'; $material['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $accepted = Invoke-HandoffRecordCore -Kind Common -Record $material -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-material'
+        $accepted.Status | Should -Be 'Accepted'
+        @($accepted.Events | Where-Object Field -eq 'Current').Count | Should -Be 1
+        @($accepted.Events | Where-Object Field -eq 'Last Activity At').Count | Should -Be 1
+
+        $branchOld = New-TestBranch; $branchOld.Revision = 'r2'; $branchOld['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $branchNoop = New-TestBranch; $branchNoop['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $branchRejected = Invoke-HandoffRecordCore -Kind Branch -Record $branchNoop -ExistingRecords @($branchOld) -ExpectedRevision 'r2' -OperationId 'op-branch-noop'
+        $branchRejected.Reason | Should -Be 'activity-refresh-without-material-change'
+        $continued = New-TestBranch; $continued['Continuation Generation'] = 1; $continued['Last Activity At'] = '2026-09-27T00:00:00Z'
+        (Invoke-HandoffRecordCore -Kind Branch -Record $continued -ExistingRecords @($branchOld) -ExpectedRevision 'r2' -OperationId 'op-branch-continue').Status | Should -Be 'Accepted'
+    }
+
     It 'rejects non-string or malformed identities in record, parent and existing records' {
         $record = New-TestBranch; $record['Authority Scope'] = @{ id='scope-a' }
         $parent = New-TestCommon; $parent['Authority Scope'] = @{ id='different' }
