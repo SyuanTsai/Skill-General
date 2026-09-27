@@ -297,6 +297,12 @@ Describe 'Handoff receive and record core' {
         $objectMap.Status | Should -Be 'Accepted'
         @($objectMap.Events | Where-Object Field -eq 'Source').Count | Should -Be 0
 
+        $numericOld = New-TestCommon; $numericOld.Revision = 'r2'; $numericOld.Current = @{ count = [int]1 }
+        $numericNew = New-TestCommon; $numericNew.Current = @{ count = [long]1 }
+        $sameJsonNumber = Invoke-HandoffRecordCore -Kind Common -Record $numericNew -ExistingRecords @($numericOld) -ExpectedRevision 'r2' -OperationId 'op-same-number'
+        $sameJsonNumber.Status | Should -Be 'Accepted'
+        @($sameJsonNumber.Events | Where-Object Field -eq 'Current').Count | Should -Be 0
+
         $changed = New-TestCommon; $changed['Last Activity At'] = '2026-09-27T00:00:00Z'
         foreach ($source in @(
             ([ordered]@{ document='guide'; nested=[ordered]@{ revision='r2'; flags=@('a','b') } }),

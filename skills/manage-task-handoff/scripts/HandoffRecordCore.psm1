@@ -117,10 +117,11 @@ function Test-HandoffSamePlainData {
         }
         return $true
     }
-    if ($Left.GetType() -ne $Right.GetType()) { return $false }
-    if ($Left -is [string]) { return [string]::Equals($Left, $Right, [StringComparison]::Ordinal) }
-    if ($Left -is [ValueType]) { return $Left.Equals($Right) }
-    return $false
+    if (($Left -isnot [string] -and $Left -isnot [ValueType]) -or
+        ($Right -isnot [string] -and $Right -isnot [ValueType])) { return $false }
+    # Preserve the previous JSON value semantics for supported scalar data.
+    return (ConvertTo-Json -InputObject $Left -Depth 20 -Compress) -ceq
+        (ConvertTo-Json -InputObject $Right -Depth 20 -Compress)
 }
 
 function Invoke-HandoffRecordCore {
