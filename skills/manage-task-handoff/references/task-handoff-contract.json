@@ -35,9 +35,10 @@
     "requiresOwnerOrOperator": false,
     "requiresMandatoryLocalBackend": false,
     "callsExternalConnector": false,
+    "identityFieldsAreNonEmptyScalarStrings": true,
     "outputs": ["proposed-record", "proposed-field-change-intents", "caller-reported-outcome"],
     "durableClaimByCore": false,
-    "validationFailures": ["invalid-input-shape", "missing-required-field", "sensitive-field", "invalid-state", "invalid-generation", "duplicate-identity", "invalid-association", "revision-conflict", "invalid-caller-result"],
+    "validationFailures": ["invalid-input-shape", "missing-required-field", "sensitive-field", "invalid-identity", "invalid-record-kind", "invalid-state", "invalid-generation", "duplicate-identity", "invalid-association", "revision-conflict", "invalid-caller-result"],
     "externalHandlingOwnedByCaller": true,
     "existingAdapterMappingOptional": true
   },

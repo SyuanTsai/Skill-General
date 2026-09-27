@@ -4,10 +4,10 @@
 function Get-HandoffField {
     param($Value, [string]$Name)
     if ($null -eq $Value) { return $null }
-    if ($Value -is [System.Collections.IDictionary]) { return $Value[$Name] }
+    if ($Value -is [System.Collections.IDictionary]) { return ,$Value[$Name] }
     $property = $Value.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
-    return $property.Value
+    return ,$property.Value
 }
 
 function New-HandoffRecordResponse {
@@ -32,10 +32,26 @@ function Test-HandoffSensitiveField {
     }
     $names = if ($Value -is [System.Collections.IDictionary]) { @($Value.Keys) } else { @($Value.PSObject.Properties.Name) }
     foreach ($name in $names) {
-        if ([string]$name -in @('secret', 'password', 'credential', 'apiKey', 'accessToken', 'refreshToken', 'privateKey')) { return $true }
+        $normalized = ([string]$name -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
+        if ($normalized -match '(secret|password|credential|token|authorization|verificationcode|privatekey|apikey)') { return $true }
         if (Test-HandoffSensitiveField (Get-HandoffField $Value ([string]$name)) ($Depth + 1)) { return $true }
     }
     return $false
+}
+
+function Test-HandoffIdentity {
+    param($Value, [bool]$RequireBranch)
+    foreach ($field in @('Authority Scope', 'Task Key')) {
+        $part = $null
+        if ($Value -is [System.Collections.IDictionary]) { $part = $Value[$field] }
+        else { $part = $Value.PSObject.Properties[$field].Value }
+        if ($part -isnot [string] -or [string]::IsNullOrWhiteSpace($part)) { return $false }
+    }
+    $branch = $null
+    if ($Value -is [System.Collections.IDictionary]) { $branch = $Value['Branch ID'] }
+    else { $branch = $Value.PSObject.Properties['Branch ID'].Value }
+    if ($RequireBranch) { return ($branch -is [string] -and -not [string]::IsNullOrWhiteSpace($branch)) }
+    return ($null -eq $branch)
 }
 
 function Test-HandoffPlainData {
@@ -95,11 +111,52 @@ function Invoke-HandoffRecordCore {
             return New-HandoffRecordResponse 'Rejected' 'missing-required-field' $null $empty $null
         }
     }
-    if (Test-HandoffSensitiveField $Record) {
+    if ((Test-HandoffSensitiveField $Record) -or
+        (Test-HandoffSensitiveField $ExistingRecords) -or
+        (Test-HandoffSensitiveField $ParentRecord) -or
+        (Test-HandoffSensitiveField $CallerResult)) {
         return New-HandoffRecordResponse 'Rejected' 'sensitive-field' $null $empty $null
     }
-    if ((Get-HandoffField $Record 'Lifecycle') -cnotin @('Active', 'Archived') -or
-        (Get-HandoffField $Record 'Work State') -cnotin @('Running', 'Awaiting Review', 'Interrupted', 'Blocked', 'Failed')) {
+    if (-not (Test-HandoffIdentity $Record ($Kind -eq 'Branch')) -or
+        ($null -ne $ParentRecord -and -not (Test-HandoffIdentity $ParentRecord $false))) {
+        return New-HandoffRecordResponse 'Rejected' 'invalid-identity' $null $empty $null
+    }
+    foreach ($existing in $ExistingRecords) {
+        $existingBranch = $null
+        if ($existing -is [System.Collections.IDictionary]) { $existingBranch = $existing['Branch ID'] }
+        else { $existingBranch = $existing.PSObject.Properties['Branch ID'].Value }
+        if ($null -ne $existingBranch -and $existingBranch -isnot [string]) {
+            return New-HandoffRecordResponse 'Rejected' 'invalid-identity' $null $empty $null
+        }
+        if (-not (Test-HandoffIdentity $existing (-not [string]::IsNullOrWhiteSpace($existingBranch)))) {
+            return New-HandoffRecordResponse 'Rejected' 'invalid-identity' $null $empty $null
+        }
+    }
+    if ($Kind -eq 'Common') {
+        foreach ($field in @('Fork Point', 'Continuation Generation', 'Candidate Conclusion', 'Applicability Scope', 'Branch Outcome')) {
+            if ($null -ne (Get-HandoffField $Record $field)) {
+                return New-HandoffRecordResponse 'Rejected' 'invalid-record-kind' $null $empty $null
+            }
+        }
+        $conflict = Get-HandoffField $Record 'Conflict'
+        if ($null -ne $conflict -and ($conflict -isnot [string] -or $conflict -cne 'Conflict')) {
+            return New-HandoffRecordResponse 'Rejected' 'invalid-state' $null $empty $null
+        }
+    } else {
+        foreach ($field in @('Intent', 'Scope', 'Active Branches', 'Fork Baselines', 'Integrated Decisions', 'Decision Branch Bindings', 'Conflict')) {
+            if ($null -ne (Get-HandoffField $Record $field)) {
+                return New-HandoffRecordResponse 'Rejected' 'invalid-record-kind' $null $empty $null
+            }
+        }
+        $outcome = Get-HandoffField $Record 'Branch Outcome'
+        if ($null -ne $outcome -and ($outcome -isnot [string] -or $outcome -cnotin @('Selected', 'Partially Selected', 'Superseded'))) {
+            return New-HandoffRecordResponse 'Rejected' 'invalid-state' $null $empty $null
+        }
+    }
+    $lifecycle = Get-HandoffField $Record 'Lifecycle'
+    $workState = Get-HandoffField $Record 'Work State'
+    if ($lifecycle -isnot [string] -or $lifecycle -cnotin @('Active', 'Archived') -or
+        $workState -isnot [string] -or $workState -cnotin @('Running', 'Awaiting Review', 'Interrupted', 'Blocked', 'Failed')) {
         return New-HandoffRecordResponse 'Rejected' 'invalid-state' $null $empty $null
     }
     if ($Kind -eq 'Branch') {
@@ -143,18 +200,23 @@ function Invoke-HandoffRecordCore {
 
     $callerOutcome = $null
     if ($null -ne $CallerResult) {
-        $callerOutcome = [string](Get-HandoffField $CallerResult 'Status')
-        if ($callerOutcome -cnotin @('denied', 'partial', 'unknown', 'readback-mismatch', 'readback-matched')) {
+        $callerOutcome = Get-HandoffField $CallerResult 'Status'
+        if ($callerOutcome -isnot [string] -or $callerOutcome -cnotin @('denied', 'partial', 'unknown', 'readback-mismatch', 'readback-matched')) {
             return New-HandoffRecordResponse 'Rejected' 'invalid-caller-result' $null $empty $null
         }
     }
 
+    $mutable = if ($Kind -eq 'Common') {
+        @('Intent', 'Scope', 'Current', 'Source', 'Lifecycle', 'Work State', 'Active Branches', 'Fork Baselines', 'Integrated Decisions', 'Decision Branch Bindings', 'Conflict', 'Keep Active Until', 'Last Activity At')
+    } else {
+        @('Continuation Generation', 'Current', 'Source', 'Lifecycle', 'Work State', 'Candidate Conclusion', 'Applicability Scope', 'Branch Outcome', 'Keep Active Until', 'Last Activity At')
+    }
     $events = @(
-        foreach ($field in $required) {
-            if ($field -in @('Authority Scope', 'Task Key', 'Branch ID', 'Fork Point', 'Continuation Generation')) { continue }
+        foreach ($field in $mutable) {
             $old = Get-HandoffField $previous $field
             $new = Get-HandoffField $Record $field
-            if (($null -eq $previous) -or ((ConvertTo-Json -InputObject $old -Depth 20 -Compress) -cne (ConvertTo-Json -InputObject $new -Depth 20 -Compress))) {
+            if ($null -eq $old -and $null -eq $new) { continue }
+            if ((ConvertTo-Json -InputObject $old -Depth 20 -Compress) -cne (ConvertTo-Json -InputObject $new -Depth 20 -Compress)) {
                 [pscustomobject]@{
                     'Authority Scope' = $scope
                     'Task Key' = $task
