@@ -27,7 +27,23 @@
     "defaultRiskRecheckMinutes": 5,
     "riskRecheckMinutesConfigurable": true
   },
+  "recordInterface": {
+    "entryPoint": "scripts/HandoffRecordCore.psm1:Invoke-HandoffRecordCore",
+    "acceptsCallerSuppliedSources": true,
+    "sourceAllowlist": null,
+    "requiresExternalTarget": false,
+    "requiresOwnerOrOperator": false,
+    "requiresMandatoryLocalBackend": false,
+    "callsExternalConnector": false,
+    "identityFieldsAreNonEmptyScalarStrings": true,
+    "outputs": ["proposed-record", "proposed-field-change-intents", "caller-reported-outcome"],
+    "durableClaimByCore": false,
+    "validationFailures": ["invalid-input-shape", "missing-required-field", "sensitive-field", "invalid-identity", "invalid-record-kind", "invalid-state", "invalid-generation", "duplicate-identity", "invalid-association", "revision-conflict", "invalid-caller-result"],
+    "externalHandlingOwnedByCaller": true,
+    "existingAdapterMappingOptional": true
+  },
   "storageSelection": {
+    "appliesOnlyToOptionalExternalAdapterIO": true,
     "precedence": [
       "clear-current-explicit-user-selection-for-declared-scope",
       "one-unambiguous-trusted-host-or-project-adopter-setting",
@@ -85,6 +101,7 @@
     }
   },
   "memoryTargetSelection": {
+    "appliesOnlyToOptionalExternalAdapterIO": true,
     "userSelectedMemoryTarget": true,
     "coreIdentityOpaque": true,
     "coreIdentityFields": ["Target ID", "Selection Scope", "Resource", "Location"],
