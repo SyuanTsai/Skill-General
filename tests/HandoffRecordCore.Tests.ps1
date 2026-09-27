@@ -237,6 +237,10 @@ Describe 'Handoff receive and record core' {
 
         $foreign = New-TestBranch; $foreign['Task Key'] = 'other-task'; $foreign['Last Activity At'] = '2026-09-27T00:00:00Z'
         (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $foreign) -ExpectedRevision 'r3' -OperationId 'op-foreign').Reason | Should -Be 'activity-refresh-without-material-change'
+        $foreign['Task Key'] = 'task-1'; $foreign['Authority Scope'] = 'other-scope'
+        (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $foreign) -ExpectedRevision 'r3' -OperationId 'op-cross-scope').Reason | Should -Be 'activity-refresh-without-material-change'
+        $foreign['Authority Scope'] = 'scope-a'; $foreign['Branch ID'] = 'not-indexed'
+        (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $foreign) -ExpectedRevision 'r3' -OperationId 'op-not-indexed').Reason | Should -Be 'activity-refresh-without-material-change'
         $archived = New-TestBranch; $archived.Lifecycle = 'Archived'; $archived['Last Activity At'] = '2026-09-27T00:00:00Z'
         (Invoke-HandoffRecordCore -Kind Common -Record $commonNew -ExistingRecords @($commonOld, $archived) -ExpectedRevision 'r3' -OperationId 'op-archived').Reason | Should -Be 'activity-refresh-without-material-change'
     }
