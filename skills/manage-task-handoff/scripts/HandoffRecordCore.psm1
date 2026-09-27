@@ -288,7 +288,12 @@ function Invoke-HandoffRecordCore {
                 }
             }
         }
-        if (-not $materialChange -and -not $activeBranchActivity) {
+        # The core can represent a restore, but only the caller or selected adapter
+        # can establish explicit user intent and authorize a durable state change.
+        $commonRestoreProposal = $Kind -eq 'Common' -and
+            (Get-HandoffField $previous 'Lifecycle') -ceq 'Archived' -and $lifecycle -ceq 'Active' -and
+            @($events | Where-Object { $_.Field -ceq 'Lifecycle' }).Count -eq 1
+        if (-not $materialChange -and -not $activeBranchActivity -and -not $commonRestoreProposal) {
             return New-HandoffRecordResponse 'Rejected' 'activity-refresh-without-material-change' $null $empty $null
         }
     }

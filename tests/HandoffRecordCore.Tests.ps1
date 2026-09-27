@@ -261,6 +261,25 @@ Describe 'Handoff receive and record core' {
         (Invoke-HandoffRecordCore -Kind Common -Record $record -ExistingRecords @($activePeer) -OperationId 'op-archived-peer').Status | Should -Be 'Accepted'
     }
 
+    It 'represents an exact archived common restore as a non-durable proposal with activity' {
+        $old = New-TestCommon; $old.Revision = 'r1'; $old.Lifecycle = 'Archived'; $old['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $restored = New-TestCommon; $restored.Lifecycle = 'Active'; $restored['Last Activity At'] = '2026-09-27T00:00:00Z'
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record $restored -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-restore-proposal'
+        $actual.Status | Should -Be 'Accepted'
+        $actual.Durable | Should -BeFalse
+        $actual.ExternalCalls | Should -Be 0
+        @($actual.Events | Where-Object Field -eq 'Lifecycle').Count | Should -Be 1
+        @($actual.Events | Where-Object Field -eq 'Last Activity At').Count | Should -Be 1
+        @($actual.Events | Where-Object Status -cne 'proposed').Count | Should -Be 0
+
+        $active = New-TestCommon; $active.Revision = 'r2'; $active['Last Activity At'] = '2026-09-20T00:00:00Z'
+        $timestampOnly = New-TestCommon; $timestampOnly['Last Activity At'] = '2026-09-27T00:00:00Z'
+        (Invoke-HandoffRecordCore -Kind Common -Record $timestampOnly -ExistingRecords @($active) -ExpectedRevision 'r2' -OperationId 'explicit-resume').Reason | Should -Be 'activity-refresh-without-material-change'
+        $archivedAgain = New-TestCommon; $archivedAgain.Lifecycle = 'Archived'; $archivedAgain['Last Activity At'] = '2026-09-27T00:00:00Z'
+        (Invoke-HandoffRecordCore -Kind Common -Record $archivedAgain -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'explicit-resume').Reason | Should -Be 'activity-refresh-without-material-change'
+        (Invoke-HandoffRecordCore -Kind Common -Record $restored -ExistingRecords @($old) -ExpectedRevision 'stale' -OperationId 'op-stale-restore').Reason | Should -Be 'revision-conflict'
+    }
+
     It 'rejects non-string or malformed identities in record, parent and existing records' {
         $record = New-TestBranch; $record['Authority Scope'] = @{ id='scope-a' }
         $parent = New-TestCommon; $parent['Authority Scope'] = @{ id='different' }
