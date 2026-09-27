@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Storage adapter contract
 
-The adopting user chooses storage, a formal authority for each task type, an access-control policy, an opaque Authority Scope, and how the logical common record, branch records, fork recovery, and append-only events map to physical objects. Notion, Jira, GitHub, local files, or a database may be adapters; no one platform is a mandatory authority. The adopter also sets an inactivity period, activity-time representation, and conflict retry limit. This Skill does not create schemas or grant remote permissions.
+This contract applies when the caller elects external adapter I/O. Core record receipt requires no storage selection, physical location, or mandatory local backend. For optional I/O, the adopting user chooses storage, a formal authority for each task type, an access-control policy, an opaque Authority Scope, and how the logical common record, branch records, fork recovery, and append-only events map to physical objects. Notion, Jira, GitHub, local files, or a database may be adapters; no one platform is a mandatory authority. The adopter also sets an inactivity period, activity-time representation, and conflict retry limit. This Skill does not create schemas or grant remote permissions.
 
 ## Provider-agnostic memory-target selection
 
@@ -14,7 +14,7 @@ Selection and production activation are distinct. Selection may resolve before a
 
 ## Selection, reuse, and outcome flow
 
-Decide first whether the routing rules require a Handoff. If they do not, do not select storage and do not call any connector. For a required Handoff, resolve storage in this order:
+Decide first whether the caller requested adapter I/O. Core recording alone does not select storage or call a connector. For requested adapter I/O, resolve storage in this order:
 
 1. A clear current user instruction that selects storage for the declared scope takes precedence, including when it deliberately overrides an older trusted setting. Resolve its resource or location from the instruction or one unambiguous trusted setting; do not re-ask solely because the storage choice differs.
 2. If there is no clear current selection, reuse exactly one complete, trusted host/project adopter setting that is unambiguous for the current task. A valid existing setting is reused without a duplicate prompt.

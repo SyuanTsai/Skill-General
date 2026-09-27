@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Handoff operations
 
-Read the machine-readable contract first. These steps govern task-local state; they do not choose a durable-memory system or authorize a new external operation.
+Read the machine-readable contract first. Core receive/validate/record is implemented by `../scripts/HandoffRecordCore.psm1` and returns proposed state and change intents with no external calls. The steps below govern optional adapter I/O when the caller requests it; they do not choose a durable-memory system or authorize a new external operation.
 
 ## Create or resume
 
