@@ -197,6 +197,20 @@ function Invoke-HandoffRecordCore {
     } elseif (-not [string]::IsNullOrWhiteSpace($ExpectedRevision)) {
         return New-HandoffRecordResponse 'Rejected' 'revision-conflict' $null $empty $null
     }
+    if ($Kind -eq 'Branch' -and $null -ne $previous) {
+        $previousForkPoint = Get-HandoffField $previous 'Fork Point'
+        $previousGeneration = Get-HandoffField $previous 'Continuation Generation'
+        if ($previousForkPoint -isnot [string] -or [string]::IsNullOrWhiteSpace($previousForkPoint) -or
+            ($previousGeneration -isnot [int] -and $previousGeneration -isnot [long])) {
+            return New-HandoffRecordResponse 'Rejected' 'invalid-existing-branch' $null $empty $null
+        }
+        if ([string](Get-HandoffField $Record 'Fork Point') -cne $previousForkPoint) {
+            return New-HandoffRecordResponse 'Rejected' 'fork-point-conflict' $null $empty $null
+        }
+        if ((Get-HandoffField $Record 'Continuation Generation') -lt $previousGeneration) {
+            return New-HandoffRecordResponse 'Rejected' 'generation-conflict' $null $empty $null
+        }
+    }
 
     $callerOutcome = $null
     if ($null -ne $CallerResult) {

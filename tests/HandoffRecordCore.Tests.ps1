@@ -174,6 +174,28 @@ Describe 'Handoff receive and record core' {
         @($generationResult.Events | Where-Object Field -eq 'Continuation Generation').Count | Should -Be 1
     }
 
+    It 'keeps a branch fork point fixed and rejects a stale continuation generation' {
+        $old = New-TestBranch; $old.Revision = 'r1'; $old['Continuation Generation'] = 2
+        $changedFork = New-TestBranch; $changedFork['Fork Point'] = 'other-base'; $changedFork['Continuation Generation'] = 2
+        $forkResult = Invoke-HandoffRecordCore -Kind Branch -Record $changedFork -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-fork'
+        $forkResult.Status | Should -Be 'Rejected'
+        $forkResult.Reason | Should -Be 'fork-point-conflict'
+        $forkResult.Record | Should -BeNullOrEmpty
+        $forkResult.Events.Count | Should -Be 0
+
+        $stale = New-TestBranch; $stale['Continuation Generation'] = 1
+        $staleResult = Invoke-HandoffRecordCore -Kind Branch -Record $stale -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-stale-generation'
+        $staleResult.Status | Should -Be 'Rejected'
+        $staleResult.Reason | Should -Be 'generation-conflict'
+        $staleResult.Record | Should -BeNullOrEmpty
+        $staleResult.Events.Count | Should -Be 0
+
+        $continued = New-TestBranch; $continued['Continuation Generation'] = 3
+        $accepted = Invoke-HandoffRecordCore -Kind Branch -Record $continued -ExistingRecords @($old) -ExpectedRevision 'r1' -OperationId 'op-next-generation'
+        $accepted.Status | Should -Be 'Accepted'
+        @($accepted.Events | Where-Object Field -eq 'Continuation Generation').Count | Should -Be 1
+    }
+
     It 'rejects non-string or malformed identities in record, parent and existing records' {
         $record = New-TestBranch; $record['Authority Scope'] = @{ id='scope-a' }
         $parent = New-TestCommon; $parent['Authority Scope'] = @{ id='different' }
