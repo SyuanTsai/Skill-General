@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "8aabd22694a05771f98639f6d726cc9a620eb94b",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/8aabd22694a05771f98639f6d726cc9a620eb94b",
-    "archiveSha256": "d92df1a8f0aa342970dc9c66a77b6211955b4708de12119cb7f9a360fd265311",
+    "commit": "51399617ddebe21656fe4265a8d9ad116a943583",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/51399617ddebe21656fe4265a8d9ad116a943583",
+    "archiveSha256": "b115762de7d4da6f0f95143e1853bd3822fe224d2e673539ace3f480df6ef50d",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -53,7 +53,7 @@
       },
       {
         "path": "scripts/Invoke-StandardAuthorityGate.ps1",
-        "sha256": "e5e8050df56dd60af7d9eec04fda2e05e331fded18bc69257431c2a11f39a9e9"
+        "sha256": "b12a79e371146957f16bb77491cae274cb94e9af62908026201366fb38f440be"
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
