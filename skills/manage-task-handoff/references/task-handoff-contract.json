@@ -57,6 +57,7 @@
     "matchedReadbackRequiresMatchingRevision": true,
     "successRequiresSupportedVerifiedAuthorizedVersionAndNoPendingActions": true,
     "corePreservesCallerReportWithoutExternalVerification": true,
+    "coreSnapshotsCallerReportAndPendingActions": true,
     "coreDurable": false,
     "statusOnlyInputCompatible": true,
     "rollbackDoesNotImplyDisable": true,

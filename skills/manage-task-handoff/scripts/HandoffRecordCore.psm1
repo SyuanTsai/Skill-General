@@ -146,6 +146,21 @@ function Test-HandoffCallerResult {
     return $true
 }
 
+function Copy-HandoffCallerResult {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    $snapshot = [ordered]@{}
+    foreach ($entry in @(Get-HandoffMapEntries $Value)) {
+        # Validated reports contain only scalars and the flat PendingActions string array.
+        if ($entry.Data -is [array]) {
+            $snapshot[$entry.Name] = $entry.Data.Clone()
+        } else {
+            $snapshot[$entry.Name] = $entry.Data
+        }
+    }
+    return [pscustomobject]$snapshot
+}
+
 function Test-HandoffSamePlainData {
     param($Left, $Right, [int]$Depth = 0)
     if ($Depth -gt 16) { return $false }
@@ -403,7 +418,8 @@ function Invoke-HandoffRecordCore {
             return New-HandoffRecordResponse 'Rejected' 'activity-refresh-without-material-change' $null $empty $null
         }
     }
-    return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome $CallerResult
+    $callerSnapshot = Copy-HandoffCallerResult $CallerResult
+    return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome $callerSnapshot
 }
 
 Export-ModuleMember -Function Invoke-HandoffRecordCore

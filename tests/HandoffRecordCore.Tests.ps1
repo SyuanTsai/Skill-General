@@ -186,6 +186,7 @@ Describe 'Handoff receive and record core' {
         $actual.CallerResult.Identity | Should -Be $report.Identity
         $actual.CallerResult.Permission | Should -Be $report.Permission
         $actual.CallerResult.Retryable | Should -Be $report.Retryable
+        ($actual.CallerResult.PendingActions -is [array]) | Should -BeTrue
         @($actual.CallerResult.PendingActions) | Should -Be @($report.PendingActions)
         @($actual.Events | Where-Object Status -cne 'proposed').Count | Should -Be 0
         $actual.ExternalCalls | Should -Be 0
@@ -274,6 +275,10 @@ Describe 'Handoff receive and record core' {
         $retried.Durable | Should -BeFalse
         $retried.ExternalCalls | Should -Be 0
         $peer.Current | Should -Be 'peer untouched'
+        $incomplete.CallerOutcome | Should -Be $Outcome
+        $incomplete.CallerResult.Status | Should -Be $Outcome
+        $incomplete.CallerResult.PendingActions | Should -Contain $Pending
+        $incomplete.CallerResult.Retryable | Should -BeTrue
     }
 
     It 'CoreT45 accepts all operation result shapes from the declared machine contract' {
@@ -288,6 +293,9 @@ Describe 'Handoff receive and record core' {
             $actual=Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
             $actual.Status | Should -Be 'Accepted' -Because $operation
             $actual.CallerResult.Operation | Should -Be $operation
+            ($actual.CallerResult.PendingActions -is [array]) | Should -BeTrue
+            (Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $actual.CallerResult).Status |
+                Should -Be 'Accepted'
             $actual.Durable | Should -BeFalse
         }
     }
@@ -336,6 +344,33 @@ Describe 'Handoff receive and record core' {
         $freshRecord.Fields.Source | Should -Be 'formal-r2'
         Get-GitHandoffEvent -Adapter $writers[1] -TaskKey 'task-exact' -RecordKind common -OperationId 'writer-b' -Field 'Current' |
             Should -BeNullOrEmpty
+    }
+
+    It 'CoreT47 snapshots mutable caller evidence from <Shape> reports' -ForEach @(
+        @{Shape='hashtable'}, @{Shape='PSCustomObject'}
+    ) {
+        $pending=@('index-branch-a','readback')
+        $report=@{
+            SchemaVersion=1;Operation='rollback';OperationId='report-op';Status='partial'
+            Capability='supported';Identity='verified';Permission='authorized';AdapterVersion='fixture-v1'
+            Revision='r1';Readback='unknown';ReadbackRevision=$null;Retryable=$true;PendingActions=$pending
+        }
+        if ($Shape -ceq 'PSCustomObject') { $report=[pscustomobject]$report }
+        $actual=Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
+        $report.Status='readback-matched';$report.Revision='r2';$report.Readback='matched';$report.ReadbackRevision='r2'
+        $report.Retryable=$false;$report.PendingActions=@()
+        $pending[0]='rewritten by caller'
+        $actual.CallerOutcome | Should -Be 'partial'
+        $actual.CallerResult.Status | Should -Be 'partial'
+        $actual.CallerResult.Revision | Should -Be 'r1'
+        $actual.CallerResult.Readback | Should -Be 'unknown'
+        $actual.CallerResult.ReadbackRevision | Should -BeNullOrEmpty
+        $actual.CallerResult.Retryable | Should -BeTrue
+        @($actual.CallerResult.PendingActions) | Should -Be @('index-branch-a','readback')
+        $actual.CallerResult.PendingActions[1]='changed response'
+        $pending[1] | Should -Be 'readback'
+        $actual.ExternalCalls | Should -Be 0
+        $actual.Durable | Should -BeFalse
     }
 
     It 'emits optional field additions, changes and removals, but no unchanged events' {
