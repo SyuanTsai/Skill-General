@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "7c65254d96bd21083ae827e54b9e51afee8ce304",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/7c65254d96bd21083ae827e54b9e51afee8ce304",
-    "archiveSha256": "093e511b8ca9d2618d74d42a5ed831a54524bb133cba9f310b33e7a107a6ff9d",
+    "commit": "8aabd22694a05771f98639f6d726cc9a620eb94b",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/8aabd22694a05771f98639f6d726cc9a620eb94b",
+    "archiveSha256": "d92df1a8f0aa342970dc9c66a77b6211955b4708de12119cb7f9a360fd265311",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -57,11 +57,11 @@
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
-        "sha256": "7fa1511a3e3ba257c6d9e37f929f68e5684184a3a2756a3f9e765ccc6e69d208"
+        "sha256": "d209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35"
       },
       {
         "path": "scripts/Resolve-StandardValidationTool.ps1",
-        "sha256": "3bdda55964acb92fb32d06ffdbf6f98c9397b1857a88271c398b3f28e4bd6295"
+        "sha256": "86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2"
       },
       {
         "path": "docs/standards/schemas/standard-validation-adapter-v1.schema.json",
@@ -73,7 +73,7 @@
       },
       {
         "path": "docs/standards/standard-validation-contract-v1.json",
-        "sha256": "014e82d2db4f3a95be53f5120460790fc613f32b13d06f4e43f4a41dd89f53ee"
+        "sha256": "6fa3233e86ec7918aebf1413d41a6d1712f55eb2d1b09262fe18e53ddfbcb8cf"
       },
       {
         "path": "docs/standards/pr12-source-merge-adoption.json",
@@ -89,7 +89,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "9aefa495189a177bd0b429c1274517deaf0519156a05b43ae1ad03e8ace393e1"
+        "sha256": "c127309958226417291b512d633caa2120bbd12a663c98fff1d63106cf5a2677"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

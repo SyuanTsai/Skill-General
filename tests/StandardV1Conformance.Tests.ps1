@@ -31,15 +31,17 @@ Describe 'Skill-General Standard v1 reference implementation' {
         )
     }
 
-    It 'pins one immutable authority snapshot and required file inventory' {
+    # Scenario: the consumer selects its reviewed immutable central authority snapshot.
+    # Purpose: keep the archive identity and required member inventory bound to that snapshot.
+    It 'UnitT10_pins_one_immutable_authority_snapshot_and_required_file_inventory' {
         Test-Path -LiteralPath $script:AdapterPath -PathType Leaf | Should -BeTrue
         $adapter = Get-Content -LiteralPath $script:AdapterPath -Raw | ConvertFrom-Json
 
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be '7c65254d96bd21083ae827e54b9e51afee8ce304'
-        $adapter.authority.archiveSha256 | Should -Be '093e511b8ca9d2618d74d42a5ed831a54524bb133cba9f310b33e7a107a6ff9d'
+        $adapter.authority.commit | Should -Be '8aabd22694a05771f98639f6d726cc9a620eb94b'
+        $adapter.authority.archiveSha256 | Should -Be 'd92df1a8f0aa342970dc9c66a77b6211955b4708de12119cb7f9a360fd265311'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
