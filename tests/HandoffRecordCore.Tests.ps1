@@ -150,6 +150,229 @@ Describe 'Handoff receive and record core' {
         }
     }
 
+    It 'CoreT41 reports <Operation> <Outcome> without promoting caller evidence' -ForEach @(
+        foreach ($operation in @('rollback', 'disable', 'updateIfRevision')) {
+            foreach ($outcome in @('readback-matched', 'denied', 'unavailable', 'partial', 'unknown', 'readback-mismatch')) {
+                @{ Operation = $operation; Outcome = $outcome }
+            }
+        }
+    ) {
+        $report = @{
+            SchemaVersion = 1; Operation = $Operation; OperationId = 'report-op'; Status = $Outcome
+            Capability = 'supported'; Identity = 'verified'; Permission = 'authorized'
+            AdapterVersion = 'fixture-v1'; Revision = 'r1'; Readback = 'not-attempted'; ReadbackRevision = $null
+            Retryable = $false; PendingActions = @()
+        }
+        switch ($Outcome) {
+            'readback-matched' { $report.Readback = 'matched'; $report.ReadbackRevision = 'r1' }
+            'denied' { $report.Permission = 'denied' }
+            'unavailable' { $report.Capability = 'unavailable'; $report.AdapterVersion = $null; $report.Revision = $null }
+            'partial' { $report.Retryable = $true; $report.PendingActions = @('reconcile-event', 'readback') }
+            'unknown' { $report.Retryable = $true; $report.PendingActions = @('reconcile-same-operation'); $report.Readback = 'unknown' }
+            'readback-mismatch' { $report.Retryable = $true; $report.PendingActions = @('readback'); $report.Readback = 'mismatch'; $report.ReadbackRevision = 'r2' }
+        }
+        $record = New-TestCommon
+        $record.Lifecycle = 'Archived'
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record $record -OperationId 'report-op' -CallerResult $report
+        $actual.Status | Should -Be 'Accepted'
+        $actual.CallerOutcome | Should -Be $Outcome
+        $actual.CallerResult.Operation | Should -Be $Operation
+        $actual.CallerResult.OperationId | Should -Be 'report-op'
+        $actual.CallerResult.AdapterVersion | Should -Be $report.AdapterVersion
+        $actual.CallerResult.Revision | Should -Be $report.Revision
+        $actual.CallerResult.Readback | Should -Be $report.Readback
+        $actual.CallerResult.ReadbackRevision | Should -Be $report.ReadbackRevision
+        $actual.CallerResult.Capability | Should -Be $report.Capability
+        $actual.CallerResult.Identity | Should -Be $report.Identity
+        $actual.CallerResult.Permission | Should -Be $report.Permission
+        $actual.CallerResult.Retryable | Should -Be $report.Retryable
+        ($actual.CallerResult.PendingActions -is [array]) | Should -BeTrue
+        @($actual.CallerResult.PendingActions) | Should -Be @($report.PendingActions)
+        @($actual.Events | Where-Object Status -cne 'proposed').Count | Should -Be 0
+        $actual.ExternalCalls | Should -Be 0
+        $actual.Durable | Should -BeFalse
+    }
+
+    It 'CoreT42 rejects contradictory or malformed result <Field>=<Value>' -ForEach @(
+        @{Field='SchemaVersion';Value=2}, @{Field='SchemaVersion';Value='1'},
+        @{Field='Operation';Value='automatic-fallback'}, @{Field='OperationId';Value='another-op'},
+        @{Field='Capability';Value='unknown'}, @{Field='Identity';Value='denied'},
+        @{Field='Permission';Value='unknown'}, @{Field='AdapterVersion';Value=$null},
+        @{Field='Revision';Value=$null}, @{Field='Readback';Value='mismatch'},
+        @{Field='ReadbackRevision';Value='different'}, @{Field='Retryable';Value='false'},
+        @{Field='PendingActions';Value=@('unfinished')}, @{Field='Status';Value='durable'}
+    ) {
+        $report = @{
+            SchemaVersion=1; Operation='rollback'; OperationId='report-op'; Status='readback-matched'
+            Capability='supported'; Identity='verified'; Permission='authorized'
+            AdapterVersion='fixture-v1'; Revision='r1'; Readback='matched'; ReadbackRevision='r1'
+            Retryable=$false; PendingActions=@()
+        }
+        $report[$Field] = $Value
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
+        $actual.Status | Should -Be 'Rejected'
+        $actual.Reason | Should -Be 'invalid-caller-result'
+        $actual.Record | Should -BeNullOrEmpty
+        $actual.Events.Count | Should -Be 0
+        $actual.ExternalCalls | Should -Be 0
+        $actual.Durable | Should -BeFalse
+    }
+
+    It 'CoreT43 preserves retry state and rejects incomplete versioned reports' {
+        $report = @{
+            SchemaVersion=1; Operation='disable'; OperationId='report-op'; Status='unknown'
+            Capability='unknown'; Identity='unknown'; Permission='unknown'
+            AdapterVersion=$null; Revision=$null; Readback='unknown'; ReadbackRevision=$null
+            Retryable=$true; PendingActions=@('reconcile-same-operation')
+        }
+        $actual = Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
+        $actual.Status | Should -Be 'Accepted'
+        $actual.CallerResult.PendingActions | Should -Contain 'reconcile-same-operation'
+        foreach ($field in @($report.Keys)) {
+            $incomplete = $report.Clone(); $incomplete.Remove($field)
+            $rejected = Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $incomplete
+            $rejected.Reason | Should -Be 'invalid-caller-result' -Because "missing $field"
+        }
+        foreach ($status in @('partial','unknown')) {
+            $incomplete = $report.Clone(); $incomplete.Status=$status; $incomplete.PendingActions=@()
+            (Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $incomplete).Reason |
+                Should -Be 'invalid-caller-result'
+        }
+    }
+
+    It 'CoreT44 retains <Failure> recovery evidence until matching readback' -ForEach @(
+        @{Failure='branch-created-unindexed';Kind='Branch';Lifecycle='Active';Outcome='partial';Pending='index-branch-a';Operation='createIfAbsent'},
+        @{Failure='archived-index-retained';Kind='Branch';Lifecycle='Archived';Outcome='partial';Pending='remove-index-branch-a';Operation='updateIfRevision'},
+        @{Failure='common-readback-failed';Kind='Common';Lifecycle='Active';Outcome='unknown';Pending='common-readback';Operation='readback'}
+    ) {
+        $record = if ($Kind -ceq 'Branch') { New-TestBranch } else { New-TestCommon }
+        $record.Lifecycle=$Lifecycle
+        $report=@{
+            SchemaVersion=1;Operation=$Operation;OperationId='recover-same-op';Status=$Outcome
+            Capability='supported';Identity='verified';Permission='authorized';AdapterVersion='fixture-v1'
+            Revision='r1';Readback='unknown';ReadbackRevision=$null;Retryable=$true;PendingActions=@($Pending)
+        }
+        $peer=New-TestBranch; $peer['Branch ID']='branch-b'; $peer.Current='peer untouched'; $peer.Revision='peer-r1'
+        $common=New-TestCommon
+        $common['Active Branches']=if ($Failure -ceq 'branch-created-unindexed') { @('branch-b') } else { @('branch-a','branch-b') }
+        $incomplete=Invoke-HandoffRecordCore -Kind $Kind -Record $record -OperationId 'recover-same-op' -CallerResult $report -ParentRecord $common
+        $incomplete.Status | Should -Be 'Accepted'
+        $incomplete.CallerResult.Status | Should -Be $Outcome
+        $incomplete.CallerResult.PendingActions | Should -Contain $Pending
+        $incomplete.CallerResult.Retryable | Should -BeTrue
+        $incomplete.Durable | Should -BeFalse
+        @($incomplete.Events | Where-Object Status -cne 'proposed').Count | Should -Be 0
+        # The caller's incomplete index snapshot is preserved; core does no repair I/O.
+        @($common['Active Branches']) | Should -Be $(if ($Failure -ceq 'branch-created-unindexed') { @('branch-b') } else { @('branch-a','branch-b') })
+        $old=$record.Clone();$old.Revision='r1'
+        $report.Status='readback-matched';$report.Readback='matched';$report.ReadbackRevision='r1'
+        $report.Retryable=$false;$report.PendingActions=@()
+        $retried=Invoke-HandoffRecordCore -Kind $Kind -Record $record -OperationId 'recover-same-op' -ExpectedRevision 'r1' -ExistingRecords @($old,$peer) -ParentRecord $common -CallerResult $report
+        $retried.Status | Should -Be 'Accepted'
+        $retried.CallerResult.OperationId | Should -Be $incomplete.CallerResult.OperationId
+        $retried.CallerResult.PendingActions.Count | Should -Be 0
+        $retried.Events.Count | Should -Be 0
+        $retried.Durable | Should -BeFalse
+        $retried.ExternalCalls | Should -Be 0
+        $peer.Current | Should -Be 'peer untouched'
+        $incomplete.CallerOutcome | Should -Be $Outcome
+        $incomplete.CallerResult.Status | Should -Be $Outcome
+        $incomplete.CallerResult.PendingActions | Should -Contain $Pending
+        $incomplete.CallerResult.Retryable | Should -BeTrue
+    }
+
+    It 'CoreT45 accepts all operation result shapes from the declared machine contract' {
+        $contract=Get-Content -Raw (Join-Path $PSScriptRoot '../skills/manage-task-handoff/references/task-handoff-contract.json') | ConvertFrom-Json
+        foreach ($operation in $contract.adapterResultReport.operations) {
+            $report=[pscustomobject]@{
+                SchemaVersion=1;Operation=$operation;OperationId='report-op';Status='readback-matched'
+                Capability='supported';Identity='verified';Permission='authorized';AdapterVersion='fixture-v1'
+                Revision='r1';Readback='matched';ReadbackRevision='r1';Retryable=$false;PendingActions=@()
+            }
+            @($report.PSObject.Properties.Name) | Should -Be @($contract.adapterResultReport.requiredFields)
+            $actual=Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
+            $actual.Status | Should -Be 'Accepted' -Because $operation
+            $actual.CallerResult.Operation | Should -Be $operation
+            ($actual.CallerResult.PendingActions -is [array]) | Should -BeTrue
+            (Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $actual.CallerResult).Status |
+                Should -Be 'Accepted'
+            $actual.Durable | Should -BeFalse
+        }
+    }
+
+    It 'CoreT46 makes the conflicting writer reread Source and Gate before deciding against replay' {
+        Import-Module (Join-Path $PSScriptRoot '../skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force
+        $root=Join-Path $TestDrive 'source-gate'; [void](New-Item -ItemType Directory -Path $root)
+        $remote=Join-Path $root 'remote.git'
+        & git init --bare --quiet $remote
+        if ($LASTEXITCODE) { throw 'Could not create isolated Source/Gate fixture.' }
+        $writers=@(foreach ($name in @('a','b')) {
+            $local=Join-Path $root $name
+            & git clone --quiet $remote $local 2>$null
+            if ($LASTEXITCODE) { throw 'Could not create isolated writer.' }
+            & git -C $local config user.name "Fixture $name"
+            & git -C $local config user.email "$name@example.invalid"
+            New-GitHandoffAdapter -RepositoryRoot $local -RemoteName origin -AuthorityScope 'source-gate-fixture' `
+                -GetVerifiedPrincipal { 'synthetic-principal' } -Authorize { param($request) $true }
+        })
+        $source=@{Revision='formal-r1';Reads=0;GateChecks=0}
+        $fields=[ordered]@{Intent='verify';Scope='fixture';Current='shared';Source='formal-r1';Lifecycle='Active';'Work State'='Running'}
+        New-GitHandoffCommon -Adapter $writers[0] -TaskKey 'task-exact' -Fields $fields -OperationId 'create' -Actor 'fixture-a' | Out-Null
+        $beforeA=Get-GitHandoffCommon -Adapter $writers[0] -TaskKey 'task-exact'
+        $beforeB=Get-GitHandoffCommon -Adapter $writers[1] -TaskKey 'task-exact'
+        $beforeA.Revision | Should -Be $beforeB.Revision
+        $candidateB=[ordered]@{Current='stale candidate';Source='formal-r1'}
+        $source.Revision='formal-r2'
+        $winner=Set-GitHandoffFields -Adapter $writers[0] -RecordKind common -TaskKey 'task-exact' `
+            -ExpectedRevision $beforeA.Revision -Changes ([ordered]@{Current='winner';Source='formal-r2'}) -OperationId 'writer-a' -Actor 'fixture-a'
+        { Set-GitHandoffFields -Adapter $writers[1] -RecordKind common -TaskKey 'task-exact' `
+            -ExpectedRevision $beforeB.Revision -Changes $candidateB -OperationId 'writer-b' -Actor 'fixture-b' } | Should -Throw
+        # Source acquisition and the domain Gate belong to the caller, not storage CAS.
+        $readSource={ $source.Reads++; [pscustomobject]@{Revision=$source.Revision} }.GetNewClosure()
+        $applyGate={ param($candidate,$freshSource,$freshRecord)
+            $source.GateChecks++
+            $candidate.Source -ceq $freshSource.Revision -and $freshRecord.Fields.Source -ceq $freshSource.Revision
+        }.GetNewClosure()
+        $freshSource=& $readSource
+        $freshRecord=Get-GitHandoffCommon -Adapter $writers[1] -TaskKey 'task-exact'
+        $mayRetry=& $applyGate $candidateB $freshSource $freshRecord
+        $source.Reads | Should -Be 1
+        $source.GateChecks | Should -Be 1
+        $mayRetry | Should -BeFalse
+        $freshRecord.Revision | Should -Be $winner.Revision
+        $freshRecord.Fields.Current | Should -Be 'winner'
+        $freshRecord.Fields.Source | Should -Be 'formal-r2'
+        Get-GitHandoffEvent -Adapter $writers[1] -TaskKey 'task-exact' -RecordKind common -OperationId 'writer-b' -Field 'Current' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'CoreT47 snapshots mutable caller evidence from <Shape> reports' -ForEach @(
+        @{Shape='hashtable'}, @{Shape='PSCustomObject'}
+    ) {
+        $pending=@('index-branch-a','readback')
+        $report=@{
+            SchemaVersion=1;Operation='rollback';OperationId='report-op';Status='partial'
+            Capability='supported';Identity='verified';Permission='authorized';AdapterVersion='fixture-v1'
+            Revision='r1';Readback='unknown';ReadbackRevision=$null;Retryable=$true;PendingActions=$pending
+        }
+        if ($Shape -ceq 'PSCustomObject') { $report=[pscustomobject]$report }
+        $actual=Invoke-HandoffRecordCore -Kind Common -Record (New-TestCommon) -OperationId 'report-op' -CallerResult $report
+        $report.Status='readback-matched';$report.Revision='r2';$report.Readback='matched';$report.ReadbackRevision='r2'
+        $report.Retryable=$false;$report.PendingActions=@()
+        $pending[0]='rewritten by caller'
+        $actual.CallerOutcome | Should -Be 'partial'
+        $actual.CallerResult.Status | Should -Be 'partial'
+        $actual.CallerResult.Revision | Should -Be 'r1'
+        $actual.CallerResult.Readback | Should -Be 'unknown'
+        $actual.CallerResult.ReadbackRevision | Should -BeNullOrEmpty
+        $actual.CallerResult.Retryable | Should -BeTrue
+        @($actual.CallerResult.PendingActions) | Should -Be @('index-branch-a','readback')
+        $actual.CallerResult.PendingActions[1]='changed response'
+        $pending[1] | Should -Be 'readback'
+        $actual.ExternalCalls | Should -Be 0
+        $actual.Durable | Should -BeFalse
+    }
+
     It 'emits optional field additions, changes and removals, but no unchanged events' {
         $old = New-TestCommon; $old.Revision = 'r1'; $old['Keep Active Until'] = '2026-09-28'
         $new = New-TestCommon; $new['Keep Active Until'] = '2026-09-29'; $new.Conflict = 'Conflict'
