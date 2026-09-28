@@ -33,6 +33,26 @@ The outcome is explicit:
 
 Selection failure does not authorize fallback. A connector call or capability check for an unselected platform is forbidden even when that platform appears in a link, prior content, or an adopter setting that is not the selected destination.
 
+## Caller-reported operation results
+
+`Invoke-HandoffRecordCore -CallerResult` accepts an existing Status-only report or the following complete plain-data report. Field names and enum values are case-sensitive. SchemaVersion is the integer `1`; OperationId equals the core's stable OperationId. Every field is present, including nullable metadata and empty arrays. No additional field is allowed in a versioned report.
+
+| Field | Type and meaning |
+|---|---|
+| `Operation` | `createIfAbsent`, `updateIfRevision`, `appendEventIfAbsent`, `lookup`, `readback`, `rollback`, or `disable`. |
+| `Status` | `denied`, `unavailable`, `partial`, `unknown`, `readback-mismatch`, or `readback-matched`. The last value is the caller's reported success after matching readback. |
+| `Capability` | `supported`, `unsupported`, `unavailable`, or `unknown` for this exact operation. |
+| `Identity` / `Permission` | `verified`, `denied`, or `unknown` / `authorized`, `denied`, or `unknown`. These are caller-reported results, never core authorization. No principal, login, Owner/operator or target is required for core receipt. |
+| `AdapterVersion` / `Revision` | Non-empty strings or null when unobserved. AdapterVersion identifies the selected implementation; Revision is the observed opaque storage or activation-configuration revision. Neither is a Source revision. |
+| `Readback` / `ReadbackRevision` | `matched`, `mismatch`, `not-attempted`, or `unknown` / non-empty observed revision or null. `matched` requires a non-null Revision equal to ReadbackRevision. A mismatch can be at the field level even when revisions are equal. |
+| `Retryable` / `PendingActions` | Boolean / array of non-empty action descriptions. `partial`, `unknown`, and `readback-mismatch` require true and a non-empty array. Retry means reconcile the same operation from authorized fresh reads before deciding whether to issue further I/O. It never authorizes blind replay. |
+
+`readback-matched` additionally requires supported capability, verified identity, authorized permission, a non-null AdapterVersion, matched readback, no pending actions and Retryable=false. `denied` requires denied identity or permission; `unavailable` requires unsupported or unavailable capability; `readback-mismatch` requires mismatch readback. Unknown version/revision remains null, never fabricated. Invalid reports return `Rejected` / `invalid-caller-result`, without a record or events.
+
+The accepted response returns a plain-data snapshot of the report as `CallerResult`, its Status as `CallerOutcome`, proposed record/events, `ExternalCalls=0` and `Durable=false`. The snapshot includes a separate PendingActions array; later changes to the caller's input cannot rewrite this invocation's status or recovery evidence. A report is not independently verified evidence, and accepting it cannot promote selection, archival, or durability. For an unindexed branch, retained Archived index entry, missing event, or failed common readback, keep the exact identities, original operation IDs and pending steps in caller-owned recovery state, and report partial/unknown. Resume with those same IDs after rereading Source, Gate and affected records. Core receipt does not execute recovery or synthesize durable events.
+
+Rollback and disable use this same report independently. A caller-reported successful rollback restores only its authorized scope and requires readback of that state; it does not imply disable. A caller-reported successful disable verifies the selected adapter's activation configuration is disabled; it does not claim stored data was rolled back or deleted. Failure or uncertainty retains pending actions; no alternative connector, schema creation, migration or legacy rewrite follows automatically.
+
 ## Required capabilities
 
 | Operation | Required behavior |
