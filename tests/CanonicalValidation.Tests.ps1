@@ -7,8 +7,8 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator = Get-Content -LiteralPath $script:ValidatorPath -Raw
         $script:Adapter = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw |
             ConvertFrom-Json -Depth 20
-        $script:ExpectedAuthorityCommit = '7c65254d96bd21083ae827e54b9e51afee8ce304'
-        $script:ExpectedAuthorityArchiveSha256 = '093e511b8ca9d2618d74d42a5ed831a54524bb133cba9f310b33e7a107a6ff9d'
+        $script:ExpectedAuthorityCommit = '8aabd22694a05771f98639f6d726cc9a620eb94b'
+        $script:ExpectedAuthorityArchiveSha256 = 'd92df1a8f0aa342970dc9c66a77b6211955b4708de12119cb7f9a360fd265311'
         $script:ExpectedAuthorityFiles = [ordered]@{
             'docs/standards/README.md' = '5e1ddd737d26a5ec1ff1ebd08e158376ddaf1ea21008bb987fc7f51376923f7c'
             'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -22,15 +22,15 @@ Describe 'Canonical Standard v1 validation adapter' {
             'docs/standards/validation-security-gate.json' = '2d4ac30449981083d3f3eab850789e7115684f9dfecad48234bc91ffb678e674'
             'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
             'scripts/Invoke-StandardAuthorityGate.ps1' = 'e5e8050df56dd60af7d9eec04fda2e05e331fded18bc69257431c2a11f39a9e9'
-            'scripts/Resolve-PythonWheelClosure.py' = '7fa1511a3e3ba257c6d9e37f929f68e5684184a3a2756a3f9e765ccc6e69d208'
-            'scripts/Resolve-StandardValidationTool.ps1' = '3bdda55964acb92fb32d06ffdbf6f98c9397b1857a88271c398b3f28e4bd6295'
+            'scripts/Resolve-PythonWheelClosure.py' = 'd209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35'
+            'scripts/Resolve-StandardValidationTool.ps1' = '86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2'
             'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
             'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
-            'docs/standards/standard-validation-contract-v1.json' = '014e82d2db4f3a95be53f5120460790fc613f32b13d06f4e43f4a41dd89f53ee'
+            'docs/standards/standard-validation-contract-v1.json' = '6fa3233e86ec7918aebf1413d41a6d1712f55eb2d1b09262fe18e53ddfbcb8cf'
             'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
             'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
             'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
-            'scripts/Invoke-StandardValidation.ps1' = '9aefa495189a177bd0b429c1274517deaf0519156a05b43ae1ad03e8ace393e1'
+            'scripts/Invoke-StandardValidation.ps1' = 'c127309958226417291b512d633caa2120bbd12a663c98fff1d63106cf5a2677'
             'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
             'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
             'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
@@ -39,7 +39,9 @@ Describe 'Canonical Standard v1 validation adapter' {
         }
     }
 
-    It 'pins the exact inactive review authority snapshot without local deviation policy' {
+    # Scenario: this driver selects the reviewed immutable central snapshot.
+    # Purpose: enforce the complete approved authority identity without local policy.
+    It 'UnitT10_pins_the_exact_reviewed_authority_without_local_deviation_policy' {
         @($script:Adapter.PSObject.Properties.Name) | Should -Be @('schemaVersion', 'standardVersion', 'authority')
         $script:Adapter.authority.commit | Should -Be $script:ExpectedAuthorityCommit
         $script:Adapter.authority.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedAuthorityCommit)"
@@ -59,6 +61,59 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match '\$configRoot = Split-Path -Parent \$PSScriptRoot'
         $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$configRoot ''config/standard-v1\.json''\)'
         $script:Validator | Should -Not -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
+    }
+
+    # Scenario: the approved candidate config is supplied to the actual driver verifier.
+    # Purpose: exercise production identity checks without executing tools or network calls.
+    It 'UnitT16_accepts_the_complete_approved_config_in_the_actual_driver_verifier' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+        } | ForEach-Object { $_.Extent.Text })
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $approved = [pscustomobject]@{
+            schemaVersion = 1; standardVersion = 'v1'
+            authority = [pscustomobject]@{
+                repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+                commit = $script:ExpectedAuthorityCommit
+                archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedAuthorityCommit)"
+                archiveSha256 = $script:ExpectedAuthorityArchiveSha256
+                files = @(foreach ($entry in $script:ExpectedAuthorityFiles.GetEnumerator()) {
+                    [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+                })
+            }
+        }
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $approved } | Should -Not -Throw
+    }
+
+    # Scenario: the config contains an obsolete revision or a forged helper/runner digest.
+    # Purpose: reject every required dependency identity mismatch before tool execution.
+    It 'UnitT17_rejects_obsolete_revision_and_forged_dependency_hashes_in_the_actual_driver_verifier' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+        } | ForEach-Object { $_.Extent.Text })
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $obsolete = $script:Adapter | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $obsolete.authority.commit = '7c65254d96bd21083ae827e54b9e51afee8ce304'
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $obsolete } | Should -Throw
+        foreach ($path in @('scripts/Resolve-PythonWheelClosure.py', 'scripts/Resolve-StandardValidationTool.ps1',
+            'docs/standards/standard-validation-contract-v1.json', 'scripts/Invoke-StandardValidation.ps1')) {
+            $forged = $script:Adapter | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            ($forged.authority.files | Where-Object { $_.path -ceq $path }).sha256 = '0' * 64
+            { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $forged } | Should -Throw
+        }
     }
 
     It 'verifies authority before resolving or executing any validation tool' {
