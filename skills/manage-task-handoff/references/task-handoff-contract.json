@@ -42,6 +42,26 @@
     "externalHandlingOwnedByCaller": true,
     "existingAdapterMappingOptional": true
   },
+  "adapterResultReport": {
+    "schemaVersion": 1,
+    "requiredFields": ["SchemaVersion", "Operation", "OperationId", "Status", "Capability", "Identity", "Permission", "AdapterVersion", "Revision", "Readback", "ReadbackRevision", "Retryable", "PendingActions"],
+    "operations": ["createIfAbsent", "updateIfRevision", "appendEventIfAbsent", "lookup", "readback", "rollback", "disable"],
+    "statuses": ["denied", "unavailable", "partial", "unknown", "readback-mismatch", "readback-matched"],
+    "capabilities": ["supported", "unsupported", "unavailable", "unknown"],
+    "identities": ["verified", "denied", "unknown"],
+    "permissions": ["authorized", "denied", "unknown"],
+    "readbackStatuses": ["matched", "mismatch", "not-attempted", "unknown"],
+    "nullableNonEmptyStringFields": ["AdapterVersion", "Revision", "ReadbackRevision"],
+    "operationIdMustMatchCoreOperation": true,
+    "incompleteResultRequiresPendingActionsAndRetryable": true,
+    "matchedReadbackRequiresMatchingRevision": true,
+    "successRequiresSupportedVerifiedAuthorizedVersionAndNoPendingActions": true,
+    "corePreservesCallerReportWithoutExternalVerification": true,
+    "coreDurable": false,
+    "statusOnlyInputCompatible": true,
+    "rollbackDoesNotImplyDisable": true,
+    "disableDoesNotImplyRollback": true
+  },
   "storageSelection": {
     "appliesOnlyToOptionalExternalAdapterIO": true,
     "precedence": [

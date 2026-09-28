@@ -11,13 +11,14 @@ function Get-HandoffField {
 }
 
 function New-HandoffRecordResponse {
-    param([string]$Status, [string]$Reason, $Record, [object[]]$Events, [string]$CallerOutcome)
+    param([string]$Status, [string]$Reason, $Record, [object[]]$Events, [string]$CallerOutcome, $CallerResult)
     return [pscustomobject]@{
         Status = $Status
         Reason = $Reason
         Record = $Record
         Events = @($Events)
         CallerOutcome = $CallerOutcome
+        CallerResult = $CallerResult
         ExternalCalls = 0
         Durable = $false
     }
@@ -89,6 +90,60 @@ function Get-HandoffMapEntries {
             [pscustomobject]@{ Name = [string]$property.Name; Data = $property.Value }
         }
     }
+}
+
+function Test-HandoffCallerResult {
+    param($Value, [string]$OperationId)
+    $status = Get-HandoffField $Value 'Status'
+    if ($status -isnot [string] -or $status -cnotin @('denied', 'unavailable', 'partial', 'unknown', 'readback-mismatch', 'readback-matched')) {
+        return $false
+    }
+    $entries = @(Get-HandoffMapEntries $Value)
+    # Preserve the original Status-only input. Any structured evidence uses v1.
+    if ($entries.Count -eq 1 -and $entries[0].Name -ceq 'Status') { return $true }
+    $fields = @('SchemaVersion', 'Operation', 'OperationId', 'Status', 'Capability', 'Identity', 'Permission',
+        'AdapterVersion', 'Revision', 'Readback', 'ReadbackRevision', 'Retryable', 'PendingActions')
+    if ($entries.Count -ne $fields.Count) { return $false }
+    foreach ($field in $fields) {
+        if (@($entries | Where-Object Name -ceq $field).Count -ne 1) { return $false }
+    }
+    $version = Get-HandoffField $Value 'SchemaVersion'
+    if (($version -isnot [int] -and $version -isnot [long]) -or $version -ne 1) { return $false }
+    $operation = Get-HandoffField $Value 'Operation'
+    if ($operation -isnot [string] -or $operation -cnotin @('createIfAbsent', 'updateIfRevision', 'appendEventIfAbsent', 'lookup', 'readback', 'rollback', 'disable')) { return $false }
+    $reportedOperation = Get-HandoffField $Value 'OperationId'
+    if ($reportedOperation -isnot [string] -or $reportedOperation -cne $OperationId) { return $false }
+    foreach ($field in @('AdapterVersion', 'Revision', 'ReadbackRevision')) {
+        $part = Get-HandoffField $Value $field
+        if ($null -ne $part -and ($part -isnot [string] -or [string]::IsNullOrWhiteSpace($part))) { return $false }
+    }
+    $capability = Get-HandoffField $Value 'Capability'
+    $identity = Get-HandoffField $Value 'Identity'
+    $permission = Get-HandoffField $Value 'Permission'
+    $readback = Get-HandoffField $Value 'Readback'
+    if ($capability -isnot [string] -or $capability -cnotin @('supported', 'unsupported', 'unavailable', 'unknown') -or
+        $identity -isnot [string] -or $identity -cnotin @('verified', 'denied', 'unknown') -or
+        $permission -isnot [string] -or $permission -cnotin @('authorized', 'denied', 'unknown') -or
+        $readback -isnot [string] -or $readback -cnotin @('matched', 'mismatch', 'not-attempted', 'unknown')) { return $false }
+    $retryable = Get-HandoffField $Value 'Retryable'
+    $pending = Get-HandoffField $Value 'PendingActions'
+    if ($retryable -isnot [bool] -or $pending -isnot [array]) { return $false }
+    foreach ($action in $pending) {
+        if ($action -isnot [string] -or [string]::IsNullOrWhiteSpace($action)) { return $false }
+    }
+    if ($status -cin @('partial', 'unknown', 'readback-mismatch') -and ($pending.Count -eq 0 -or -not $retryable)) { return $false }
+    if ($status -ceq 'denied' -and $identity -cne 'denied' -and $permission -cne 'denied') { return $false }
+    if ($status -ceq 'unavailable' -and $capability -cnotin @('unsupported', 'unavailable')) { return $false }
+    if ($status -ceq 'readback-mismatch' -and $readback -cne 'mismatch') { return $false }
+    if ($readback -ceq 'matched') {
+        $revision = Get-HandoffField $Value 'Revision'
+        if ($null -eq $revision -or (Get-HandoffField $Value 'ReadbackRevision') -cne $revision) { return $false }
+    }
+    if ($status -ceq 'readback-matched' -and ($capability -cne 'supported' -or $identity -cne 'verified' -or
+        $permission -cne 'authorized' -or $readback -cne 'matched' -or
+        $null -eq (Get-HandoffField $Value 'AdapterVersion') -or $pending.Count -ne 0 -or $retryable)) { return $false }
+    # This validates the caller's report, never its external truth or authority.
+    return $true
 }
 
 function Test-HandoffSamePlainData {
@@ -283,7 +338,7 @@ function Invoke-HandoffRecordCore {
     $callerOutcome = $null
     if ($null -ne $CallerResult) {
         $callerOutcome = Get-HandoffField $CallerResult 'Status'
-        if ($callerOutcome -isnot [string] -or $callerOutcome -cnotin @('denied', 'partial', 'unknown', 'readback-mismatch', 'readback-matched')) {
+        if (-not (Test-HandoffCallerResult $CallerResult $OperationId)) {
             return New-HandoffRecordResponse 'Rejected' 'invalid-caller-result' $null $empty $null
         }
     }
@@ -348,7 +403,7 @@ function Invoke-HandoffRecordCore {
             return New-HandoffRecordResponse 'Rejected' 'activity-refresh-without-material-change' $null $empty $null
         }
     }
-    return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome
+    return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome $CallerResult
 }
 
 Export-ModuleMember -Function Invoke-HandoffRecordCore
