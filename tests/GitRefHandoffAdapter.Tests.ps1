@@ -3859,4 +3859,109 @@ exit 0
         $recovered.Status | Should -Be 'created'
         (Get-GitHandoffCommon -Adapter $long -TaskKey 'demo:ABC-14').Revision | Should -Be $recovered.Revision
     }
+
+    # Scenario: A confirmed common decision partially selects one branch in a local Git handoff.
+    # Purpose: Prove decision-bound persistence, readback, idempotent retry, and stale-decision rejection.
+    It 'InterT86_persists_partially_selected_with_exact_decision_binding' {
+        $root = Join-Path $TestDrive 'syp211-partially-selected'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-partial' -Fields $script:InitialCommon `
+            -OperationId 'create-partial-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-partial' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch -OperationId 'create-partial-branch' `
+            -Actor 'writer-a' | Out-Null
+
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-partial'
+        $priorRevision = $common.Revision
+        $binding = @(Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:syp211-partial' `
+            -BranchId 'thread:A' -Outcome 'Partially Selected')
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:syp211-partial' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision partially selects branch A';'Decision Branch Bindings'=$binding
+            }) -OperationId 'partial-decision' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'synthetic partial selection' | Out-Null
+        $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-partial').Revision
+        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-partial' -BranchId 'thread:A'
+        $change = [ordered]@{'Branch Outcome'='Partially Selected'}
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-partial' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'partial-stale-attempt' -DecisionConfirmed -DecisionCommonRevision $priorRevision `
+            -Actor 'writer-a' -Reason 'reject stale decision' } | Should -Throw
+        $afterRejected = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-partial' -BranchId 'thread:A'
+        $afterRejected.Revision | Should -Be $branch.Revision
+        $afterRejected.Fields.Contains('Branch Outcome') | Should -BeFalse
+
+        $written = Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-partial' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'partial-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'synthetic partial selection'
+        $readback = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-partial' -BranchId 'thread:A'
+        $readback.Revision | Should -Be $written.Revision
+        $readback.Fields['Branch Outcome'] | Should -Be 'Partially Selected'
+        $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:syp211-partial' `
+            -RecordKind branch -BranchId 'thread:A' -OperationId 'partial-outcome' -Field 'Branch Outcome'
+        $event.DecisionCommonRevision | Should -Be $decisionRevision
+        $event.NewState | Should -Be 'Partially Selected'
+        $event.DecisionBranchRevision | Should -Be $binding[0].reviewedRevision
+
+        $retried = Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-partial' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'partial-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'synthetic partial selection'
+        $retried.Revision | Should -Be $written.Revision
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-partial' -BranchId 'thread:A').Revision | Should -Be $written.Revision
+    }
+
+    # Scenario: A confirmed common decision supersedes an unselected branch.
+    # Purpose: Prove durable outcome, exact review binding, stale-decision rejection, and retry identity.
+    It 'InterT87_persists_superseded_with_exact_decision_binding' {
+        $root = Join-Path $TestDrive 'syp211-superseded'
+        [void](New-Item -ItemType Directory -Path $root)
+        $a = New-WriterFixture -Root $root -WriterId 'a'
+        New-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-superseded' -Fields $script:InitialCommon `
+            -OperationId 'create-superseded-common' -Actor 'writer-a' | Out-Null
+        New-TestGitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-superseded' -BranchId 'thread:A' `
+            -ForkPoint 'shared-r1' -Fields $script:InitialBranch `
+            -OperationId 'create-superseded-branch' -Actor 'writer-a' | Out-Null
+
+        $common = Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-superseded'
+        $priorRevision = $common.Revision
+        $binding = @(Get-GitHandoffBranchReviewBinding -Adapter $a -TaskKey 'demo:syp211-superseded' `
+            -BranchId 'thread:A' -Outcome Superseded)
+        Set-GitHandoffFields -Adapter $a -RecordKind common -TaskKey 'demo:syp211-superseded' `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision supersedes branch A';'Decision Branch Bindings'=$binding
+            }) -OperationId 'superseded-decision' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'synthetic supersession' | Out-Null
+        $decisionRevision = (Get-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-superseded').Revision
+        $branch = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-superseded' -BranchId 'thread:A'
+        $change = [ordered]@{'Branch Outcome'='Superseded'}
+        { Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-superseded' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'superseded-stale-attempt' -DecisionConfirmed -DecisionCommonRevision $priorRevision `
+            -Actor 'writer-a' -Reason 'reject stale decision' } | Should -Throw
+        (Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-superseded' `
+            -BranchId 'thread:A').Fields.Contains('Branch Outcome') | Should -BeFalse
+
+        $written = Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-superseded' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'superseded-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'synthetic supersession'
+        $readback = Get-GitHandoffBranch -Adapter $a -TaskKey 'demo:syp211-superseded' -BranchId 'thread:A'
+        $readback.Revision | Should -Be $written.Revision
+        $readback.Fields['Branch Outcome'] | Should -Be 'Superseded'
+        $event = Get-GitHandoffEvent -Adapter $a -TaskKey 'demo:syp211-superseded' `
+            -RecordKind branch -BranchId 'thread:A' -OperationId 'superseded-outcome' -Field 'Branch Outcome'
+        $event.DecisionCommonRevision | Should -Be $decisionRevision
+        $event.DecisionBranchRevision | Should -Be $binding[0].reviewedRevision
+        $event.DecisionBranchContentSha256 | Should -Be $binding[0].reviewedContentSha256
+        $event.NewState | Should -Be 'Superseded'
+
+        $retried = Set-GitHandoffFields -Adapter $a -RecordKind branch -TaskKey 'demo:syp211-superseded' `
+            -BranchId 'thread:A' -ExpectedRevision $branch.Revision -Changes $change `
+            -OperationId 'superseded-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
+            -Actor 'writer-a' -Reason 'synthetic supersession'
+        $retried.Revision | Should -Be $written.Revision
+    }
 }
