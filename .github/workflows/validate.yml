@@ -104,7 +104,6 @@ jobs:
             throw 'Verified PowerShell executable path or runtime version differs from the official release.'
           }
           "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $runtimeRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
 
       - name: Validate exact candidate with the verified runtime
@@ -117,6 +116,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $runnerNpmPrefix = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'Process')
+          if ($runnerNpmPrefix -ceq 'C:\npm\prefix') {
+            [Environment]::SetEnvironmentVariable('NPM_CONFIG_PREFIX', $null, 'Process')
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($runnerNpmPrefix)) {
+            throw 'Unexpected npm prefix in the Windows runner environment.'
+          }
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
           $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
           if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
             throw 'Child PowerShell resolution differs from the verified runtime.'

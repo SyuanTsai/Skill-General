@@ -118,7 +118,10 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$asset\.digest'
         $workflow | Should -Match 'Get-FileHash'
         $workflow | Should -Match 'POWERSHELL_RUNTIME'
-        $workflow | Should -Match 'GITHUB_PATH'
+        $workflow | Should -Match '\$env:PATH = "\$\(Split-Path -Parent \$env:POWERSHELL_RUNTIME\);\$env:PATH"'
+        $workflow | Should -Not -Match 'GITHUB_PATH'
+        $workflow | Should -Match "NPM_CONFIG_PREFIX.*'Process'"
+        $workflow | Should -Match "'C:\\npm\\prefix'"
         $workflow | Should -Match '\$runtimeEvidence\.version -cne \$expectedVersion'
         $workflow | Should -Match 'if \(\$LASTEXITCODE -ne 0\)'
         $workflow | Should -Match 'Remove-Item -LiteralPath \$ownedRoot -Recurse -Force'
