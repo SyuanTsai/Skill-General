@@ -2396,13 +2396,11 @@ function Get-GitHandoffDecisionBranchFinalizationProof {
         throw 'Exact current Common and Branch revisions are required for a finalization proof.'
     }
 
-    $common = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
-        -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
+    $common = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
     if ([string]$common.Revision -cne $ExpectedCommonRevision) {
         throw 'The current Common revision changed before finalization proof creation.'
     }
-    $binding = Assert-GitHandoffDecisionBranchBinding -Adapter $Adapter -TaskKey $TaskKey `
-        -BranchId $BranchId -DecisionCommonRevision $DecisionCommonRevision -ExpectedOutcome $ExpectedOutcome
+    $binding = Assert-GitHandoffDecisionBranchBinding -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId -DecisionCommonRevision $DecisionCommonRevision -ExpectedOutcome $ExpectedOutcome
     if ([string]$binding.CurrentRevision -cne $ExpectedBranchRevision) {
         throw "Reviewed branch '$BranchId' changed before finalization proof creation."
     }
@@ -2419,8 +2417,7 @@ function Get-GitHandoffDecisionBranchFinalizationProof {
         (Get-GitHandoffReviewedBranchContentSha256 -Record $branch.Record) -cne [string]$binding.ReviewedContentSha256) {
         throw "Reviewed branch '$BranchId' changed while the finalization proof was being assembled."
     }
-    $verifiedCommon = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey `
-        -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
+    $verifiedCommon = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
     if ([string]$verifiedCommon.Revision -cne $ExpectedCommonRevision) {
         throw 'The current Common revision changed while the finalization proof was being assembled.'
     }
@@ -2747,8 +2744,7 @@ function Invoke-GitHandoffFieldsMutation {
     if ($RecordKind -eq 'branch' -and $actualChanges.Count -gt 0) {
         # Every new branch-record commit shares the common CAS cursor with fork
         # admission. The cursor read happens before its protected Pending scan.
-        $branchMutationFence = New-GitHandoffBranchMutationFence -Adapter $Adapter -TaskKey $TaskKey  -BranchId $BranchId -Changes $Changes `
-            -ExpectedArchiveCommonRevision $(if ($null -ne $ArchiveSelectionCursor) { [string]$ArchiveSelectionCursor.commonRevision } else { $null })
+        $branchMutationFence = New-GitHandoffBranchMutationFence -Adapter $Adapter -TaskKey $TaskKey  -BranchId $BranchId -Changes $Changes -ExpectedArchiveCommonRevision $(if ($null -ne $ArchiveSelectionCursor) { [string]$ArchiveSelectionCursor.commonRevision } else { $null })
     }
     $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray()  -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal -RecordKind $RecordKind  -RecordId ([string]$old.Record.recordId) -Source $newRecord.fields.Source  -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)  -AllowEmptyChangedFields:$PersistNoOpOperation  -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision  -DecisionBranchContentSha256 $decisionBranchContentSha256  -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration -ArchiveSelectionCursor $ArchiveSelectionCursor -Internal:$InternalOperation
     $newRecord.operations[$OperationId] = $operation
@@ -2938,9 +2934,7 @@ function Set-GitHandoffBranchLifecycle {
                 [int64]$recordedCursor.continuationGeneration -ne [int64]$archiveCursor.continuationGeneration) {
                 throw "Operation ID '$OperationId' is not bound to this archive selection cursor."
             }
-            $expectedArchiveDigest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope) `
-                -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -Changes ([ordered]@{Lifecycle=$Lifecycle}) `
-                -Actor $Actor -Reason $Reason -ArchiveSelectionCursor $archiveCursor
+            $expectedArchiveDigest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope) -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -Changes ([ordered]@{Lifecycle=$Lifecycle}) -Actor $Actor -Reason $Reason -ArchiveSelectionCursor $archiveCursor
             if ([string]$existingOperation.payloadDigest -cne $expectedArchiveDigest) {
                 throw "Operation ID '$OperationId' was reused with a different archive candidate, actor, or reason."
             }

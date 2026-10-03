@@ -187,7 +187,7 @@ jobs:
             '-BaseCommit', $baseCommit,
             '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
             '-OutputPath', $outputPath)
-          & $env:POWERSHELL_RUNTIME -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
+          pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
           if ($LASTEXITCODE -ne 0) { throw "Canonical validator exited $LASTEXITCODE." }
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100

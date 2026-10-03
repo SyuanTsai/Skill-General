@@ -188,7 +188,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'git -C \$candidate merge-base \$env:PULL_REQUEST_BASE_SHA HEAD'
         $workflow | Should -Match "working-directory: driver"
         $workflow | Should -Match '\$driverArgs = @\('
-        $workflow | Should -Match '& \$env:POWERSHELL_RUNTIME -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs'
+        $workflow | Should -Match 'pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs'
         $workflow | Should -Match 'candidate\.sourceRevision -cne \$env:EXPECTED_SOURCE_SHA'
         $workflow | Should -Match 'report\.state -cne ''PASSED'''
         $workflow | Should -Match 'persist-credentials:\s*false'

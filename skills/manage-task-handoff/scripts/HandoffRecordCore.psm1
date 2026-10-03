@@ -662,8 +662,7 @@ function Get-HandoffArchiveDecisionBindingProblem {
         return 'invalid-decision-binding'
     }
     if ((Get-HandoffField $binding 'reviewedRevision') -cne (Get-HandoffField $Branch 'Revision') -and
-        -not (Test-HandoffArchiveVerifiedFinalizationProof -Common $Common -Branch $Branch `
-            -Binding $binding -VerifiedFinalizationProofs $VerifiedFinalizationProofs)) {
+        -not (Test-HandoffArchiveVerifiedFinalizationProof -Common $Common -Branch $Branch -Binding $binding -VerifiedFinalizationProofs $VerifiedFinalizationProofs)) {
         return 'decision-revision-mismatch'
     }
     $boundGeneration = Get-HandoffField $binding 'continuationGeneration'
