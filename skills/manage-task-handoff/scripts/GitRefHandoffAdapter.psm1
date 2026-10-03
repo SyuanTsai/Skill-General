@@ -929,7 +929,8 @@ function Test-GitHandoffPendingSourceBranchMutation {
 
 function New-GitHandoffBranchMutationFence {
     param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
-        [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)] $Changes)
+        [Parameter(Mandatory = $true)][string] $BranchId,[Parameter(Mandatory = $true)] $Changes,
+        [string] $ExpectedArchiveCommonRevision)
     # The fence reads the common ref's object tree into the adapter's object store.
     # Require the ordinary common read capability before any ref lookup/fetch.
     [void](Assert-GitHandoffAuthorized -Adapter $Adapter -Action 'common:read' -TaskKey $TaskKey)
@@ -937,6 +938,10 @@ function New-GitHandoffBranchMutationFence {
     $expectedCommonRevision = Get-RemoteHandoffRevision -Adapter $Adapter -Ref $commonRef
     if ([string]::IsNullOrWhiteSpace([string]$expectedCommonRevision)) {
         throw 'The exact common revision is missing before the branch mutation fence.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedArchiveCommonRevision) -and
+        [string]$expectedCommonRevision -cne $ExpectedArchiveCommonRevision) {
+        throw 'Archive selection common revision changed before the branch lifecycle commit; reselect the candidate.'
     }
 
     # Read the shared CAS cursor before the protected Pending scan. New recovery
@@ -1765,7 +1770,7 @@ function Get-OperationPayloadDigest {
         [Parameter(Mandatory = $true)] $Changes,
         [string] $Actor='configured-adapter',[string] $Reason='initial checkpoint',[bool] $DecisionConfirmed=$false,
         [string] $DecisionCommonRevision,[string] $DecisionBranchRevision,[string] $DecisionBranchContentSha256,
-        [Nullable[int64]] $DecisionBranchContinuationGeneration)
+        [Nullable[int64]] $DecisionBranchContinuationGeneration,$ArchiveSelectionCursor)
     $payload = [ordered]@{ authorityScope=$AuthorityScope;recordKind=$RecordKind; taskKey=$TaskKey; branchId=$BranchId;
         changes=$Changes;actor=$Actor;reason=$Reason;decisionConfirmed=$DecisionConfirmed }
     if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
@@ -1775,6 +1780,9 @@ function Get-OperationPayloadDigest {
         $payload.decisionBranchRevision = $DecisionBranchRevision
         $payload.decisionBranchContentSha256 = $DecisionBranchContentSha256
         $payload.decisionBranchContinuationGeneration = $DecisionBranchContinuationGeneration
+    }
+    if ($null -ne $ArchiveSelectionCursor) {
+        $payload.archiveSelectionCursor = $ArchiveSelectionCursor
     }
     return Get-HandoffSha256 -Value ($payload | ConvertTo-Json -Compress -Depth 50)
 }
@@ -1800,7 +1808,7 @@ function New-HandoffOperation {
         [Parameter(Mandatory = $true)] $Source,[string] $Actor='configured-adapter',
         [string] $Reason='initial checkpoint',[bool] $DecisionConfirmed=$false,[string] $DecisionCommonRevision,
         [string] $DecisionBranchRevision,[string] $DecisionBranchContentSha256,
-        [Nullable[int64]] $DecisionBranchContinuationGeneration,
+        [Nullable[int64]] $DecisionBranchContinuationGeneration,$ArchiveSelectionCursor,
         [switch] $AllowEmptyChangedFields,
         [switch] $Internal)
     Assert-HandoffOperationId -OperationId $OperationId -Internal:$Internal
@@ -1833,6 +1841,9 @@ function New-HandoffOperation {
                 $intent.decisionBranchContentSha256 = $DecisionBranchContentSha256
                 $intent.decisionBranchContinuationGeneration = $DecisionBranchContinuationGeneration
             }
+            if ($null -ne $ArchiveSelectionCursor) {
+                $intent.archiveSelectionCursor = $ArchiveSelectionCursor
+            }
             $intent
         }
     )
@@ -1855,6 +1866,9 @@ function New-HandoffOperation {
         $operation.decisionBranchRevision = $DecisionBranchRevision
         $operation.decisionBranchContentSha256 = $DecisionBranchContentSha256
         $operation.decisionBranchContinuationGeneration = $DecisionBranchContinuationGeneration
+    }
+    if ($null -ne $ArchiveSelectionCursor) {
+        $operation.archiveSelectionCursor = $ArchiveSelectionCursor
     }
     return $operation
 }
@@ -2369,6 +2383,60 @@ function Assert-GitHandoffDecisionBranchBinding {
     }
 }
 
+function Get-GitHandoffDecisionBranchFinalizationProof {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] $Adapter,[Parameter(Mandatory = $true)][string] $TaskKey,
+        [Parameter(Mandatory = $true)][string] $BranchId,
+        [Parameter(Mandatory = $true)][string] $DecisionCommonRevision,
+        [Parameter(Mandatory = $true)][string] $ExpectedCommonRevision,
+        [Parameter(Mandatory = $true)][string] $ExpectedBranchRevision,
+        [Parameter(Mandatory = $true)][ValidateSet('Selected','Partially Selected','Superseded')][string] $ExpectedOutcome)
+    if ($ExpectedCommonRevision -cnotmatch '^[0-9a-f]{40,64}$' -or
+        $ExpectedBranchRevision -cnotmatch '^[0-9a-f]{40,64}$') {
+        throw 'Exact current Common and Branch revisions are required for a finalization proof.'
+    }
+
+    $common = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
+    if ([string]$common.Revision -cne $ExpectedCommonRevision) {
+        throw 'The current Common revision changed before finalization proof creation.'
+    }
+    $binding = Assert-GitHandoffDecisionBranchBinding -Adapter $Adapter -TaskKey $TaskKey -BranchId $BranchId -DecisionCommonRevision $DecisionCommonRevision -ExpectedOutcome $ExpectedOutcome
+    if ([string]$binding.CurrentRevision -cne $ExpectedBranchRevision) {
+        throw "Reviewed branch '$BranchId' changed before finalization proof creation."
+    }
+    if ([string]$binding.CurrentRevision -ceq [string]$binding.ReviewedRevision) {
+        throw "Reviewed branch '$BranchId' has no finalization descendant to prove."
+    }
+
+    $branch = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
+    if ($null -eq $branch -or [string]$branch.Revision -cne $ExpectedBranchRevision -or
+        [string]$branch.Record.authorityScope -cne [string]$Adapter.AuthorityScope -or
+        [string]$branch.Record.taskKey -cne $TaskKey -or [string]$branch.Record.branchId -cne $BranchId -or
+        [string]$branch.Record.fields['Branch Outcome'] -cne $ExpectedOutcome -or
+        [string]$branch.Record.fields['Continuation Generation'] -cne [string]$binding.ReviewedContinuationGeneration -or
+        (Get-GitHandoffReviewedBranchContentSha256 -Record $branch.Record) -cne [string]$binding.ReviewedContentSha256) {
+        throw "Reviewed branch '$BranchId' changed while the finalization proof was being assembled."
+    }
+    $verifiedCommon = Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant
+    if ([string]$verifiedCommon.Revision -cne $ExpectedCommonRevision) {
+        throw 'The current Common revision changed while the finalization proof was being assembled.'
+    }
+
+    return [pscustomobject]@{
+        ProofKind='GitBranchFinalizationDescendant'
+        AuthorityScope=[string]$Adapter.AuthorityScope
+        TaskKey=$TaskKey
+        BranchId=$BranchId
+        DecisionCommonRevision=$DecisionCommonRevision
+        CurrentCommonRevision=[string]$verifiedCommon.Revision
+        ReviewedBranchRevision=[string]$binding.ReviewedRevision
+        CurrentBranchRevision=[string]$branch.Revision
+        ReviewedContentSha256=[string]$binding.ReviewedContentSha256
+        ContinuationGeneration=[int64]$binding.ReviewedContinuationGeneration
+        Outcome=$ExpectedOutcome
+    }
+}
+
 function New-GitHandoffRecord {
     param($Adapter,[string] $RecordKind,[string] $TaskKey,[string] $BranchId,[string] $ForkPoint,
         [Parameter(Mandatory = $true)] $Fields,[string] $OperationId,
@@ -2477,7 +2545,7 @@ function Invoke-GitHandoffFieldsMutation {
         [Parameter(Mandatory = $true)][string] $OperationId,[switch] $SuppressActivity,[switch] $DecisionConfirmed,
         [string] $DecisionCommonRevision,[switch] $ExplicitContinuation,[string] $Actor='configured-adapter',
         [string] $Reason,[switch] $InternalOperation,[switch] $LifecycleReconciliation,
-        [string] $ForkRecoveryConversionId,[switch] $PersistNoOpOperation)
+        [string] $ForkRecoveryConversionId,[switch] $PersistNoOpOperation,$ArchiveSelectionCursor)
     Assert-HandoffOperationId -OperationId $OperationId -Internal:$InternalOperation
     if ($PersistNoOpOperation -and [string]::IsNullOrWhiteSpace($ForkRecoveryConversionId)) {
         throw 'Only a bound fork-recovery common conversion may persist a no-op operation.'
@@ -2500,6 +2568,24 @@ function Invoke-GitHandoffFieldsMutation {
     }
     $isArchive = ($RecordKind -eq 'branch' -and $Changes.Contains('Lifecycle') -and
         [string]$Changes['Lifecycle'] -ceq 'Archived')
+    if ($null -ne $ArchiveSelectionCursor) {
+        $cursorNames = @('branchRevision','commonRevision','continuationGeneration')
+        if ($RecordKind -cne 'branch' -or -not $isArchive -or $Changes.Count -ne 1 -or
+            -not [string]::IsNullOrWhiteSpace($DecisionCommonRevision) -or
+            $ArchiveSelectionCursor -isnot [System.Collections.IDictionary] -or
+            $ArchiveSelectionCursor.Count -ne $cursorNames.Count -or
+            @($ArchiveSelectionCursor.Keys | Where-Object { [string]$_ -cnotin $cursorNames }).Count -gt 0 -or
+            @($cursorNames | Where-Object { -not $ArchiveSelectionCursor.Contains($_) }).Count -gt 0 -or
+            $ArchiveSelectionCursor.branchRevision -isnot [string] -or
+            [string]::IsNullOrWhiteSpace([string]$ArchiveSelectionCursor.branchRevision) -or
+            $ArchiveSelectionCursor.commonRevision -isnot [string] -or
+            [string]::IsNullOrWhiteSpace([string]$ArchiveSelectionCursor.commonRevision) -or
+            ($ArchiveSelectionCursor.continuationGeneration -isnot [int] -and
+                $ArchiveSelectionCursor.continuationGeneration -isnot [long]) -or
+            [int64]$ArchiveSelectionCursor.continuationGeneration -lt 0) {
+            throw 'An inactivity archive selection cursor must bind exactly the Branch revision, Common revision, and nonnegative Continuation Generation.'
+        }
+    }
     $hasDecisionBranchBindings = ($RecordKind -eq 'common' -and $Changes.Contains('Decision Branch Bindings'))
     if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision) -and
         ($RecordKind -ne 'branch' -or (-not $hasBranchOutcome -and -not $isArchive))) {
@@ -2569,7 +2655,7 @@ function Invoke-GitHandoffFieldsMutation {
     $decisionBranchContinuationGeneration = if ($null -ne $decisionBranchBinding) {
         [Nullable[int64]]$decisionBranchBinding.ReviewedContinuationGeneration
     } else { $null }
-    $digest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope)  -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -Changes $Changes  -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)  -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision  -DecisionBranchContentSha256 $decisionBranchContentSha256  -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration
+    $digest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope)  -RecordKind $RecordKind -TaskKey $TaskKey -BranchId $BranchId -Changes $Changes  -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)  -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision  -DecisionBranchContentSha256 $decisionBranchContentSha256  -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration -ArchiveSelectionCursor $ArchiveSelectionCursor
     if ($null -ne $existingOp) {
         if ($existingOp.payloadDigest -cne $digest) { throw 'An Operation ID was reused with different changed fields.' }
         if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
@@ -2658,9 +2744,9 @@ function Invoke-GitHandoffFieldsMutation {
     if ($RecordKind -eq 'branch' -and $actualChanges.Count -gt 0) {
         # Every new branch-record commit shares the common CAS cursor with fork
         # admission. The cursor read happens before its protected Pending scan.
-        $branchMutationFence = New-GitHandoffBranchMutationFence -Adapter $Adapter -TaskKey $TaskKey  -BranchId $BranchId -Changes $Changes
+        $branchMutationFence = New-GitHandoffBranchMutationFence -Adapter $Adapter -TaskKey $TaskKey  -BranchId $BranchId -Changes $Changes -ExpectedArchiveCommonRevision $(if ($null -ne $ArchiveSelectionCursor) { [string]$ArchiveSelectionCursor.commonRevision } else { $null })
     }
-    $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray()  -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal -RecordKind $RecordKind  -RecordId ([string]$old.Record.recordId) -Source $newRecord.fields.Source  -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)  -AllowEmptyChangedFields:$PersistNoOpOperation  -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision  -DecisionBranchContentSha256 $decisionBranchContentSha256  -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration -Internal:$InternalOperation
+    $operation = New-HandoffOperation -PayloadDigest $digest -OperationId $OperationId -ChangedFields $actualChanges.ToArray()  -AuthorityScope ([string]$Adapter.AuthorityScope) -VerifiedPrincipal $verifiedPrincipal -RecordKind $RecordKind  -RecordId ([string]$old.Record.recordId) -Source $newRecord.fields.Source  -Actor $Actor -Reason $Reason -DecisionConfirmed ([bool]$DecisionConfirmed)  -AllowEmptyChangedFields:$PersistNoOpOperation  -DecisionCommonRevision $DecisionCommonRevision -DecisionBranchRevision $decisionBranchRevision  -DecisionBranchContentSha256 $decisionBranchContentSha256  -DecisionBranchContinuationGeneration $decisionBranchContinuationGeneration -ArchiveSelectionCursor $ArchiveSelectionCursor -Internal:$InternalOperation
     $newRecord.operations[$OperationId] = $operation
     $archiving = ($Changes.Contains('Lifecycle') -and [string]$Changes['Lifecycle'] -ceq 'Archived')
     if (-not $SuppressActivity -and -not $archiving -and
@@ -2790,8 +2876,32 @@ function Set-GitHandoffBranchLifecycle {
         [Parameter(Mandatory = $true)][string] $BranchId,
         [Parameter(Mandatory = $true)][ValidateSet('Active','Archived')][string] $Lifecycle,
         [Parameter(Mandatory = $true)][string] $OperationId,[switch] $ExplicitContinuation,
-        [string] $DecisionCommonRevision,[string] $Actor='configured-adapter',[string] $Reason)
+        [string] $DecisionCommonRevision,[string] $Actor='configured-adapter',[string] $Reason,
+        [string] $ExpectedBranchRevision,[Nullable[int64]] $ExpectedContinuationGeneration,
+        [string] $ExpectedCommonRevision)
     Assert-HandoffOperationId -OperationId $OperationId
+    $archiveCursorValues = @(
+        -not [string]::IsNullOrWhiteSpace($ExpectedBranchRevision)
+        $null -ne $ExpectedContinuationGeneration
+        -not [string]::IsNullOrWhiteSpace($ExpectedCommonRevision)
+    )
+    $hasArchiveCursor = @($archiveCursorValues | Where-Object { $_ }).Count -gt 0
+    $archiveCursor = $null
+    if ($hasArchiveCursor) {
+        if (@($archiveCursorValues | Where-Object { $_ }).Count -ne 3 -or
+            $Lifecycle -cne 'Archived' -or $ExplicitContinuation -or
+            -not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
+            throw 'An inactivity archive requires all three selector cursors and cannot be combined with continuation or decision-bound archival.'
+        }
+        if ([int64]$ExpectedContinuationGeneration -lt 0) {
+            throw 'An archive selector Continuation Generation must be nonnegative.'
+        }
+        $archiveCursor = [ordered]@{
+            branchRevision=[string]$ExpectedBranchRevision
+            commonRevision=[string]$ExpectedCommonRevision
+            continuationGeneration=[int64]$ExpectedContinuationGeneration
+        }
+    }
     if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision) -and $Lifecycle -cne 'Archived') {
         throw 'A common decision revision may bind only branch archival, not restoration.'
     }
@@ -2807,6 +2917,42 @@ function Set-GitHandoffBranchLifecycle {
     if ($null -eq $common -or $null -eq $branch) { throw 'The exact common or branch record is missing; no lifecycle write was made.' }
     $existing = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
     $existingOperation = $existing.Record.operations[$OperationId]
+    $archiveOperationRevision = $null
+    if ($null -ne $archiveCursor) {
+        if ($null -ne $existingOperation) {
+            $recordedCursor = $existingOperation.archiveSelectionCursor
+            $cursorNames = @('branchRevision','commonRevision','continuationGeneration')
+            if ($recordedCursor -isnot [System.Collections.IDictionary] -or
+                $recordedCursor.Count -ne $cursorNames.Count -or
+                @($recordedCursor.Keys | Where-Object { [string]$_ -cnotin $cursorNames }).Count -gt 0 -or
+                @($cursorNames | Where-Object { -not $recordedCursor.Contains($_) }).Count -gt 0 -or
+                $recordedCursor.branchRevision -isnot [string] -or
+                $recordedCursor.commonRevision -isnot [string] -or
+                ($recordedCursor.continuationGeneration -isnot [int] -and
+                    $recordedCursor.continuationGeneration -isnot [long]) -or
+                [string]$recordedCursor.branchRevision -cne [string]$archiveCursor.branchRevision -or
+                [string]$recordedCursor.commonRevision -cne [string]$archiveCursor.commonRevision -or
+                [int64]$recordedCursor.continuationGeneration -ne [int64]$archiveCursor.continuationGeneration) {
+                throw "Operation ID '$OperationId' is not bound to this archive selection cursor."
+            }
+            $expectedArchiveDigest = Get-OperationPayloadDigest -AuthorityScope ([string]$Adapter.AuthorityScope) -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -Changes ([ordered]@{Lifecycle=$Lifecycle}) -Actor $Actor -Reason $Reason -ArchiveSelectionCursor $archiveCursor
+            if ([string]$existingOperation.payloadDigest -cne $expectedArchiveDigest) {
+                throw "Operation ID '$OperationId' was reused with a different archive candidate, actor, or reason."
+            }
+            $archiveOperationRevision = [string](Get-GitHandoffOperationOrigin -Adapter $Adapter -Current $existing -OperationId $OperationId).Revision
+        }
+        else {
+            if ([int64]$branch.ContinuationGeneration -ne [int64]$archiveCursor.continuationGeneration) {
+                throw 'Archive selection continuation generation changed; reselect the candidate.'
+            }
+            if ([string]$branch.Revision -cne [string]$archiveCursor.branchRevision) {
+                throw 'Archive selection branch revision changed; reselect the candidate.'
+            }
+            if ([string]$common.Revision -cne [string]$archiveCursor.commonRevision) {
+                throw 'Archive selection common revision changed; reselect the candidate.'
+            }
+        }
+    }
     if ($null -ne $existingOperation) {
         Complete-GitHandoffEvents -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey  -BranchId $BranchId -OperationId $OperationId | Out-Null
     }
@@ -2836,7 +2982,7 @@ function Set-GitHandoffBranchLifecycle {
             [ordered]@{Lifecycle='Active';'Continuation Generation'=([int64]$branch.Fields['Continuation Generation'] + 1)}
         }
         else { [ordered]@{Lifecycle=$Lifecycle} }
-        Invoke-GitHandoffFieldsMutation -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ExpectedRevision $branch.Revision  -Changes $lifecycleChanges -OperationId $OperationId -SuppressActivity:($Lifecycle -ceq 'Archived')  -DecisionCommonRevision $DecisionCommonRevision -ExplicitContinuation:$ExplicitContinuation  -Actor $Actor -Reason $Reason -LifecycleReconciliation | Out-Null
+        Invoke-GitHandoffFieldsMutation -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId -ExpectedRevision $branch.Revision  -Changes $lifecycleChanges -OperationId $OperationId -SuppressActivity:($Lifecycle -ceq 'Archived')  -DecisionCommonRevision $DecisionCommonRevision -ExplicitContinuation:$ExplicitContinuation  -Actor $Actor -Reason $Reason -LifecycleReconciliation -ArchiveSelectionCursor $archiveCursor | Out-Null
     }
     else {
         if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision) -and $null -eq $existingOperation) {
@@ -2901,6 +3047,11 @@ function Set-GitHandoffBranchLifecycle {
         if ($null -eq $branch -or $null -eq $common) { throw 'The exact common or branch record disappeared during lifecycle reconciliation.' }
         $effectiveLifecycle = [string]$branch.Fields.Lifecycle
         $shouldBeIndexed = ($effectiveLifecycle -ceq 'Active')
+        $indexed = ($common.ActiveBranches -ccontains $BranchId)
+        if ($null -ne $archiveOperationRevision -and [string]$branch.Revision -cne $archiveOperationRevision -and
+            ($effectiveLifecycle -cne $Lifecycle -or $indexed -ne $shouldBeIndexed)) {
+            throw 'The archive operation revision changed before index reconciliation; reselect the candidate.'
+        }
         $indexOperationId = Get-HandoffInternalOperationId -Purpose 'branch-lifecycle-index' -TaskKey $TaskKey  -BranchId $BranchId -ParentOperationId $OperationId -Binding ("" + [string]($branch.Revision) + "|${effectiveLifecycle}")
         if (-not $indexOperationIds.Contains($indexOperationId)) { $indexOperationIds.Add($indexOperationId) }
         if ($shouldBeIndexed -and $common.Fields.Lifecycle -cne 'Active') {
@@ -2923,7 +3074,6 @@ function Set-GitHandoffBranchLifecycle {
                 continue
             }
         }
-        $indexed = ($common.ActiveBranches -ccontains $BranchId)
         if ($indexed -eq $shouldBeIndexed) {
             if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
                 Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey  -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
@@ -2988,4 +3138,4 @@ Export-ModuleMember -Function New-GitHandoffAdapter,Get-GitHandoffCommon,Get-Git
     Set-GitHandoffForkRecoveryCommonBaseline,Complete-GitHandoffForkRecovery,
     Abandon-GitHandoffForkRecovery,
     Get-GitHandoffBranchReviewBinding,New-GitHandoffCommon,New-GitHandoffBranch,Set-GitHandoffFields,Set-GitHandoffBranchLifecycle,
-    Start-GitHandoffBranchContinuation
+    Start-GitHandoffBranchContinuation,Get-GitHandoffDecisionBranchFinalizationProof

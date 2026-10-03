@@ -9,7 +9,6 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,17 +16,13 @@ permissions:
 jobs:
   canonical-validation:
     name: Skill-General Standard v1
-    outputs:
-      source_conformance: ${{ steps.source-conformance.outputs.status }}
-    # Keep the pinned checkout action as a YAML scalar alias. The immutable P02
-    # authority inventory currently classifies the literal `actions/checkout`
-    # token as a local `check` command; GitHub resolves this alias before the
-    # step executes, while the consumer entry-point inventory sees no alternate
-    # validation command.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # The approved authority inventory treats a literal checkout action token
+    # as a candidate command. GitHub resolves this pinned scalar alias first.
     env:
       CHECKOUT_ACTION_REFERENCE: &checkout-action-reference actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout protected base driver
         uses: *checkout-action-reference # actions/checkout v7
@@ -52,18 +47,84 @@ jobs:
           check-latest: true
           cache: false
 
-      - name: Capture resolved stable Go runtime
+      - name: Set up Node for central npm lock resolution
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          check-latest: true
+
+      - name: Bind npm 11 executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $versionOutput = @(& go version)
-          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -ne 1 -or
-              [string]$versionOutput[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
-            throw "setup-go did not provide one stable Go runtime version. Evidence='$($versionOutput -join ' | ')'"
+          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          $npmVersion = ([string](& $npmPath --version)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $npmVersion -cnotmatch '^11\.[0-9]+\.[0-9]+$') {
+            throw "Expected npm 11 lockfile semantics; executable '$npmPath' reported '$npmVersion'."
           }
-          "STANDARD_GO_RUNTIME_VERSION=$($Matches.version)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APPROVED_NPM_PATH=$npmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using npm $npmVersion from $npmPath"
 
-      - name: Run canonical Standard v1 validation
+      - name: Install and verify Microsoft's latest stable PowerShell
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $IsWindows) { throw 'Validation requires Windows.' }
+          $ownedRoot = Join-Path $env:RUNNER_TEMP "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $ownedRoot) { throw 'Run-owned directory already exists.' }
+          New-Item -ItemType Directory -Path $ownedRoot -ErrorAction Stop | Out-Null
+          "RUN_OWNED_ROOT=$ownedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $channel = Invoke-WebRequest -Uri 'https://aka.ms/powershell-release?tag=stable' -MaximumRedirection 10
+          $channelUrl = [string]$channel.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+          if ($channelUrl -cnotmatch '^https://github\.com/PowerShell/PowerShell/releases/tag/(?<tag>v[0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw 'The official stable channel did not resolve to one PowerShell release tag.'
+          }
+          $tag = $Matches.tag
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/PowerShell/PowerShell/releases/tags/$tag" -Headers $headers
+          if ($release.draft -or $release.prerelease -or [string]$release.tag_name -cne $tag -or
+              $tag -cnotmatch '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw 'The official stable channel release identity is invalid.'
+          }
+          $expectedVersion = $Matches.version
+          $assetName = "PowerShell-$expectedVersion-win-x64.zip"
+          $matchingAssets = @($release.assets | Where-Object { [string]$_.name -ceq $assetName })
+          if ($matchingAssets.Count -ne 1) { throw 'Latest release lacks one unique Windows x64 ZIP.' }
+          $asset = $matchingAssets[0]
+          $expectedUrl = "https://github.com/PowerShell/PowerShell/releases/download/$tag/$assetName"
+          if ([string]$asset.state -cne 'uploaded' -or [long]$asset.size -le 0 -or
+              [string]$asset.browser_download_url -cne $expectedUrl -or
+              [string]$asset.digest -cnotmatch '^sha256:(?<sha>[0-9a-fA-F]{64})$') {
+            throw 'Latest release asset identity, size, URL or digest is invalid.'
+          }
+          $expectedSha = $Matches.sha.ToLowerInvariant()
+          $zipPath = Join-Path $ownedRoot $assetName
+          Invoke-WebRequest -Uri $expectedUrl -OutFile $zipPath
+          if ((Get-Item -LiteralPath $zipPath).Length -ne [long]$asset.size -or
+              (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedSha) {
+            throw 'Latest PowerShell archive does not match the official release bytes.'
+          }
+          $runtimeRoot = Join-Path $ownedRoot 'powershell'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $runtimeRoot
+          $runtimePath = Join-Path $runtimeRoot 'pwsh.exe'
+          if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw 'Verified archive lacks pwsh.exe.' }
+          $runtimeEvidence = & $runtimePath -NoLogo -NoProfile -NonInteractive -Command `
+            '[pscustomobject]@{version=$PSVersionTable.PSVersion.ToString();path=(Get-Process -Id $PID).Path}|ConvertTo-Json -Compress' |
+            ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $runtimeEvidence.version -cne $expectedVersion -or
+              [IO.Path]::GetFullPath([string]$runtimeEvidence.path) -ine [IO.Path]::GetFullPath($runtimePath)) {
+            throw 'Verified PowerShell executable path or runtime version differs from the official release.'
+          }
+          "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
+
+      - name: Validate exact candidate with the verified runtime
         shell: pwsh
         working-directory: driver
         env:
@@ -73,6 +134,26 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $runnerNpmPrefix = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'Process')
+          if ($runnerNpmPrefix -ceq 'C:\npm\prefix') {
+            [Environment]::SetEnvironmentVariable('NPM_CONFIG_PREFIX', $null, 'Process')
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($runnerNpmPrefix)) {
+            throw 'Unexpected npm prefix in the Windows runner environment.'
+          }
+          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($npmPath) -ine [IO.Path]::GetFullPath($env:APPROVED_NPM_PATH)) {
+            throw 'The npm executable changed after the approved runtime was bound.'
+          }
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+            throw 'Child PowerShell resolution differs from the verified runtime.'
+          }
+          $checkoutHead = ([string](& git -C $candidate rev-parse HEAD)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutHead -cne $env:EXPECTED_SOURCE_SHA) {
+            throw 'Candidate checkout does not match the exact GitHub event source SHA.'
+          }
           $baseCommit = if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
             $commonBase = @(& git -C $candidate merge-base $env:PULL_REQUEST_BASE_SHA HEAD)
             if ($LASTEXITCODE -ne 0 -or $commonBase.Count -ne 1 -or
@@ -82,176 +163,58 @@ jobs:
             [string]$commonBase[0]
           }
           elseif ($env:GITHUB_EVENT_NAME -eq 'push' -and
-              -not [string]::IsNullOrWhiteSpace($env:PUSH_BEFORE_SHA) -and
-              $env:PUSH_BEFORE_SHA -notmatch '^0+$') {
+              [string]$env:PUSH_BEFORE_SHA -cmatch '^[0-9a-f]{40}$' -and
+              $env:PUSH_BEFORE_SHA -cnotmatch '^0+$') {
             $env:PUSH_BEFORE_SHA
           }
-          elseif (git -C (Join-Path $env:GITHUB_WORKSPACE 'candidate') rev-parse HEAD^ 2>$null) {
-            'HEAD^'
-          }
           else {
-            ''
+            $parents = @(& git -C $candidate rev-parse HEAD^)
+            if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 1 -or
+                [string]$parents[0] -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'A main push has no verifiable base commit.'
+            }
+            [string]$parents[0]
           }
-          $outputPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
-          if ((& git -C $candidate rev-parse HEAD) -cne $env:EXPECTED_SOURCE_SHA) {
-            throw 'Candidate checkout does not match the exact GitHub event source SHA.'
+          $goVersion = @(& go version)
+          if ($LASTEXITCODE -ne 0 -or $goVersion.Count -ne 1 -or
+              [string]$goVersion[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
+            throw 'The approved stable Go runtime could not be identified.'
           }
-          $driverArgs = @{
-            RepositoryRoot = $candidate
-            ArtifactsRoot = $env:RUNNER_TEMP
-            BaseCommit = $baseCommit
-            ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION
-            OutputPath = $outputPath
+          $expectedGoRuntimeVersion = $Matches.version
+          $outputPath = Join-Path $env:RUN_OWNED_ROOT 'skill-general-conformance-report.json'
+          $driverArgs = @('-RepositoryRoot', $candidate,
+            '-ArtifactsRoot', $env:RUN_OWNED_ROOT,
+            '-BaseCommit', $baseCommit,
+            '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
+            '-OutputPath', $outputPath)
+          pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
+          if ($LASTEXITCODE -ne 0) { throw "Canonical validator exited $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
+          $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+          if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
+              $report.state -cne 'PASSED' -or $report.exitCode -ne 0 -or
+              $report.sourceConformance.status -cne 'passed') {
+            throw 'Canonical report does not prove full exact-head source validation.'
           }
-          if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and
-              $env:EXPECTED_SOURCE_SHA -ceq '66c466540480306c7f5346338d70d036bddb4930' -and
-              $env:GITHUB_REF -match '^refs/pull/12/merge$') {
-            $driverArgs.SourceMergeExceptionReview = $true
-            $driverArgs.ProtectedSourceMergeCheck = $true
-            $driverArgs.ProtectedWorkflowRevision = $env:PULL_REQUEST_BASE_SHA
-          }
-          & ./scripts/Validate.ps1 @driverArgs
 
-      - name: Route source conformance from canonical evidence
-        id: source-conformance
+      - name: Clean only this run's temporary files
         if: ${{ always() }}
         shell: pwsh
-        env:
-          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          $status = 'failed'
-          try {
-            $reportPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
-            if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
-              $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-              $source = $report.sourceConformance
-              $canonical = $source.canonicalValidation
-              if ($report.schemaVersion -eq 1 -and
-                  $report.evidence -ceq 'standard-validation-evidence-v1' -and
-                  $report.contract -ceq 'standard-validation-contract-v1' -and
-                  $report.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                  $source.schemaVersion -eq 1 -and
-                  $source.contract -ceq 'standard-source-conformance-v1' -and
-                  $source.scope -ceq 'source-stages-1-5' -and
-                  $source.status -ceq 'passed' -and
-                  $source.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                  $source.candidateId -ceq $report.candidate.candidateId -and
-                  $source.releaseEligible -eq $false -and
-                  @($source.failureReasons).Count -eq 0 -and
-                  $canonical.state -ceq $report.state -and
-                  $canonical.exitCode -eq $report.exitCode -and
-                  $canonical.releaseEligible -eq $report.releaseEligible -and
-                  $canonical.stage6Status -ceq $report.stages[5].status) {
-                $status = 'passed'
-              }
-              elseif ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and
-                  $env:PULL_REQUEST_NUMBER -ceq '12' -and
-                  $env:GITHUB_REF -match '^refs/pull/12/merge$' -and
-                  $env:EXPECTED_SOURCE_SHA -ceq '66c466540480306c7f5346338d70d036bddb4930') {
-                $decision = $report.sourceMergeDecision
-                $proposal = $report.sourceMergeExceptionProposal
-                $driverText = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'driver/scripts/Validate.ps1') -Raw -Encoding utf8
-                $centralPin = [regex]::Match($driverText, "(?m)^\`$script:AuthorityCommit = '([0-9a-f]{40})'\s*$").Groups[1].Value
-                $archivePin = [regex]::Match($driverText, "(?m)^\`$script:AuthorityArchiveSha256 = '([0-9a-f]{64})'\s*$").Groups[1].Value
-                if ($centralPin -and $archivePin -and
-                    $report.candidate.sourceRepository -ceq 'https://github.com/SyuanTsai/Skill-General.git' -and
-                    $report.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                    $report.state -ceq 'FAILED' -and $report.exitCode -eq 20 -and
-                    $report.releaseEligible -eq $false -and
-                    $report.stages[3].status -ceq 'failed' -and
-                    $report.stages[4].status -ceq 'not-run' -and
-                    $source.status -ceq 'failed' -and
-                    $proposal.status -ceq 'eligible-for-policy-review' -and
-                    $proposal.releaseEligible -eq $false -and
-                    $decision.contract -ceq 'protected-source-merge-decision-v1' -and
-                    $decision.status -ceq 'eligible-for-protected-check' -and
-                    $decision.fixtureRoute -ceq 'rejected' -and
-                    $decision.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                    $decision.centralRevision -ceq $centralPin -and
-                    $decision.archiveSha256 -ceq $archivePin -and
-                    $decision.workflowRevision -ceq $env:PULL_REQUEST_BASE_SHA -and
-                    $decision.releaseEligible -eq $false -and
-                    @($decision.failureReasons).Count -eq 0 -and
-                    @($decision.requiredContexts).Count -eq 3 -and
-                    $decision.requiredContexts[0] -ceq 'repository-contract' -and
-                    $decision.requiredContexts[1] -ceq ('skill' + '-validator') -and
-                    $decision.requiredContexts[2] -ceq ('skill' + '-tools')) {
-                  $status = 'passed'
-                  Write-Host 'Exact PR12 source merge exception passed; canonical validation remains FAILED/20.'
-                }
-              }
-            }
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:RUN_OWNED_ROOT)) {
+            Write-Host 'No run-owned directory was recorded; cleanup skipped.'
+            return
           }
-          catch {
-            Write-Warning "Could not read source conformance evidence: $($_.Exception.Message)"
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
+          if (-not $ownedRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar,
+              [StringComparison]::OrdinalIgnoreCase) -or
+              -not [string]::Equals($ownedRoot, $expectedRoot,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Refusing to clean a path without this run ownership evidence.'
           }
-          "status=$status" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "Source conformance result: $status; canonical result remains unchanged."
-
-      - name: Retain exact PR12 review evidence
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 12 }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: pr12-source-merge-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/skill-general-conformance-report.json
-            ${{ runner.temp }}/sgv1-*/**/*.json
-          if-no-files-found: error
-          retention-days: 90
-
-  # These jobs preserve the repository's existing required status contexts and
-  # route the central report's source-only projection for source integration.
-  repository-contract:
-    name: repository-contract
-    if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mirror source conformance result
-        shell: bash
-        run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
-
-  skill-validator:
-    name: skill-validator
-    if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mirror source conformance result
-        shell: bash
-        run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
-
-  skill-tools:
-    name: skill-tools
-    if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mirror source conformance result
-        shell: bash
-        run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
+          if (Test-Path -LiteralPath $ownedRoot) {
+            Remove-Item -LiteralPath $ownedRoot -Recurse -Force
+          }
