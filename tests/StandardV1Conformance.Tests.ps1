@@ -100,7 +100,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
     }
 
     # Scenario: a PR or main push enters the sole supported Windows validation workflow.
-    # Purpose: retire duplicate Ubuntu status paths while proving the official runtime and exact result.
+    # Purpose: preserve the required context names as projections while proving the official runtime and exact result.
     It 'UnitT15_RoutesPrAndMainThroughOneWindowsLatestStableCanonicalValidator' {
         $workflowPath = Join-Path $script:RepositoryRoot '.github/workflows/validate.yml'
         $workflow = Get-Content -LiteralPath $workflowPath -Raw
@@ -131,8 +131,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'if \(\$LASTEXITCODE -ne 0\)'
         $workflow | Should -Match 'Remove-Item -LiteralPath \$ownedRoot -Recurse -Force'
         $workflow | Should -Not -Match 'ubuntu-latest|pull_request_target|checks: write'
-        $workflow | Should -Not -Match '(?m)^  (?:repository-contract|skill-validator|skill-tools):'
-        $workflow | Should -Not -Match 'source_conformance:|SourceMergeExceptionReview|ProtectedSourceMergeCheck'
+        $workflow | Should -Match '(?m)^  repository-contract:\s*$'
+        $workflow | Should -Match '(?m)^  skill-validator:\s*$'
+        $workflow | Should -Match '(?m)^  skill-tools:\s*$'
+        $workflow | Should -Match 'source_conformance:'
+        $workflow | Should -Not -Match 'SourceMergeExceptionReview|ProtectedSourceMergeCheck'
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
     }
@@ -141,9 +144,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
     # Purpose: ensure the always-run cleanup never deletes files this run did not create.
     It 'UnitT16_PreservesPreexistingDirectoryWhenRunOwnershipWasNotRecorded' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
-        $cleanupStep = ($workflow -split [regex]::Escape('      - name: Clean only this run''s temporary files'), 2)[1]
-        $cleanupBody = ($cleanupStep -split '        run: \|\r?\n', 2)[1]
-        $cleanupScript = (($cleanupBody -split '\r?\n') | ForEach-Object {
+        $cleanupStep = [regex]::Match($workflow, '(?ms)^      - name: Clean only this run''s temporary files\r?\n(?<step>.*?)(?=^  [a-z][a-z0-9-]*:\s*$|\z)')
+        $cleanupStep.Success | Should -BeTrue
+        $cleanupRun = [regex]::Match($cleanupStep.Groups['step'].Value, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)' )
+        $cleanupRun.Success | Should -BeTrue
+        $cleanupScript = (($cleanupRun.Groups['body'].Value -split '\r?\n') | ForEach-Object {
             if ($_.StartsWith('          ')) { $_.Substring(10) } else { $_ }
         }) -join "`n"
         $cleanupScript | Should -Not -BeNullOrEmpty
@@ -178,9 +183,185 @@ Describe 'Skill-General Standard v1 reference implementation' {
         }
     }
 
-    # Scenario: the trusted base driver evaluates the immutable PR candidate under the single normal check.
-    # Purpose: preserve source binding without a historical PR-specific success exception.
-    It 'InterT20_binds_base_driver_and_exact_pr_head_without_status_mirrors' {
+    # Scenario: a canonical Windows job has finished or failed after emitting its source report result.
+    # Purpose: keep all three currently required contexts tied to the exact canonical job outcome and report.
+    It 'UnitT17_ProjectsRequiredContextsOnlyFromSuccessfulCanonicalSourceEvidence' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $lines = $workflow -split '\r?\n'
+        $requiredContexts = @('repository-contract', 'skill-validator', 'skill-tools')
+        $projectionScripts = @()
+
+        foreach ($context in $requiredContexts) {
+            $start = [Array]::IndexOf($lines, "  ${context}:")
+            ($start -ge 0) | Should -BeTrue
+            $end = $lines.Count
+            for ($index = $start + 1; $index -lt $lines.Count; $index++) {
+                if ($lines[$index] -cmatch '^  [a-z][a-z0-9-]*:\s*$') {
+                    $end = $index
+                    break
+                }
+            }
+            $job = ($lines[($start + 1)..($end - 1)] -join "`n")
+            $job | Should -Match "(?m)^    name: $([regex]::Escape($context))\s*$"
+            $job | Should -Match '(?m)^    needs: canonical-validation\s*$'
+            $job | Should -Match '(?m)^    if: \$\{\{\s*always\(\)\s*\}\}\s*$'
+            $job | Should -Match '(?m)^    runs-on: windows-latest\s*$'
+            $job | Should -Match '(?m)^          CANONICAL_VALIDATION_RESULT:\s*\$\{\{\s*needs\.canonical-validation\.result\s*\}\}\s*$'
+            $job | Should -Match '(?m)^          SOURCE_CONFORMANCE_RESULT:\s*\$\{\{\s*needs\.canonical-validation\.outputs\.source_conformance\s*\}\}\s*$'
+            $job | Should -Match '(?m)^        shell: pwsh\s*$'
+
+            $run = [regex]::Match($job, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)' )
+            $run.Success | Should -BeTrue
+            $projectionScripts += (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object {
+                $_.Substring(10)
+            }) -join "`n")
+        }
+
+        $projectionScripts.Count | Should -Be 3
+        $projectionScripts[1] | Should -BeExactly $projectionScripts[0]
+        $projectionScripts[2] | Should -BeExactly $projectionScripts[0]
+        $workflow | Should -Match '(?m)^      source_conformance:\s*\$\{\{\s*steps\.canonical-source-report\.outputs\.source_conformance\s*\}\}\s*$'
+        ([regex]::Matches($workflow, '(?m)^\s*pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs\s*$')).Count | Should -Be 1
+        $reportChecks = @(
+            '$report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA',
+            '$report.state -cne ''PASS''',
+            '$report.exitCode -ne 0',
+            '$report.sourceConformance.status -cne ''passed'''
+        )
+        $previousCheck = -1
+        foreach ($reportCheck in $reportChecks) {
+            $checkIndex = $workflow.IndexOf($reportCheck)
+            ($checkIndex -gt $previousCheck) | Should -BeTrue
+            $previousCheck = $checkIndex
+        }
+        ($workflow.IndexOf('"source_conformance=passed"') -gt $previousCheck) | Should -BeTrue
+
+        $savedResult = $env:CANONICAL_VALIDATION_RESULT
+        $savedSource = $env:SOURCE_CONFORMANCE_RESULT
+        try {
+            $env:CANONICAL_VALIDATION_RESULT = 'success'
+            $env:SOURCE_CONFORMANCE_RESULT = 'passed'
+            { & ([scriptblock]::Create($projectionScripts[0])) } | Should -Not -Throw
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CANONICAL_VALIDATION_RESULT', $savedResult, 'Process')
+            [Environment]::SetEnvironmentVariable('SOURCE_CONFORMANCE_RESULT', $savedSource, 'Process')
+        }
+    }
+
+    # Scenario: a canonical job failed, was cancelled or skipped, or did not publish a passed source report.
+    # Purpose: prevent an always-run status projection from reporting green on incomplete canonical evidence.
+    It 'UnitT18_FailsRequiredProjectionsForNonSuccessOrMissingSourceEvidence' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $lines = $workflow -split '\r?\n'
+        $start = [Array]::IndexOf($lines, '  repository-contract:')
+        ($start -ge 0) | Should -BeTrue
+        $end = $lines.Count
+        for ($index = $start + 1; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -cmatch '^  [a-z][a-z0-9-]*:\s*$') {
+                $end = $index
+                break
+            }
+        }
+        $job = ($lines[($start + 1)..($end - 1)] -join "`n")
+        $run = [regex]::Match($job, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)' )
+        $run.Success | Should -BeTrue
+        $projectionScript = (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object {
+            $_.Substring(10)
+        }) -join "`n")
+        $projectionScript | Should -Not -BeNullOrEmpty
+        $projection = [scriptblock]::Create($projectionScript)
+
+        $savedResult = $env:CANONICAL_VALIDATION_RESULT
+        $savedSource = $env:SOURCE_CONFORMANCE_RESULT
+        try {
+            foreach ($case in @(
+                @{ result = 'failure'; source = 'passed' }, # Includes a cleanup failure after report publication.
+                @{ result = 'cancelled'; source = 'passed' },
+                @{ result = 'skipped'; source = 'passed' },
+                @{ result = 'success'; source = '' },
+                @{ result = 'success'; source = 'failed' }
+            )) {
+                $env:CANONICAL_VALIDATION_RESULT = $case.result
+                $env:SOURCE_CONFORMANCE_RESULT = $case.source
+                { & $projection } | Should -Throw
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CANONICAL_VALIDATION_RESULT', $savedResult, 'Process')
+            [Environment]::SetEnvironmentVariable('SOURCE_CONFORMANCE_RESULT', $savedSource, 'Process')
+        }
+    }
+
+    # Scenario: the pinned canonical validator emits a successful PASS report for the exact candidate.
+    # Purpose: accept the producer's real envelope and reject aliases or incomplete candidate evidence before publishing output.
+    It 'UnitT19_AcceptsPinnedProducerPassEnvelopeAndRejectsOtherReportStates' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<step>.*?)(?=^      - name: Clean only this run''s temporary files)')
+        $step.Success | Should -BeTrue
+        $run = [regex]::Match($step.Groups['step'].Value, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)' )
+        $run.Success | Should -BeTrue
+        $runScript = (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object {
+            $_.Substring(10)
+        }) -join "`n")
+        $gateStartMarker = 'if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf))'
+        $gateEndMarker = '"source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append'
+        $gateStart = $runScript.IndexOf($gateStartMarker)
+        $gateEnd = $runScript.IndexOf($gateEndMarker)
+        ($gateStart -ge 0 -and $gateEnd -gt $gateStart) | Should -BeTrue
+        $reportGate = [scriptblock]::Create($runScript.Substring($gateStart, $gateEnd + $gateEndMarker.Length - $gateStart))
+
+        $expectedSourceSha = 'a' * 40
+        $outputPath = Join-Path $TestDrive 'canonical-report.json'
+        $savedExpectedSourceSha = $env:EXPECTED_SOURCE_SHA
+        $savedGitHubOutput = $env:GITHUB_OUTPUT
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive 'github-output.txt'
+        $env:EXPECTED_SOURCE_SHA = $expectedSourceSha
+        $validReport = [pscustomobject]@{
+            candidate = [pscustomobject]@{ sourceRevision = $expectedSourceSha }
+            state = 'PASS'
+            exitCode = 0
+            sourceConformance = [pscustomobject]@{ status = 'passed' }
+        }
+
+        try {
+            $validReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            { & $reportGate } | Should -Not -Throw
+            (Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw).Trim() | Should -BeExactly 'source_conformance=passed'
+
+            foreach ($case in @(
+                [pscustomobject]@{ state = 'PASSED'; sourceRevision = $expectedSourceSha; exitCode = 0; sourceStatus = 'passed' },
+                [pscustomobject]@{ state = 'FAIL'; sourceRevision = $expectedSourceSha; exitCode = 1; sourceStatus = 'failed' },
+                [pscustomobject]@{ state = 'PASS'; sourceRevision = ('b' * 40); exitCode = 0; sourceStatus = 'passed' },
+                [pscustomobject]@{ state = 'PASS'; sourceRevision = $expectedSourceSha; exitCode = 1; sourceStatus = 'passed' },
+                [pscustomobject]@{ state = 'PASS'; sourceRevision = $expectedSourceSha; exitCode = 0; sourceStatus = 'failed' }
+            )) {
+                Remove-Item -LiteralPath $env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
+                $invalidReport = [pscustomobject]@{
+                    candidate = [pscustomobject]@{ sourceRevision = $case.sourceRevision }
+                    state = $case.state
+                    exitCode = $case.exitCode
+                    sourceConformance = [pscustomobject]@{ status = $case.sourceStatus }
+                }
+                $invalidReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+                { & $reportGate } | Should -Throw
+                (Test-Path -LiteralPath $env:GITHUB_OUTPUT) | Should -BeFalse
+            }
+
+            Remove-Item -LiteralPath $env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $outputPath
+            { & $reportGate } | Should -Throw
+            (Test-Path -LiteralPath $env:GITHUB_OUTPUT) | Should -BeFalse
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('EXPECTED_SOURCE_SHA', $savedExpectedSourceSha, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_OUTPUT', $savedGitHubOutput, 'Process')
+        }
+    }
+
+    # Scenario: the trusted base driver evaluates an immutable PR candidate once on the canonical Windows job.
+    # Purpose: retain exact source binding while the required checks consume only the canonical job result.
+    It 'InterT20_BindsBaseDriverAndExactPrHeadForTheSingleCanonicalValidator' {
         $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
         $workflow | Should -Match 'EXPECTED_SOURCE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}'
         $workflow | Should -Match 'ref:\s*\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}'
@@ -190,7 +371,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$driverArgs = @\('
         $workflow | Should -Match 'pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs'
         $workflow | Should -Match 'candidate\.sourceRevision -cne \$env:EXPECTED_SOURCE_SHA'
-        $workflow | Should -Match 'report\.state -cne ''PASSED'''
+        $workflow | Should -Match 'report\.state -cne ''PASS'''
         $workflow | Should -Match 'persist-credentials:\s*false'
     }
 

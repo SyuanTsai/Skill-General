@@ -18,6 +18,8 @@ jobs:
     name: Skill-General Standard v1
     runs-on: windows-latest
     timeout-minutes: 30
+    outputs:
+      source_conformance: ${{ steps.canonical-source-report.outputs.source_conformance }}
     # The approved authority inventory treats a literal checkout action token
     # as a candidate command. GitHub resolves this pinned scalar alias first.
     env:
@@ -125,6 +127,7 @@ jobs:
           Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
 
       - name: Validate exact candidate with the verified runtime
+        id: canonical-source-report
         shell: pwsh
         working-directory: driver
         env:
@@ -192,10 +195,11 @@ jobs:
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
           if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
-              $report.state -cne 'PASSED' -or $report.exitCode -ne 0 -or
+              $report.state -cne 'PASS' -or $report.exitCode -ne 0 -or
               $report.sourceConformance.status -cne 'passed') {
             throw 'Canonical report does not prove full exact-head source validation.'
           }
+          "source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Clean only this run's temporary files
         if: ${{ always() }}
@@ -217,4 +221,58 @@ jobs:
           }
           if (Test-Path -LiteralPath $ownedRoot) {
             Remove-Item -LiteralPath $ownedRoot -Recurse -Force
+          }
+
+  repository-contract:
+    name: repository-contract
+    needs: canonical-validation
+    if: ${{ always() }}
+    runs-on: windows-latest
+    timeout-minutes: 2
+    steps:
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
+        run: |
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
+          }
+
+  skill-validator:
+    name: skill-validator
+    needs: canonical-validation
+    if: ${{ always() }}
+    runs-on: windows-latest
+    timeout-minutes: 2
+    steps:
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
+        run: |
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
+          }
+
+  skill-tools:
+    name: skill-tools
+    needs: canonical-validation
+    if: ${{ always() }}
+    runs-on: windows-latest
+    timeout-minutes: 2
+    steps:
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
+        run: |
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
           }
