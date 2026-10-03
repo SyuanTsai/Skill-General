@@ -975,10 +975,12 @@ function Invoke-HandoffArchiveCycle {
     $pendingActionsToRetry = [System.Collections.Generic.List[object]]::new()
     $pendingByRecordIdentity = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
     $pendingTaskIdentities = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $queuedTaskIdentities = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $asOfUtc = $null
     $clockValid = $false
     $gateReason = $null
     $freshCandidatesDeferred = $false
+    $sameTaskDeferred = $false
     $cycleOperationId = $OperationId
 
     if (-not $CandidateBatchAuthorized) { $gateReason = 'candidate-batch-unauthorized' }
@@ -1013,8 +1015,16 @@ function Invoke-HandoffArchiveCycle {
                 }
                 continue
             }
+            $taskIdentity = Get-HandoffArchiveCycleIdentityKey $decision -TaskOnly
+            if ($pendingTaskIdentities.Contains($taskIdentity)) {
+                return [pscustomobject]@{
+                    AsOfUtc = $asOfUtc; ClockValid = $clockValid; GateReason = 'conflicting-pending-actions'
+                    Selected = [object[]]@(); Protected = [object[]]@()
+                    Completed = [object[]]@(); Pending = [object[]]$PendingActions; Durable = $false
+                }
+            }
             $pendingByRecordIdentity.Add($recordIdentity,$item)
-            $pendingTaskIdentities.Add((Get-HandoffArchiveCycleIdentityKey $decision -TaskOnly)) | Out-Null
+            [void]$pendingTaskIdentities.Add($taskIdentity)
             $pendingActionsToRetry.Add($item)
         }
         foreach ($item in $pendingActionsToRetry) {
@@ -1053,12 +1063,18 @@ function Invoke-HandoffArchiveCycle {
                 if ([string]::IsNullOrWhiteSpace($cycleOperationId)) { $freshOperationIdRequired = $true }
                 continue
             }
+            if ($queuedTaskIdentities.Contains($taskIdentity)) {
+                $selected.Add($decision)
+                $sameTaskDeferred = $true
+                continue
+            }
             $selected.Add($decision)
             if ([string]::IsNullOrWhiteSpace($cycleOperationId)) {
                 $freshOperationIdRequired = $true
                 continue
             }
             $cursor = New-HandoffArchiveCycleCursor $decision
+            [void]$queuedTaskIdentities.Add($taskIdentity)
             $actions.Add([pscustomobject]@{
                 Decision = $decision
                 Cursor = $cursor
@@ -1067,6 +1083,7 @@ function Invoke-HandoffArchiveCycle {
         }
         if ($freshOperationIdRequired) { $gateReason = 'stable-operation-id-required' }
         elseif ($freshCandidatesDeferred) { $gateReason = 'pending-task-cursor-in-flight' }
+        elseif ($sameTaskDeferred) { $gateReason = 'same-task-cursor-in-flight' }
     }
 
     foreach ($action in $actions) {

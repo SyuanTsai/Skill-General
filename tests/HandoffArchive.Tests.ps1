@@ -695,7 +695,8 @@ Describe 'Handoff seven-day archive selection' {
         # Purpose: continue the batch and later resume only the pending candidate with its original cursor.
         It 'UnitT24_continues_after_one_candidate_is_pending_and_resumes_that_candidate_with_the_same_cursor' {
             $fixture = New-ArchiveFinalizationFixture
-            $branchB = New-ArchiveBranch -BranchId 'branch-b' -Revision ('e' * 40)
+            $commonB = New-ArchiveCommon -Task 'task-b' -Revision ('9' * 40)
+            $branchB = New-ArchiveBranch -Task 'task-b' -BranchId 'branch-b' -Revision ('e' * 40)
             $bindingB = [ordered]@{
                 branchId = 'branch-b'
                 reviewedRevision = 'f' * 40
@@ -703,15 +704,15 @@ Describe 'Handoff seven-day archive selection' {
                 continuationGeneration = [long]$branchB['Continuation Generation']
                 outcome = [string]$branchB['Branch Outcome']
             }
-            $fixture.Common['Active Branches'] = @('branch-a','branch-b')
-            $fixture.Common['Decision Branch Bindings'] = @($fixture.Binding,$bindingB)
+            $commonB['Active Branches'] = @('branch-b')
+            $commonB['Decision Branch Bindings'] = @($bindingB)
             $proofB = [pscustomobject]@{
                 ProofKind = 'GitBranchFinalizationDescendant'
                 AuthorityScope = [string]$fixture.Common['Authority Scope']
-                TaskKey = [string]$fixture.Common['Task Key']
+                TaskKey = [string]$commonB['Task Key']
                 BranchId = 'branch-b'
                 DecisionCommonRevision = 'd' * 40
-                CurrentCommonRevision = [string]$fixture.Common['Revision']
+                CurrentCommonRevision = [string]$commonB['Revision']
                 ReviewedBranchRevision = [string]$bindingB.reviewedRevision
                 CurrentBranchRevision = [string]$branchB['Revision']
                 ReviewedContentSha256 = [string]$bindingB.reviewedContentSha256
@@ -722,7 +723,7 @@ Describe 'Handoff seven-day archive selection' {
             $clock = { $now }.GetNewClosure()
             $attempted = [System.Collections.Generic.List[object]]::new()
             $partialAction = { param($decision,$cursor,$operationId); $attempted.Add([pscustomobject]@{BranchId=[string]$decision.BranchId;OperationId=$operationId}); $verified = $decision.BranchId -ceq 'branch-b'; [pscustomobject]@{ Durable=$verified; ReadbackVerified=$verified; OperationId=$operationId } }.GetNewClosure()
-            $first = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch,$branchB) `
+            $first = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common,$commonB) -BranchRecords @($fixture.Branch,$branchB) `
                 -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
                 -VerifiedFinalizationProofs @($fixture.Proof,$proofB) -OperationId 'cycle-partial' -ArchiveAction $partialAction
 
@@ -977,6 +978,94 @@ Describe 'Handoff seven-day archive selection' {
             $result.Completed[0].Decision.TaskKey | Should -Be 'task-1'
             @($result.Pending).Count | Should -Be 0
             $result.Durable | Should -BeFalse
+        }
+
+        # Scenario: two eligible branches share one task's common revision.
+        # Purpose: write only one archive action, then reselect its sibling against the advanced common cursor.
+        It 'UnitT53_serializes_sibling_archive_actions_by_task_cursor' {
+            $fixture = New-ArchiveFinalizationFixture
+            $branchB = New-ArchiveBranch -BranchId 'branch-b' -Revision ('e' * 40)
+            $bindingB = [ordered]@{
+                branchId = 'branch-b'; reviewedRevision = 'f' * 40
+                reviewedContentSha256 = Get-TestReviewedBranchContentSha256 $branchB
+                continuationGeneration = [long]$branchB['Continuation Generation']
+                outcome = [string]$branchB['Branch Outcome']
+            }
+            $fixture.Common['Active Branches'] = @('branch-a','branch-b')
+            $fixture.Common['Decision Branch Bindings'] = @($fixture.Binding,$bindingB)
+            $proofB = [pscustomobject]@{
+                ProofKind = 'GitBranchFinalizationDescendant'
+                AuthorityScope = [string]$fixture.Common['Authority Scope']
+                TaskKey = [string]$fixture.Common['Task Key']; BranchId = 'branch-b'
+                DecisionCommonRevision = 'd' * 40
+                CurrentCommonRevision = [string]$fixture.Common['Revision']
+                ReviewedBranchRevision = [string]$bindingB.reviewedRevision
+                CurrentBranchRevision = [string]$branchB['Revision']
+                ReviewedContentSha256 = [string]$bindingB.reviewedContentSha256
+                ContinuationGeneration = [long]$bindingB.continuationGeneration
+                Outcome = [string]$bindingB.outcome
+            }
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $action = {
+                param($decision,$cursor,$operationId)
+                $calls.Add([string]$decision.BranchId)
+                if ([string]$cursor.ParentRevision -cne [string]$fixture.Common['Revision']) {
+                    return [pscustomobject]@{ Durable=$false; ReadbackVerified=$false; OperationId=$operationId }
+                }
+                $fixture.Common['Revision'] = '9' * 40
+                $fixture.Common['Active Branches'] = @('branch-b')
+                return [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId }
+            }.GetNewClosure()
+
+            $first = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch,$branchB) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof,$proofB) -OperationId 'sibling-cycle' -ArchiveAction $action
+
+            $calls.Count | Should -Be 1
+            $calls[0] | Should -Be 'branch-a'
+            @($first.Selected).Count | Should -Be 2
+            @($first.Completed).Count | Should -Be 1
+            @($first.Pending).Count | Should -Be 0
+            $first.GateReason | Should -Be 'same-task-cursor-in-flight'
+            $first.Durable | Should -BeFalse
+
+            $proofB.CurrentCommonRevision = [string]$fixture.Common['Revision']
+            $second = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($branchB) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($proofB) -OperationId 'sibling-cycle-next' -ArchiveAction $action
+            $calls.Count | Should -Be 2
+            $calls[1] | Should -Be 'branch-b'
+            $second.Durable | Should -BeTrue
+            @($second.Pending).Count | Should -Be 0
+        }
+
+        # Scenario: persisted input from an older cycle contains two different pending actions under one task.
+        # Purpose: reject ambiguous shared-cursor retries before either archive callback runs.
+        It 'UnitT54_rejects_two_distinct_pending_actions_for_one_task' {
+            $branchPending = New-PendingArchiveCycleAction -CycleOperationId 'older-branch-cycle'
+            $common = New-ArchiveCommon
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $unverified = { param($decision,$cursor,$operationId); [pscustomobject]@{ Durable=$false; ReadbackVerified=$false; OperationId=$operationId } }
+            $commonResult = Invoke-HandoffArchiveCycle -CommonRecords @($common) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -OperationId 'older-common-cycle' `
+                -ArchiveAction $unverified
+            @($commonResult.Pending).Count | Should -Be 1
+            $commonPending = $commonResult.Pending[0]
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $action = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $result = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true `
+                -CandidateBatchAuthorized $true -PendingActions @($branchPending,$commonPending) `
+                -ArchiveAction $action
+
+            $result.GateReason | Should -Be 'conflicting-pending-actions'
+            $calls.Count | Should -Be 0
+            @($result.Pending).Count | Should -Be 2
+            [object]::ReferenceEquals($result.Pending[0],$branchPending) | Should -BeTrue
+            [object]::ReferenceEquals($result.Pending[1],$commonPending) | Should -BeTrue
         }
     }
 }

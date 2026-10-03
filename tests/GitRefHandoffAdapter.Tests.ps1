@@ -4381,4 +4381,153 @@ exit 0
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+
+    # Scenario: archive commits, common-index reconciliation fails, then a later semantic branch write advances the Archived revision.
+    # Purpose: a saved archive decision must not remove an index entry using a newer branch state.
+    It 'InterT26_rejects_index_retry_after_archived_branch_revision_advances' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-stale-index-retry'
+            $candidate = $fixture.Candidate
+            $remote = Join-Path $root 'remote.git'
+            Add-SelectiveArchiveIndexRejectHook -RemoteRoot $remote
+            $flag = Join-Path $remote 'deny-index'
+            Set-Content -LiteralPath $flag -Value 'reject changed common index trees only'
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-stale-index-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'archive the exact selected inactivity candidate' } |
+                Should -Throw '*lifecycle is durable but common index reconciliation is pending*'
+
+            $partial = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $partial.Fields.Lifecycle | Should -Be 'Archived'
+            Remove-Item -LiteralPath $flag -Force
+            Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind branch -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -ExpectedRevision $partial.Revision `
+                -Changes ([ordered]@{Current='Material update after the archive selection'}) `
+                -OperationId 'b2-post-archive-material-update' -Actor 'writer-b' `
+                -Reason 'record later branch work before an old archive retry' | Out-Null
+            $newer = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $newer.Revision | Should -Not -Be $partial.Revision
+            $newer.Fields.Lifecycle | Should -Be 'Archived'
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-stale-index-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'archive the exact selected inactivity candidate' } |
+                Should -Throw '*archive operation revision changed*'
+
+            $after = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $after.Revision | Should -Be $newer.Revision
+            $after.Fields.Current | Should -Be 'Material update after the archive selection'
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches |
+                Should -Contain $fixture.BranchId
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: archive record commits, its Lifecycle event is rejected, and later branch work advances the revision.
+    # Purpose: an exact retry must repair the durable event intent without applying the stale index decision.
+    It 'InterT27_repairs_archive_event_before_rejecting_a_stale_index_retry' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-event-before-stale-index'
+            $candidate = $fixture.Candidate
+            $remote = Join-Path $root 'remote.git'
+            Add-SelectiveRejectHook -RemoteRoot $remote
+            $flag = Join-Path $remote 'deny-events'
+            Set-Content -LiteralPath $flag -Value 'reject the archive Lifecycle event after its record commit'
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-event-stale-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'archive the exact selected inactivity candidate' } |
+                Should -Throw '*field event*pending or unverified*'
+
+            $partial = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $partial.Fields.Lifecycle | Should -Be 'Archived'
+            (Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind branch -BranchId $fixture.BranchId -OperationId 'b2-event-stale-archive' -Field 'Lifecycle') |
+                Should -BeNullOrEmpty
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches |
+                Should -Contain $fixture.BranchId
+            Remove-Item -LiteralPath $flag -Force
+
+            Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind branch -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -ExpectedRevision $partial.Revision `
+                -Changes ([ordered]@{Current='Material update after the event failure'}) `
+                -OperationId 'b2-post-event-material-update' -Actor 'writer-b' `
+                -Reason 'record later work before repairing the old event' | Out-Null
+            $newer = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $newer.Revision | Should -Not -Be $partial.Revision
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-event-stale-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'archive the exact selected inactivity candidate' } |
+                Should -Throw '*archive operation revision changed*'
+
+            $repairedEvent = Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind branch -BranchId $fixture.BranchId -OperationId 'b2-event-stale-archive' -Field 'Lifecycle'
+            $repairedEvent.ReadbackResult | Should -Be 'verified'
+            $repairedEvent.Reason | Should -Be 'archive the exact selected inactivity candidate'
+            (Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId).Revision |
+                Should -Be $newer.Revision
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches |
+                Should -Contain $fixture.BranchId
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: a completed archive is followed by a semantic write that preserves Archived lifecycle and index.
+    # Purpose: retrying the original Operation ID is an idempotent no-op after its event/index are already durable.
+    It 'InterT27b_allows_an_exact_archive_retry_when_the_newer_index_is_already_correct' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-newer-correct-index'
+            $candidate = $fixture.Candidate
+            $archived = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-newer-correct-archive' `
+                -ExpectedBranchRevision $candidate.Revision `
+                -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                -Reason 'archive the exact selected inactivity candidate'
+            $archived.Indexed | Should -BeFalse
+            $partial = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind branch -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -ExpectedRevision $partial.Revision `
+                -Changes ([ordered]@{Current='Later semantic work with archived lifecycle'}) `
+                -OperationId 'b2-newer-correct-material-update' -Actor 'writer-b' `
+                -Reason 'record later work after completed archive' | Out-Null
+            $newer = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $newer.Revision | Should -Not -Be $partial.Revision
+
+            $retried = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-newer-correct-archive' `
+                -ExpectedBranchRevision $candidate.Revision `
+                -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                -Reason 'archive the exact selected inactivity candidate'
+            $retried.BranchRevision | Should -Be $newer.Revision
+            $retried.Indexed | Should -BeFalse
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches |
+                Should -Not -Contain $fixture.BranchId
+            (Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind branch -BranchId $fixture.BranchId -OperationId 'b2-newer-correct-archive' -Field 'Lifecycle').ReadbackResult |
+                Should -Be 'verified'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

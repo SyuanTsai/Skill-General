@@ -2917,6 +2917,7 @@ function Set-GitHandoffBranchLifecycle {
     if ($null -eq $common -or $null -eq $branch) { throw 'The exact common or branch record is missing; no lifecycle write was made.' }
     $existing = Read-GitHandoffRecord -Adapter $Adapter -RecordKind branch -TaskKey $TaskKey -BranchId $BranchId
     $existingOperation = $existing.Record.operations[$OperationId]
+    $archiveOperationRevision = $null
     if ($null -ne $archiveCursor) {
         if ($null -ne $existingOperation) {
             $recordedCursor = $existingOperation.archiveSelectionCursor
@@ -2938,6 +2939,7 @@ function Set-GitHandoffBranchLifecycle {
             if ([string]$existingOperation.payloadDigest -cne $expectedArchiveDigest) {
                 throw "Operation ID '$OperationId' was reused with a different archive candidate, actor, or reason."
             }
+            $archiveOperationRevision = [string](Get-GitHandoffOperationOrigin -Adapter $Adapter -Current $existing -OperationId $OperationId).Revision
         }
         else {
             if ([int64]$branch.ContinuationGeneration -ne [int64]$archiveCursor.continuationGeneration) {
@@ -3045,6 +3047,11 @@ function Set-GitHandoffBranchLifecycle {
         if ($null -eq $branch -or $null -eq $common) { throw 'The exact common or branch record disappeared during lifecycle reconciliation.' }
         $effectiveLifecycle = [string]$branch.Fields.Lifecycle
         $shouldBeIndexed = ($effectiveLifecycle -ceq 'Active')
+        $indexed = ($common.ActiveBranches -ccontains $BranchId)
+        if ($null -ne $archiveOperationRevision -and [string]$branch.Revision -cne $archiveOperationRevision -and
+            ($effectiveLifecycle -cne $Lifecycle -or $indexed -ne $shouldBeIndexed)) {
+            throw 'The archive operation revision changed before index reconciliation; reselect the candidate.'
+        }
         $indexOperationId = Get-HandoffInternalOperationId -Purpose 'branch-lifecycle-index' -TaskKey $TaskKey  -BranchId $BranchId -ParentOperationId $OperationId -Binding ("" + [string]($branch.Revision) + "|${effectiveLifecycle}")
         if (-not $indexOperationIds.Contains($indexOperationId)) { $indexOperationIds.Add($indexOperationId) }
         if ($shouldBeIndexed -and $common.Fields.Lifecycle -cne 'Active') {
@@ -3067,7 +3074,6 @@ function Set-GitHandoffBranchLifecycle {
                 continue
             }
         }
-        $indexed = ($common.ActiveBranches -ccontains $BranchId)
         if ($indexed -eq $shouldBeIndexed) {
             if (-not [string]::IsNullOrWhiteSpace($DecisionCommonRevision)) {
                 Assert-GitHandoffDecisionCommonRevision -Adapter $Adapter -TaskKey $TaskKey  -ExpectedRevision $DecisionCommonRevision -AllowStructuralDescendant | Out-Null
