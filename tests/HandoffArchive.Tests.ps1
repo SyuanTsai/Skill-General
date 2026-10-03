@@ -1,0 +1,982 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
+if (-not ('Syp217.TestDerivedOrderedDictionary' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Collections.Specialized;
+namespace Syp217 {
+    public sealed class TestDerivedOrderedDictionary : OrderedDictionary { }
+}
+'@
+}
+
+Describe 'Handoff seven-day archive selection' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '../skills/manage-task-handoff/scripts/HandoffRecordCore.psm1') -Force
+        $script:GitRefHandoffAdapterModule = Import-Module (Join-Path $PSScriptRoot '../skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -PassThru -Force
+
+        function New-ArchiveCommon {
+            param(
+                [string]$Scope = 'scope-a',
+                [string]$Task = 'task-1',
+                [string]$Revision = 'common-rev-1',
+                [string]$LastActivity = '2026-09-20T00:00:00Z',
+                [string]$WorkState = 'Awaiting Review'
+            )
+            return [ordered]@{
+                'Authority Scope' = $Scope; 'Task Key' = $Task; Intent = 'finish'; Scope = 'fixture'
+                Current = 'stable'; Source = 'fixture'; Lifecycle = 'Active'; 'Work State' = $WorkState
+                Revision = $Revision; 'Last Activity At' = $LastActivity; 'Active Branches' = @()
+            }
+        }
+
+        function New-ArchiveBranch {
+            param(
+                [string]$Scope = 'scope-a',
+                [string]$Task = 'task-1',
+                [string]$BranchId = 'branch-a',
+                [string]$Revision = 'branch-rev-1',
+                [long]$Generation = 2,
+                [string]$LastActivity = '2026-09-25T00:00:00Z',
+                [string]$WorkState = 'Awaiting Review',
+                [string]$Outcome = 'Selected'
+            )
+            return [ordered]@{
+                'Authority Scope' = $Scope; 'Task Key' = $Task; 'Branch ID' = $BranchId
+                'Fork Point' = 'fork-revision-1'; 'Continuation Generation' = $Generation
+                Current = 'reviewed'; Source = 'fixture'; Lifecycle = 'Active'; 'Work State' = $WorkState
+                Revision = $Revision; 'Branch Outcome' = $Outcome; 'Last Activity At' = $LastActivity
+            }
+        }
+
+        function Get-TestReviewedBranchContentSha256 {
+            param([System.Collections.IDictionary]$Branch)
+            $fields = [ordered]@{}
+            foreach ($name in $Branch.Keys) {
+                if ([string]$name -cne 'Revision') { $fields[[string]$name] = $Branch[$name] }
+            }
+            $record = [pscustomobject]@{
+                recordKind = 'branch'
+                taskKey = [string]$Branch['Task Key']
+                branchId = [string]$Branch['Branch ID']
+                forkPoint = [string]$Branch['Fork Point']
+                fields = $fields
+            }
+            return & $script:GitRefHandoffAdapterModule {
+                param($ReviewedRecord)
+                Get-GitHandoffReviewedBranchContentSha256 -Record $ReviewedRecord
+            } $record
+        }
+
+        function Add-ArchiveDecisionBinding {
+            param([System.Collections.IDictionary]$Common, [System.Collections.IDictionary]$Branch)
+            $Common['Decision Branch Bindings'] = @(
+                [ordered]@{
+                    branchId = [string]$Branch['Branch ID']
+                    reviewedRevision = [string]$Branch['Revision']
+                    reviewedContentSha256 = Get-TestReviewedBranchContentSha256 $Branch
+                    continuationGeneration = [long]$Branch['Continuation Generation']
+                    outcome = [string]$Branch['Branch Outcome']
+                }
+            )
+        }
+
+        function New-ArchiveJsonDecisionBinding {
+            param([System.Collections.IDictionary]$Branch)
+            $binding = [ordered]@{
+                branchId = [string]$Branch['Branch ID']
+                reviewedRevision = [string]$Branch['Revision']
+                reviewedContentSha256 = Get-TestReviewedBranchContentSha256 $Branch
+                continuationGeneration = [long]$Branch['Continuation Generation']
+                outcome = [string]$Branch['Branch Outcome']
+            }
+            $json = ConvertTo-Json -InputObject $binding -Compress -Depth 5
+            return ConvertFrom-Json -InputObject $json -AsHashtable -Depth 5
+        }
+
+        function New-ArchiveFinalizationFixture {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch
+            $common['Revision'] = 'c' * 40
+            $branch['Revision'] = 'b' * 40
+            $common['Active Branches'] = @('branch-a')
+            $binding = [ordered]@{
+                branchId = [string]$branch['Branch ID']
+                reviewedRevision = 'a' * 40
+                reviewedContentSha256 = Get-TestReviewedBranchContentSha256 $branch
+                continuationGeneration = [long]$branch['Continuation Generation']
+                outcome = [string]$branch['Branch Outcome']
+            }
+            $common['Decision Branch Bindings'] = @($binding)
+            $proof = [pscustomobject]@{
+                ProofKind = 'GitBranchFinalizationDescendant'
+                AuthorityScope = [string]$common['Authority Scope']
+                TaskKey = [string]$common['Task Key']
+                BranchId = [string]$branch['Branch ID']
+                DecisionCommonRevision = 'd' * 40
+                CurrentCommonRevision = [string]$common['Revision']
+                ReviewedBranchRevision = [string]$binding.reviewedRevision
+                CurrentBranchRevision = [string]$branch['Revision']
+                ReviewedContentSha256 = [string]$binding.reviewedContentSha256
+                ContinuationGeneration = [long]$binding.continuationGeneration
+                Outcome = [string]$binding.outcome
+            }
+            return [pscustomobject]@{ Common = $common; Branch = $branch; Binding = $binding; Proof = $proof }
+        }
+
+        function New-PendingArchiveCycleAction {
+            param([string]$CycleOperationId = 'cycle-integrity')
+            $fixture = New-ArchiveFinalizationFixture
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $pendingAction = { param($decision,$cursor,$operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$false; OperationId=$operationId; Pending=$true } }
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof) -OperationId $CycleOperationId -ArchiveAction $pendingAction
+            return $result.Pending[0]
+        }
+
+        function Get-TestArchiveSelection {
+            param(
+                [object[]]$CommonRecords = @(),
+                [object[]]$BranchRecords = @(),
+                [string]$At = '2026-10-02T00:00:00Z',
+                [bool]$InventoryComplete = $true,
+                [object[]]$VerifiedFinalizationProofs = @()
+            )
+            $now = [DateTimeOffset]::Parse($At, [Globalization.CultureInfo]::InvariantCulture)
+            $clock = { $now }.GetNewClosure()
+            $parameters = @{ CommonRecords = $CommonRecords; BranchRecords = $BranchRecords; Clock = $clock; InventoryComplete = $InventoryComplete }
+            if ($VerifiedFinalizationProofs.Count -gt 0) { $parameters.VerifiedFinalizationProofs = $VerifiedFinalizationProofs }
+            return Get-HandoffArchiveSelection @parameters
+        }
+    }
+
+    # Scenario: the Core entrypoint receives a fixed UTC clock at the seven-day cutoff.
+    # Purpose: prove the public selector returns a non-durable eligible branch decision and protects its indexed common parent.
+    It 'UnitT30_selects_an_explicitly_decided_expired_branch_at_the_exact_seven_day_boundary' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+
+        $selection.Durable | Should -BeFalse
+        @($selection.Selected).Count | Should -Be 1
+        $selection.Selected[0].Kind | Should -Be 'Branch'
+        $selection.Selected[0].BranchId | Should -Be 'branch-a'
+        $selection.Selected[0].Revision | Should -Be 'branch-rev-1'
+        $selection.Selected[0].ContinuationGeneration | Should -Be 2
+        @($selection.Protected | Where-Object Kind -eq 'Common').Count | Should -Be 1
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-index'
+    }
+
+    It 'UnitT31_accepts_the_exact_OrderedHashtable_map_produced_by_ConvertFrom_Json_AsHashtable_inside_a_Common_record' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        $binding = New-ArchiveJsonDecisionBinding -Branch $branch
+        $binding.GetType().FullName | Should -Be 'System.Management.Automation.OrderedHashtable'
+        $common['Decision Branch Bindings'] = @($binding)
+
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-index'
+        @($selection.Selected | Where-Object Kind -eq 'Branch').Count | Should -Be 1
+    }
+
+    It 'UnitT32_rejects_an_unknown_OrderedDictionary_derived_map_nested_in_a_Common_record' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        $sourceBinding = New-ArchiveJsonDecisionBinding -Branch $branch
+        $derivedBinding = [Syp217.TestDerivedOrderedDictionary]::new()
+        foreach ($key in $sourceBinding.Keys) { $derivedBinding.Add($key, $sourceBinding[$key]) }
+        $common['Decision Branch Bindings'] = @($derivedBinding)
+
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'invalid-record-shape'
+        ($selection.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'invalid-common-parent'
+    }
+
+    It 'UnitT33_rejects_a_ScriptBlock_nested_in_an_OrderedHashtable_Common_binding' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        $binding = New-ArchiveJsonDecisionBinding -Branch $branch
+        $binding['reviewedRevision'] = { 'branch-rev-1' }
+        $common['Decision Branch Bindings'] = @($binding)
+
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'invalid-record-shape'
+        ($selection.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'invalid-common-parent'
+    }
+
+    It 'UnitT34_selects_an_R1_branch_only_with_one_exact_matching_verified_Git_descendant_proof_and_remains_non_durable' {
+        $fixture = New-ArchiveFinalizationFixture
+        $selection = Get-TestArchiveSelection -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+            -VerifiedFinalizationProofs @($fixture.Proof)
+
+        $selection.Durable | Should -BeFalse
+        @($selection.Selected | Where-Object { $_.Kind -eq 'Branch' }).Count | Should -Be 1
+        $selection.Selected[0].Revision | Should -Be ('b' * 40)
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-index'
+    }
+
+    It 'UnitT35_keeps_an_R1_branch_protected_when_its_Git_descendant_proof_is_absent_or_duplicated' {
+        $fixture = New-ArchiveFinalizationFixture
+        $withoutProof = Get-TestArchiveSelection -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch)
+        ($withoutProof.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'decision-revision-mismatch'
+
+        $duplicateProof = Get-TestArchiveSelection -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+            -VerifiedFinalizationProofs @($fixture.Proof, $fixture.Proof)
+        ($duplicateProof.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'decision-revision-mismatch'
+    }
+
+    It 'UnitT36_rejects_a_Git_descendant_proof_whose_scope_identity_revisions_content_generation_outcome_or_kind_does_not_match' {
+        $fixture = New-ArchiveFinalizationFixture
+        $cases = @(
+            [pscustomobject]@{ Name = 'proof kind'; Field = 'ProofKind'; Value = 'Unverified' },
+            [pscustomobject]@{ Name = 'authority scope'; Field = 'AuthorityScope'; Value = 'scope-other' },
+            [pscustomobject]@{ Name = 'task key'; Field = 'TaskKey'; Value = 'task-other' },
+            [pscustomobject]@{ Name = 'branch ID'; Field = 'BranchId'; Value = 'branch-other' },
+            [pscustomobject]@{ Name = 'current Common revision'; Field = 'CurrentCommonRevision'; Value = 'e' * 40 },
+            [pscustomobject]@{ Name = 'current Branch revision'; Field = 'CurrentBranchRevision'; Value = 'f' * 40 },
+            [pscustomobject]@{ Name = 'reviewed Branch revision'; Field = 'ReviewedBranchRevision'; Value = 'f' * 40 },
+            [pscustomobject]@{ Name = 'reviewed content'; Field = 'ReviewedContentSha256'; Value = '0' * 64 },
+            [pscustomobject]@{ Name = 'continuation generation'; Field = 'ContinuationGeneration'; Value = 3L },
+            [pscustomobject]@{ Name = 'outcome'; Field = 'Outcome'; Value = 'Superseded' },
+            [pscustomobject]@{ Name = 'malformed decision revision'; Field = 'DecisionCommonRevision'; Value = 'not-a-git-revision' }
+        )
+        foreach ($case in $cases) {
+            $proofFields = [ordered]@{}
+            foreach ($property in $fixture.Proof.PSObject.Properties) { $proofFields[$property.Name] = $property.Value }
+            $proofFields[$case.Field] = $case.Value
+            $selection = Get-TestArchiveSelection -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -VerifiedFinalizationProofs @([pscustomobject]$proofFields)
+            ($selection.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'decision-revision-mismatch' -Because $case.Name
+            @($selection.Selected | Where-Object Kind -eq 'Branch').Count | Should -Be 0 -Because $case.Name
+        }
+    }
+
+    It 'UnitT37_does_not_let_a_valid_Git_descendant_proof_override_incomplete_inventory' {
+        $fixture = New-ArchiveFinalizationFixture
+        $selection = Get-TestArchiveSelection -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+            -InventoryComplete $false -VerifiedFinalizationProofs @($fixture.Proof)
+
+        @($selection.Selected).Count | Should -Be 0
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'inventory-incomplete'
+        ($selection.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'inventory-incomplete'
+    }
+
+    # Scenario: a decided branch is one instant younger than seven days.
+    # Purpose: make the expiry boundary inclusive without archiving early.
+    It 'UnitT38_protects_a_decided_branch_just_before_the_seven_day_boundary' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch -LastActivity '2026-09-25T00:00:01Z'
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+        @($selection.Selected).Count | Should -Be 0
+        ($selection.Protected | Where-Object Kind -eq 'Branch').Reason | Should -Be 'inactivity-period-not-reached'
+    }
+
+    # Scenario: material activity has aged beyond the configured default.
+    # Purpose: prove a valid final decision permits selection after seven days.
+    It 'UnitT39_selects_an_explicitly_decided_branch_older_than_seven_days' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch -LastActivity '2026-09-24T00:00:00Z'
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch) -At '2026-10-02T00:00:00Z'
+        @($selection.Selected).Count | Should -Be 1
+        $selection.Selected[0].Reason | Should -Be 'inactivity-expired'
+    }
+
+    # Scenario: the activity timestamp has a non-UTC offset but denotes the exact cutoff instant.
+    # Purpose: compare DateTimeOffset instants rather than local clock text.
+    It 'UnitT40_compares_timestamp_offsets_at_the_same_UTC_instant' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch -LastActivity '2026-10-01T19:00:00-05:00'
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch) -At '2026-10-09T00:00:00Z'
+        @($selection.Selected).Count | Should -Be 1
+    }
+
+    # Scenario: timestamps are absent, malformed, or future-dated.
+    # Purpose: keep each unverifiable branch protected.
+    It 'UnitT41_protects_invalid_and_future_activity_timestamps' {
+        foreach ($stamp in @($null, '', 'not-a-time', '2026-10-03T00:00:00Z')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch -LastActivity $stamp
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $branch
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because ([string]$stamp)
+            @($selection.Protected | Where-Object Kind -eq 'Branch').Count | Should -Be 1
+        }
+    }
+
+    # Scenario: a valid Keep Active Until is in the future, while another is malformed.
+    # Purpose: fail closed for both an active retention window and unparseable retention metadata.
+    It 'UnitT42_protects_future_and_invalid_Keep_Active_Until_values' {
+        foreach ($keepUntil in @('2026-10-03T00:00:00Z', 'not-a-time')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch
+            $branch['Keep Active Until'] = $keepUntil
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $branch
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because $keepUntil
+        }
+    }
+
+    # Scenario: old branches are still running, blocked, or have no final bound decision.
+    # Purpose: ensure age and stale outcome text cannot override active work or missing decision proof.
+    It 'UnitT43_protects_running_blocked_and_undecided_branches' {
+        foreach ($state in @('Running', 'Blocked')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch -WorkState $state
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $branch
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because $state
+        }
+        foreach ($outcome in @($null, '')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch -Outcome $outcome
+            $common['Active Branches'] = @('branch-a')
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because 'outcome missing'
+        }
+    }
+
+    # Scenario: an old outcome binding predates an explicit branch continuation or content change.
+    # Purpose: reject stale decision evidence by branch revision, generation, outcome, and reviewed-content identity.
+    It 'UnitT44_protects_stale_branch_revision_generation_outcome_and_content_bindings' {
+        foreach ($change in @('revision', 'generation', 'outcome', 'content')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $branch
+            if ($change -eq 'revision') { $branch['Revision'] = 'branch-rev-2' }
+            if ($change -eq 'generation') { $branch['Continuation Generation'] = 3 }
+            if ($change -eq 'outcome') { $branch['Branch Outcome'] = 'Superseded' }
+            if ($change -eq 'content') { $branch.Current = 'new work after decision' }
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because $change
+        }
+    }
+
+    # Scenario: a common record is stale but has active, missing-from-index, or stale-index branches.
+    # Purpose: keep common protected for every known active branch and every nonempty index.
+    It 'UnitT45_protects_common_on_live_branch_or_any_active_index_residue' {
+        $common = New-ArchiveCommon
+        $common['Active Branches'] = @('branch-a')
+        $selected = Get-TestArchiveSelection -CommonRecords @($common)
+        ($selected.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-index'
+
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch -Outcome ''
+        $live = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+        ($live.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-missing-from-index'
+
+        $common = New-ArchiveCommon
+        $common['Active Branches'] = @('missing-branch')
+        $stale = Get-TestArchiveSelection -CommonRecords @($common)
+        ($stale.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'active-branch-index'
+    }
+
+    # Scenario: a stale common record has no active branch or index entries.
+    # Purpose: permit seven-day common archival after its active-branch guard is clear.
+    It 'UnitT46_selects_an_expired_common_with_an_empty_branch_index' {
+        $common = New-ArchiveCommon -LastActivity '2026-09-24T00:00:00Z'
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -At '2026-10-02T00:00:00Z'
+        @($selection.Selected).Count | Should -Be 1
+        $selection.Selected[0].Kind | Should -Be 'Common'
+        $selection.Selected[0].Reason | Should -Be 'inactivity-expired'
+    }
+
+    # Scenario: records have missing or duplicate scoped identity, revision, or continuation generation.
+    # Purpose: protect snapshots that cannot support a stable conditional lifecycle update.
+    It 'UnitT47_protects_invalid_and_duplicate_identities_revisions_and_generations' {
+        foreach ($field in @('Authority Scope', 'Task Key', 'Revision', 'Continuation Generation')) {
+            $common = New-ArchiveCommon
+            $branch = New-ArchiveBranch
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $branch
+            if ($field -eq 'Continuation Generation') { $branch[$field] = -1 }
+            else { $branch[$field] = '' }
+            $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch)
+            @($selection.Selected).Count | Should -Be 0 -Because $field
+        }
+
+        $common = New-ArchiveCommon
+        $branchA = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branchA
+        $branchB = New-ArchiveBranch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branchA, $branchB)
+        @($selection.Selected).Count | Should -Be 0 -Because 'duplicate branch identity'
+
+        $commonB = New-ArchiveCommon
+        $selection = Get-TestArchiveSelection -CommonRecords @($common, $commonB) -BranchRecords @($branchA)
+        @($selection.Selected).Count | Should -Be 0 -Because 'duplicate common identity'
+    }
+
+    # Scenario: a caller clock cannot be trusted unless it returns one DateTimeOffset.
+    # Purpose: prevent invalid clocks from producing archive decisions.
+    It 'UnitT48_protects_all_records_when_the_injected_clock_is_invalid' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-HandoffArchiveSelection -CommonRecords @($common) -BranchRecords @($branch) -Clock { 'not-a-DateTimeOffset' } -InventoryComplete $true
+        @($selection.Selected).Count | Should -Be 0
+        @($selection.Protected).Count | Should -Be 2
+    }
+
+    # Scenario: selection inspects a record but does not write or refresh it.
+    # Purpose: keep the A result an injectable-clock, non-durable decision only.
+    It 'UnitT49_calls_the_clock_once_and_leaves_records_unchanged' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $before = ConvertTo-Json -InputObject @($common, $branch) -Compress -Depth 50
+        $clockState = [pscustomobject]@{
+            Calls = 0
+            Now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z', [Globalization.CultureInfo]::InvariantCulture)
+        }
+        $clock = { $clockState.Calls++; $clockState.Now }.GetNewClosure()
+        $selection = Get-HandoffArchiveSelection -CommonRecords @($common) -BranchRecords @($branch) -Clock $clock -InventoryComplete $true
+        $after = ConvertTo-Json -InputObject @($common, $branch) -Compress -Depth 50
+        $clockState.Calls | Should -Be 1
+        $after | Should -Be $before
+        $selection.Durable | Should -BeFalse
+        $selection.Selected[0].PSObject.Properties['Record'] | Should -BeNullOrEmpty
+    }
+
+    # Scenario: the caller cannot prove that the common and branch inputs cover the complete record inventory.
+    # Purpose: prevent an incomplete source scan from yielding any archive candidate.
+    It 'UnitT50_protects_every_record_when_the_source_inventory_is_incomplete' {
+        $common = New-ArchiveCommon
+        $branch = New-ArchiveBranch
+        $common['Active Branches'] = @('branch-a')
+        Add-ArchiveDecisionBinding -Common $common -Branch $branch
+        $selection = Get-TestArchiveSelection -CommonRecords @($common) -BranchRecords @($branch) -InventoryComplete $false
+
+        @($selection.Selected).Count | Should -Be 0
+        @($selection.Protected).Count | Should -Be 2
+        @($selection.Protected | Where-Object Reason -ne 'inventory-incomplete').Count | Should -Be 0
+    }
+
+    # Scenario: a stale common omits Active Branches or explicitly stores null instead of an empty array.
+    # Purpose: require an explicit empty active-branch index before selecting a common record.
+    It 'UnitT51_protects_common_records_with_missing_or_null_active_branch_indexes' {
+        foreach ($state in @('missing', 'null')) {
+            $common = New-ArchiveCommon -LastActivity '2026-09-24T00:00:00Z'
+            if ($state -eq 'missing') { $common.Remove('Active Branches') }
+            else { $common['Active Branches'] = $null }
+            $selection = Get-TestArchiveSelection -CommonRecords @($common)
+
+            @($selection.Selected).Count | Should -Be 0 -Because $state
+            ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'invalid-active-branch-index'
+        }
+    }
+
+    # Scenario: a retention date-only value reaches the maximum representable calendar date.
+    # Purpose: protect the record without allowing end-of-day normalization to overflow.
+    It 'UnitT52_protects_a_maximum_date_only_retention_boundary_without_throwing' {
+        $common = New-ArchiveCommon -LastActivity '2026-09-24T00:00:00Z'
+        $common['Keep Active Until'] = '9999-12-31'
+        $selection = Get-TestArchiveSelection -CommonRecords @($common)
+
+        @($selection.Selected).Count | Should -Be 0
+        ($selection.Protected | Where-Object Kind -eq 'Common').Reason | Should -Be 'future-keep-active-until'
+    }
+    Context 'Injected archive cycle' {
+        # Scenario: the caller lacks candidate-batch authorization or reports an incomplete inventory.
+        # Purpose: ensure neither condition invokes the injected archive action.
+        It 'UnitT16_requires_explicit_candidate_authorization_and_complete_inventory_before_storage_mutation' {
+            $fixture = New-ArchiveFinalizationFixture
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($decision); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $denied = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $false `
+                -VerifiedFinalizationProofs @($fixture.Proof) -OperationId 'cycle-denied' -ArchiveAction $archiveAction
+            $denied.Durable | Should -BeFalse
+            $denied.GateReason | Should -Be 'candidate-batch-unauthorized'
+            $calls.Count | Should -Be 0
+
+            $incomplete = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -Clock $clock -InventoryComplete $false -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof) -OperationId 'cycle-incomplete' -ArchiveAction $archiveAction
+            $incomplete.Durable | Should -BeFalse
+            $incomplete.GateReason | Should -Be 'inventory-incomplete'
+            $calls.Count | Should -Be 0
+        }
+
+        # Scenario: an eligible candidate is selected with a caller-supplied cycle identity.
+        # Purpose: pass its exact cursor and accept completion only after matching durable readback.
+        It 'UnitT17_passes_the_exact_selected_cursor_and_caller_operation_identity_and_requires_durable_readback_acknowledgement' {
+            $fixture = New-ArchiveFinalizationFixture
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof) -OperationId 'cycle-green' -ArchiveAction $archiveAction
+
+            $result.Durable | Should -BeTrue
+            @($result.Completed).Count | Should -Be 1
+            @($result.Pending).Count | Should -Be 0
+            $calls.Count | Should -Be 1
+            $calls[0].OperationId | Should -Match '^cycle-green:archive:[0-9a-f]{64}$'
+            $calls[0].Decision.Kind | Should -Be 'Branch'
+            $calls[0].Decision.AuthorityScope | Should -Be 'scope-a'
+            $calls[0].Decision.TaskKey | Should -Be 'task-1'
+            $calls[0].Decision.BranchId | Should -Be 'branch-a'
+            $calls[0].Cursor.Revision | Should -Be ('b' * 40)
+            $calls[0].Cursor.ParentRevision | Should -Be ('c' * 40)
+            $calls[0].Cursor.ContinuationGeneration | Should -Be 2
+            $fixture.Branch['Lifecycle'] | Should -Be 'Active'
+            $fixture.Branch['Last Activity At'] | Should -Be '2026-09-25T00:00:00Z'
+        }
+
+        # Scenario: a Common record is eligible while it has no active branches.
+        # Purpose: route Common archival through the injected lifecycle boundary without mutating the record in Core.
+        It 'UnitT18_sends_an_expired_common_through_the_same_lifecycle_only_adapter_boundary' {
+            $common = New-ArchiveCommon -LastActivity '2026-09-24T00:00:00Z'
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($common) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -OperationId 'common-cycle' -ArchiveAction $archiveAction
+
+            $result.Durable | Should -BeTrue
+            $calls.Count | Should -Be 1
+            $calls[0].Decision.Kind | Should -Be 'Common'
+            $calls[0].Cursor.Revision | Should -Be 'common-rev-1'
+            $calls[0].Cursor.BranchId | Should -BeNullOrEmpty
+            $calls[0].Cursor.ParentRevision | Should -BeNullOrEmpty
+            $calls[0].OperationId | Should -Match '^common-cycle:archive:[0-9a-f]{64}$'
+            $common.Lifecycle | Should -Be 'Active'
+            $common['Last Activity At'] | Should -Be '2026-09-24T00:00:00Z'
+        }
+
+        # Scenario: an archive action reports an unresolved durable readback and returns one pending action.
+        # Purpose: retry that exact cursor and operation ID without reselecting the candidate.
+        It 'UnitT19_retains_the_exact_pending_cursor_and_operation_ID_and_resumes_without_reselecting_an_archived_candidate' {
+            $fixture = New-ArchiveFinalizationFixture
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $pendingAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$false; OperationId=$operationId; Pending=$true } }.GetNewClosure()
+            $first = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof) -OperationId 'cycle-recover' -ArchiveAction $pendingAction
+
+            $first.Durable | Should -BeFalse
+            @($first.Pending).Count | Should -Be 1
+            $first.Pending[0].OperationId | Should -Match '^cycle-recover:archive:[0-9a-f]{64}$'
+            $first.Pending[0].Decision.Revision | Should -Be ('b' * 40)
+            $first.Pending[0].Cursor.ParentRevision | Should -Be ('c' * 40)
+            $first.Pending[0].Cursor.ContinuationGeneration | Should -Be 2
+
+            $resumeAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions $first.Pending -ArchiveAction $resumeAction
+
+            $resumed.Durable | Should -BeTrue
+            @($resumed.Completed).Count | Should -Be 1
+            @($resumed.Pending).Count | Should -Be 0
+            $calls.Count | Should -Be 2
+            $calls[1].OperationId | Should -Be $calls[0].OperationId
+            $calls[1].Decision.Revision | Should -Be $calls[0].Decision.Revision
+            $calls[1].Cursor.ParentRevision | Should -Be $calls[0].Cursor.ParentRevision
+        }
+
+        # Scenario: a durable pending action's operation-ID digest is changed after the original attempt.
+        # Purpose: reject the altered retry identity before invoking the archive callback.
+        It 'UnitT20_rejects a pending action with a changed operation ID digest' {
+            $pending = New-PendingArchiveCycleAction
+            $pending.OperationId = $pending.OperationId.Substring(0, $pending.OperationId.Length - 1) + $(if ($pending.OperationId.EndsWith('0')) { '1' } else { '0' })
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions @($pending) -ArchiveAction $archiveAction
+
+            $calls.Count | Should -Be 0
+            $resumed.Durable | Should -BeFalse
+            @($resumed.Pending).Count | Should -Be 1
+            $resumed.GateReason | Should -Be 'invalid-pending-action'
+            [object]::ReferenceEquals($resumed.Pending[0],$pending) | Should -BeTrue
+            $resumed.Pending[0].PSObject.Properties['RetryState'] | Should -BeNullOrEmpty
+        }
+
+        # Scenario: the cycle prefix changes while the original cursor digest is retained.
+        # Purpose: bind each resumed operation ID to the caller's original cycle identity.
+        It 'UnitT21_rejects a pending action with a changed cycle prefix' {
+            $pending = New-PendingArchiveCycleAction -CycleOperationId 'cycle-prefix-original'
+            $separator = $pending.OperationId.LastIndexOf(':archive:', [StringComparison]::Ordinal)
+            $pending.OperationId = 'cycle-prefix-changed' + $pending.OperationId.Substring($separator)
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions @($pending) -ArchiveAction $archiveAction
+
+            $calls.Count | Should -Be 0
+            $resumed.Durable | Should -BeFalse
+            @($resumed.Pending).Count | Should -Be 1
+            $resumed.GateReason | Should -Be 'invalid-pending-action'
+            [object]::ReferenceEquals($resumed.Pending[0],$pending) | Should -BeTrue
+            $resumed.Pending[0].PSObject.Properties['RetryState'] | Should -BeNullOrEmpty
+        }
+
+        # Scenario: Decision and Cursor are consistently changed while the saved operation ID remains untouched.
+        # Purpose: bind the saved operation ID to the exact candidate cursor used by the original attempt.
+        It 'UnitT22_rejects a pending action whose cursor changed after operation ID creation' {
+            $pending = New-PendingArchiveCycleAction
+            $changedRevision = 'a' * 40
+            $pending.Decision.Revision = $changedRevision
+            $pending.Cursor.Revision = $changedRevision
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions @($pending) -ArchiveAction $archiveAction
+
+            $calls.Count | Should -Be 0
+            $resumed.Durable | Should -BeFalse
+            @($resumed.Pending).Count | Should -Be 1
+            $resumed.GateReason | Should -Be 'invalid-pending-action'
+            [object]::ReferenceEquals($resumed.Pending[0],$pending) | Should -BeTrue
+            $resumed.Pending[0].PSObject.Properties['RetryState'] | Should -BeNullOrEmpty
+        }
+
+        # Scenario: the stable cycle identity itself contains an earlier archive delimiter.
+        # Purpose: preserve the full cycle prefix by parsing the final delimiter before the digest.
+        It 'UnitT23_resumes a valid operation ID when its cycle prefix contains the archive delimiter' {
+            $pending = New-PendingArchiveCycleAction -CycleOperationId 'cycle-prefix:archive:segment'
+            $expectedOperationId = $pending.OperationId
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions @($pending) -ArchiveAction $archiveAction
+
+            $resumed.Durable | Should -BeTrue
+            @($resumed.Completed).Count | Should -Be 1
+            $calls.Count | Should -Be 1
+            $calls[0] | Should -Be $expectedOperationId
+        }
+
+        # Scenario: a two-candidate batch completes one action and leaves the other pending.
+        # Purpose: continue the batch and later resume only the pending candidate with its original cursor.
+        It 'UnitT24_continues_after_one_candidate_is_pending_and_resumes_that_candidate_with_the_same_cursor' {
+            $fixture = New-ArchiveFinalizationFixture
+            $branchB = New-ArchiveBranch -BranchId 'branch-b' -Revision ('e' * 40)
+            $bindingB = [ordered]@{
+                branchId = 'branch-b'
+                reviewedRevision = 'f' * 40
+                reviewedContentSha256 = Get-TestReviewedBranchContentSha256 $branchB
+                continuationGeneration = [long]$branchB['Continuation Generation']
+                outcome = [string]$branchB['Branch Outcome']
+            }
+            $fixture.Common['Active Branches'] = @('branch-a','branch-b')
+            $fixture.Common['Decision Branch Bindings'] = @($fixture.Binding,$bindingB)
+            $proofB = [pscustomobject]@{
+                ProofKind = 'GitBranchFinalizationDescendant'
+                AuthorityScope = [string]$fixture.Common['Authority Scope']
+                TaskKey = [string]$fixture.Common['Task Key']
+                BranchId = 'branch-b'
+                DecisionCommonRevision = 'd' * 40
+                CurrentCommonRevision = [string]$fixture.Common['Revision']
+                ReviewedBranchRevision = [string]$bindingB.reviewedRevision
+                CurrentBranchRevision = [string]$branchB['Revision']
+                ReviewedContentSha256 = [string]$bindingB.reviewedContentSha256
+                ContinuationGeneration = [long]$bindingB.continuationGeneration
+                Outcome = [string]$bindingB.outcome
+            }
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $attempted = [System.Collections.Generic.List[object]]::new()
+            $partialAction = { param($decision,$cursor,$operationId); $attempted.Add([pscustomobject]@{BranchId=[string]$decision.BranchId;OperationId=$operationId}); $verified = $decision.BranchId -ceq 'branch-b'; [pscustomobject]@{ Durable=$verified; ReadbackVerified=$verified; OperationId=$operationId } }.GetNewClosure()
+            $first = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch,$branchB) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -VerifiedFinalizationProofs @($fixture.Proof,$proofB) -OperationId 'cycle-partial' -ArchiveAction $partialAction
+
+            $first.Durable | Should -BeFalse
+            @($first.Completed).Count | Should -Be 1
+            @($first.Pending).Count | Should -Be 1
+            $first.Pending[0].Decision.BranchId | Should -Be 'branch-a'
+            $first.Pending[0].OperationId | Should -Be $attempted[0].OperationId
+            $attempted[0].OperationId | Should -Match '^cycle-partial:archive:[0-9a-f]{64}$'
+            $attempted[1].OperationId | Should -Not -Be $attempted[0].OperationId
+            $attempted.Count | Should -Be 2
+
+            $retryCalls = [System.Collections.Generic.List[object]]::new()
+            $retryAction = { param($decision,$cursor,$operationId); $retryCalls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $resumed = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                -PendingActions $first.Pending -ArchiveAction $retryAction
+
+            $resumed.Durable | Should -BeTrue
+            $retryCalls.Count | Should -Be 1
+            $retryCalls[0].Decision.BranchId | Should -Be 'branch-a'
+            $retryCalls[0].Decision.Revision | Should -Be $first.Pending[0].Decision.Revision
+            $retryCalls[0].Cursor.ParentRevision | Should -Be $first.Pending[0].Cursor.ParentRevision
+            $retryCalls[0].OperationId | Should -Be $first.Pending[0].OperationId
+        }
+
+        # Scenario: a blocked candidate is followed by repeated deterministic scheduler-style calls.
+        # Purpose: keep blocked state protected and show repeated calls reuse storage idempotency identities.
+        It 'UnitT25_keeps_blocked_candidates_protected_and_repeated_fake_scheduler_ticks_rely_on_storage_idempotency' {
+            $common = New-ArchiveCommon
+            $blocked = New-ArchiveBranch -WorkState 'Blocked'
+            $common['Active Branches'] = @('branch-a')
+            Add-ArchiveDecisionBinding -Common $common -Branch $blocked
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $writeCalls = [System.Collections.Generic.List[string]]::new()
+            $transitions = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $archiveAction = { param($decision,$cursor,$operationId); $writeCalls.Add($operationId); [void]$transitions.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $protected = Invoke-HandoffArchiveCycle -CommonRecords @($common) -BranchRecords @($blocked) `
+                -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true -OperationId 'blocked-cycle' -ArchiveAction $archiveAction
+            $protected.Durable | Should -BeFalse
+            @($protected.Selected).Count | Should -Be 0
+            $writeCalls.Count | Should -Be 0
+
+            $fixture = New-ArchiveFinalizationFixture
+            $writes = [System.Collections.Generic.List[string]]::new()
+            $once = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $idempotentAction = { param($decision,$cursor,$operationId); $writes.Add($operationId); [void]$once.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            for($tick=0;$tick -lt 2;$tick++) {
+                $null = Invoke-HandoffArchiveCycle -CommonRecords @($fixture.Common) -BranchRecords @($fixture.Branch) `
+                    -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true `
+                    -VerifiedFinalizationProofs @($fixture.Proof) -OperationId 'cycle-repeat' -ArchiveAction $idempotentAction
+            }
+            $writes.Count | Should -Be 2
+            $once.Count | Should -Be 1
+        }
+
+        # Scenario: a valid retry for Task A and a fresh eligible Task B arrive in one complete authorized cycle.
+        # Purpose: let independent fresh work progress even when the pending action remains unresolved.
+        It 'UnitT26_retries_a_failed_pending_action_while_progressing_an_independent_fresh_task' {
+            $pending = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+            $freshTaskB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = {
+                param($decision,$cursor,$operationId)
+                $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId})
+                if ([string]$decision.TaskKey -ceq 'task-1') {
+                    return [pscustomobject]@{ Durable=$false; ReadbackVerified=$false; OperationId=$operationId; Pending=$true }
+                }
+                return [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId }
+            }.GetNewClosure()
+
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($pending) `
+                -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+            $result.GateReason | Should -BeNullOrEmpty
+            $calls.Count | Should -Be 2
+            [object]::ReferenceEquals($calls[0].Decision,$pending.Decision) | Should -BeTrue
+            [object]::ReferenceEquals($calls[0].Cursor,$pending.Cursor) | Should -BeTrue
+            $calls[0].OperationId | Should -Be $pending.OperationId
+            $calls[1].Decision.TaskKey | Should -Be 'task-b'
+            $calls[1].OperationId | Should -Match '^independent-cycle:archive:[0-9a-f]{64}$'
+            $calls[1].OperationId | Should -Not -Be $pending.OperationId
+            @($result.Completed).Count | Should -Be 1
+            $result.Completed[0].Decision.TaskKey | Should -Be 'task-b'
+            @($result.Pending).Count | Should -Be 1
+            [object]::ReferenceEquals($result.Pending[0].Decision,$pending.Decision) | Should -BeTrue
+            [object]::ReferenceEquals($result.Pending[0].Cursor,$pending.Cursor) | Should -BeTrue
+            $result.Pending[0].OperationId | Should -Be $pending.OperationId
+            $result.Durable | Should -BeFalse
+        }
+
+        # Scenario: a newer scan repeats the pending Task A identity and includes an unrelated expired Task B.
+        # Purpose: retry the saved cursor once, defer its newer record revision, and continue the unrelated task.
+        It 'UnitT27_retries_an_overlapping_pending_identity_defers_its_newer_revision_and_reselects_later' {
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $originalCommonA = New-ArchiveCommon -Task 'task-a' -Revision 'common-rev-a1'
+            $pendingAction = { param($decision,$cursor,$operationId); [pscustomobject]@{ Durable=$false; ReadbackVerified=$false; OperationId=$operationId; Pending=$true } }
+            $initial = Invoke-HandoffArchiveCycle -CommonRecords @($originalCommonA) -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true -OperationId 'saved-task-a' -ArchiveAction $pendingAction
+            @($initial.Pending).Count | Should -Be 1
+            $pending = $initial.Pending[0]
+            $newerCommonA = New-ArchiveCommon -Task 'task-a' -Revision 'common-rev-a2'
+            $freshCommonB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($newerCommonA,$freshCommonB) -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($pending) -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+            $result.GateReason | Should -Be 'pending-task-cursor-in-flight'
+            $calls.Count | Should -Be 2
+            [object]::ReferenceEquals($calls[0].Decision,$pending.Decision) | Should -BeTrue
+            [object]::ReferenceEquals($calls[0].Cursor,$pending.Cursor) | Should -BeTrue
+            $calls[0].OperationId | Should -Be $pending.OperationId
+            $calls[0].Decision.Revision | Should -Be 'common-rev-a1'
+            $calls[1].Decision.TaskKey | Should -Be 'task-b'
+            $calls[1].OperationId | Should -Match '^independent-cycle:archive:[0-9a-f]{64}$'
+            @($result.Selected | Where-Object { $_.TaskKey -ceq 'task-a' -and $_.Revision -ceq 'common-rev-a2' }).Count | Should -Be 1
+            @($result.Completed).Count | Should -Be 2
+            @($result.Pending).Count | Should -Be 0
+            $result.Durable | Should -BeFalse
+
+            $laterCalls = [System.Collections.Generic.List[object]]::new()
+            $laterAction = { param($decision,$cursor,$operationId); $laterCalls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $later = Invoke-HandoffArchiveCycle -CommonRecords @($newerCommonA) -Clock $clock -InventoryComplete $true -CandidateBatchAuthorized $true -OperationId 'later-task-a-cycle' -ArchiveAction $laterAction
+
+            $later.Durable | Should -BeTrue
+            $laterCalls.Count | Should -Be 1
+            $laterCalls[0].Decision.TaskKey | Should -Be 'task-a'
+            $laterCalls[0].Decision.Revision | Should -Be 'common-rev-a2'
+        }
+        # Scenario: malformed, conflicting, and repeated pending entries are supplied with an eligible fresh Task B candidate.
+        # Purpose: fail closed without mutation for ambiguous state and coalesce only identical saved actions.
+        It 'UnitT28_fails_closed_for_invalid_or_conflicting_pending_entries_and_coalesces_identical_duplicates' {
+            foreach ($mutation in @('digest','prefix','cursor')) {
+                $bad = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+                if ($mutation -ceq 'digest') {
+                    $bad.OperationId = $bad.OperationId.Substring(0,$bad.OperationId.Length - 1) + $(if ($bad.OperationId.EndsWith('0')) { '1' } else { '0' })
+                } elseif ($mutation -ceq 'prefix') {
+                    $separator = $bad.OperationId.LastIndexOf(':archive:',[StringComparison]::Ordinal)
+                    $bad.OperationId = 'changed-prefix' + $bad.OperationId.Substring($separator)
+                } else {
+                    $bad.Decision.Revision = 'a' * 40
+                }
+                $freshTaskB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+                $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+                $clock = { $now }.GetNewClosure()
+                $calls = [System.Collections.Generic.List[string]]::new()
+                $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+                $result = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                    -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($bad) `
+                    -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+                $result.GateReason | Should -Be 'invalid-pending-action'
+                $calls.Count | Should -Be 0
+                @($result.Selected).Count | Should -Be 0
+                @($result.Pending).Count | Should -Be 1
+                [object]::ReferenceEquals($result.Pending[0],$bad) | Should -BeTrue
+                $result.Pending[0].PSObject.Properties['RetryState'] | Should -BeNullOrEmpty
+
+                $again = Invoke-HandoffArchiveCycle -Clock $clock -InventoryComplete $true `
+                    -CandidateBatchAuthorized $true -PendingActions $result.Pending -ArchiveAction $archiveAction
+                $again.GateReason | Should -Be 'invalid-pending-action'
+                $calls.Count | Should -Be 0
+                @($again.Pending).Count | Should -Be 1
+                [object]::ReferenceEquals($again.Pending[0],$bad) | Should -BeTrue
+                $again.Pending[0].PSObject.Properties['RetryState'] | Should -BeNullOrEmpty
+            }
+
+            $first = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+            $conflict = New-PendingArchiveCycleAction -CycleOperationId 'other-task-a-cycle'
+            $freshTaskB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $conflicting = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($first,$conflict) `
+                -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+            $conflicting.GateReason | Should -Be 'conflicting-pending-actions'
+            $calls.Count | Should -Be 0
+            @($conflicting.Pending).Count | Should -Be 2
+            [object]::ReferenceEquals($conflicting.Pending[0],$first) | Should -BeTrue
+            [object]::ReferenceEquals($conflicting.Pending[1],$conflict) | Should -BeTrue
+
+            $duplicate = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+            $duplicateCopy = [pscustomobject]@{
+                Decision = [pscustomobject]@{
+                    Kind = $duplicate.Decision.Kind; AuthorityScope = $duplicate.Decision.AuthorityScope
+                    TaskKey = $duplicate.Decision.TaskKey; BranchId = $duplicate.Decision.BranchId
+                    Revision = $duplicate.Decision.Revision; ParentRevision = $duplicate.Decision.ParentRevision
+                    ContinuationGeneration = [int]$duplicate.Decision.ContinuationGeneration
+                    BranchOutcome = $duplicate.Decision.BranchOutcome; Reason = $duplicate.Decision.Reason
+                }
+                Cursor = [pscustomobject]@{
+                    Kind = $duplicate.Cursor.Kind; AuthorityScope = $duplicate.Cursor.AuthorityScope
+                    TaskKey = $duplicate.Cursor.TaskKey; BranchId = $duplicate.Cursor.BranchId
+                    Revision = $duplicate.Cursor.Revision; ParentRevision = $duplicate.Cursor.ParentRevision
+                    ContinuationGeneration = [int]$duplicate.Cursor.ContinuationGeneration
+                }
+                OperationId = $duplicate.OperationId
+            }
+            $coalesced = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($duplicate,$duplicateCopy) `
+                -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+            @($calls | Where-Object { $_ -ceq $duplicate.OperationId }).Count | Should -Be 1
+            @($calls | Where-Object { $_ -match '^independent-cycle:archive:' }).Count | Should -Be 1
+            @($coalesced.Completed).Count | Should -Be 2
+            @($coalesced.Pending).Count | Should -Be 0
+            $coalesced.Durable | Should -BeTrue
+        }
+
+        # Scenario: authorization or inventory may be absent, or a cycle may lack an ID while a saved retry and fresh candidate coexist.
+        # Purpose: preserve gate priority and allow exact pending retries without authorizing unidentifiable fresh writes.
+        It 'UnitT29_keeps_pending_retry_safe_across_gates_and_blank_cycle_identity' {
+            foreach ($gate in @('candidate-batch-unauthorized','inventory-incomplete')) {
+                $pending = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+                $freshTaskB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+                $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+                $clock = { $now }.GetNewClosure()
+                $calls = [System.Collections.Generic.List[string]]::new()
+                $archiveAction = { param($decision,$cursor,$operationId); $calls.Add($operationId); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+                $result = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                    -InventoryComplete ($gate -cne 'inventory-incomplete') `
+                    -CandidateBatchAuthorized ($gate -cne 'candidate-batch-unauthorized') `
+                    -PendingActions @($pending) -OperationId 'independent-cycle' -ArchiveAction $archiveAction
+
+                $result.GateReason | Should -Be $gate
+                $calls.Count | Should -Be 0
+                @($result.Pending).Count | Should -Be 1
+                [object]::ReferenceEquals($result.Pending[0],$pending) | Should -BeTrue
+            }
+
+            $pending = New-PendingArchiveCycleAction -CycleOperationId 'saved-task-a'
+            $freshTaskB = New-ArchiveCommon -Task 'task-b' -Revision 'task-b-common-r1'
+            $now = [DateTimeOffset]::Parse('2026-10-02T00:00:00Z')
+            $clock = { $now }.GetNewClosure()
+            $calls = [System.Collections.Generic.List[object]]::new()
+            $archiveAction = { param($decision,$cursor,$operationId); $calls.Add([pscustomobject]@{Decision=$decision;Cursor=$cursor;OperationId=$operationId}); [pscustomobject]@{ Durable=$true; ReadbackVerified=$true; OperationId=$operationId } }.GetNewClosure()
+            $result = Invoke-HandoffArchiveCycle -CommonRecords @($freshTaskB) -Clock $clock `
+                -InventoryComplete $true -CandidateBatchAuthorized $true -PendingActions @($pending) `
+                -ArchiveAction $archiveAction
+
+            $result.GateReason | Should -Be 'stable-operation-id-required'
+            $calls.Count | Should -Be 1
+            $calls[0].OperationId | Should -Be $pending.OperationId
+            @($result.Completed).Count | Should -Be 1
+            $result.Completed[0].Decision.TaskKey | Should -Be 'task-1'
+            @($result.Pending).Count | Should -Be 0
+            $result.Durable | Should -BeFalse
+        }
+    }
+}

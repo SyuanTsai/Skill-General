@@ -5,6 +5,7 @@ Describe 'Optional Git-ref Task Handoff adapter' {
     BeforeAll {
         $script:Root = Split-Path -Parent $PSScriptRoot
         Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -DisableNameChecking -ErrorAction Stop
+        Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/HandoffRecordCore.psm1') -Force -ErrorAction Stop
         $script:PriorCommonCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffCommon:Actor']
         $script:PriorBranchCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffBranch:Actor']
         $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = 'synthetic-test-writer'
@@ -140,6 +141,104 @@ exit 0
             Source = 'synthetic fixture revision r2'
             Lifecycle = 'Active'
             'Work State' = 'Running'
+        }
+
+        function New-InactivityArchiveCandidateFixture {
+            param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$TaskKey)
+            [void](New-Item -ItemType Directory -Path $Root -Force)
+            $adapter = New-WriterFixture -Root $Root -WriterId 'archive-cursor-writer' -AuthorityScope 'synthetic-archive-cursor'
+            $branchId = 'thread:archive-cursor'
+            $commonFields = [ordered]@{}
+            foreach ($name in $script:InitialCommon.Keys) { $commonFields[$name] = $script:InitialCommon[$name] }
+            $commonFields['Work State'] = 'Awaiting Review'
+            New-GitHandoffCommon -Adapter $adapter -TaskKey $TaskKey -Fields $commonFields `
+                -OperationId 'archive-cursor-common' -Actor 'writer-a' | Out-Null
+
+            $branchFields = [ordered]@{}
+            foreach ($name in $script:InitialBranch.Keys) { $branchFields[$name] = $script:InitialBranch[$name] }
+            New-TestGitHandoffBranch -Adapter $adapter -TaskKey $TaskKey -BranchId $branchId `
+                -ForkPoint 'archive-cursor-fork' -Fields $branchFields `
+                -OperationId 'archive-cursor-branch' -Actor 'writer-a' | Out-Null
+
+            $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $TaskKey -BranchId $branchId
+            Set-GitHandoffFields -Adapter $adapter -RecordKind branch -TaskKey $TaskKey -BranchId $branchId `
+                -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Work State'='Awaiting Review'}) `
+                -OperationId 'archive-cursor-ready' -Actor 'writer-a' `
+                -Reason 'mark the synthetic archive candidate ready for review' | Out-Null
+            $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $TaskKey -BranchId $branchId
+            $binding = Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey $TaskKey `
+                -BranchId $branchId -Outcome Selected
+            $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $TaskKey
+            Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey $TaskKey `
+                -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                    Current='Confirm selected archive-cursor branch';'Decision Branch Bindings'=@($binding)
+                }) -OperationId 'archive-cursor-decision' -DecisionConfirmed -Actor 'writer-a' `
+                -Reason 'confirm the selected archive-cursor branch' | Out-Null
+            $decisionCommonRevision = (Get-GitHandoffCommon -Adapter $adapter -TaskKey $TaskKey).Revision
+            $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $TaskKey -BranchId $branchId
+            Set-GitHandoffFields -Adapter $adapter -RecordKind branch -TaskKey $TaskKey -BranchId $branchId `
+                -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+                -OperationId 'archive-cursor-outcome' -DecisionConfirmed `
+                -DecisionCommonRevision $decisionCommonRevision -Actor 'writer-a' `
+                -Reason 'persist the confirmed archive-cursor outcome' | Out-Null
+
+            $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $TaskKey
+            $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $TaskKey -BranchId $branchId
+            $proof = Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $TaskKey `
+                -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+                -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision $branch.Revision -ExpectedOutcome Selected
+            $commonRecord = [ordered]@{
+                'Authority Scope'=$common.AuthorityScope; 'Task Key'=$common.TaskKey
+                Revision=$common.Revision
+                'Last Activity At'=$common.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+            }
+            foreach ($name in $common.Fields.Keys) { $commonRecord[$name] = $common.Fields[$name] }
+            $commonRecord['Active Branches'] = @($common.ActiveBranches)
+            $branchRecord = [ordered]@{
+                'Authority Scope'=$branch.AuthorityScope; 'Task Key'=$branch.TaskKey
+                'Branch ID'=$branch.BranchId; 'Fork Point'=$branch.ForkPoint
+                'Continuation Generation'=$branch.ContinuationGeneration
+                Revision=$branch.Revision
+                'Last Activity At'=$branch.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+            }
+            foreach ($name in $branch.Fields.Keys) { $branchRecord[$name] = $branch.Fields[$name] }
+            $now = [DateTimeOffset]::UtcNow.AddDays(8)
+            $selection = Get-HandoffArchiveSelection -CommonRecords @($commonRecord) `
+                -BranchRecords @($branchRecord) -Clock { $now }.GetNewClosure() -InventoryComplete $true `
+                -VerifiedFinalizationProofs @($proof)
+            $candidate = @($selection.Selected | Where-Object { $_.Kind -ceq 'Branch' -and $_.BranchId -ceq $branchId })
+            if ($selection.Durable -or $candidate.Count -ne 1) {
+                throw 'The true-Git fixture did not produce one non-durable inactivity archive candidate.'
+            }
+            return [pscustomobject]@{
+                Adapter=$adapter;TaskKey=$TaskKey;BranchId=$branchId;Candidate=$candidate[0]
+                Common=$common;Branch=$branch;DecisionCommonRevision=$decisionCommonRevision;Proof=$proof
+            }
+        }
+
+        function Add-SelectiveArchiveIndexRejectHook {
+            param([Parameter(Mandatory)][string]$RemoteRoot)
+            $hook = Join-Path $RemoteRoot 'hooks/pre-receive'
+            $script = @(
+                '#!/bin/sh'
+                'while read old new ref; do'
+                '  case "$ref" in'
+                '    refs/heads/handoff-v1/records/*/common)'
+                '      if [ -f "$GIT_DIR/deny-index" ] && [ "$old" != "0000000000000000000000000000000000000000" ]; then'
+                '        old_tree=$(git rev-parse "$old^{tree}")'
+                '        new_tree=$(git rev-parse "$new^{tree}")'
+                '        if [ "$old_tree" != "$new_tree" ]; then exit 1; fi'
+                '      fi'
+                '      ;;'
+                '  esac'
+                'done'
+                'exit 0'
+            ) -join ([string][char]10)
+            Set-Content -LiteralPath $hook -Value $script -Encoding utf8
+            if (-not $IsWindows) {
+                $mode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute
+                [IO.File]::SetUnixFileMode($hook, $mode)
+            }
         }
     }
 
@@ -3963,5 +4062,323 @@ exit 0
             -OperationId 'superseded-outcome' -DecisionConfirmed -DecisionCommonRevision $decisionRevision `
             -Actor 'writer-a' -Reason 'synthetic supersession'
         $retried.Revision | Should -Be $written.Revision
+    }
+
+    # Scenario: a confirmed Branch Outcome advances an unchanged reviewed branch from R0 to R1.
+    # Purpose: reproduce the selector false negative using real local Git commits and adapter writes.
+    It 'InterT89_selects_an_expired_branch_after_a_verified_git_finalization_descendant' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        [void](New-Item -ItemType Directory -Path $root)
+        try {
+        $adapter = New-WriterFixture -Root $root -WriterId 'writer' -AuthorityScope 'scope:archive'
+        $taskKey = 'demo:archive-descendant'
+        $branchId = 'thread:archive'
+
+        $commonFields = [ordered]@{}
+        foreach ($name in $script:InitialCommon.Keys) { $commonFields[$name] = $script:InitialCommon[$name] }
+        $commonFields['Work State'] = 'Awaiting Review'
+        New-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey -Fields $commonFields `
+            -OperationId 'archive-descendant-common' -Actor 'writer-a' | Out-Null
+
+        $branchFields = [ordered]@{}
+        foreach ($name in $script:InitialBranch.Keys) { $branchFields[$name] = $script:InitialBranch[$name] }
+        New-TestGitHandoffBranch -Adapter $adapter -TaskKey $taskKey -BranchId $branchId `
+            -ForkPoint 'archive-descendant-fork' -Fields $branchFields `
+            -OperationId 'archive-descendant-branch' -Actor 'writer-a' | Out-Null
+
+        $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $taskKey -BranchId $branchId
+        Set-GitHandoffFields -Adapter $adapter -RecordKind branch -TaskKey $taskKey -BranchId $branchId `
+            -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Work State'='Awaiting Review'}) `
+            -OperationId 'archive-descendant-ready' -Actor 'writer-a' -Reason 'mark reviewed branch ready' | Out-Null
+
+        $binding = Get-GitHandoffBranchReviewBinding -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -Outcome Selected
+        $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey
+        Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey $taskKey `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{
+                Current='Decision over the reviewed archive branch';'Decision Branch Bindings'=@($binding)
+            }) -OperationId 'archive-descendant-decision' -DecisionConfirmed -Actor 'writer-a' `
+            -Reason 'confirm the selected branch' | Out-Null
+        $decisionCommonRevision = (Get-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey).Revision
+        $reviewedRevision = [string]$binding.reviewedRevision
+        $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $taskKey -BranchId $branchId
+        Set-GitHandoffFields -Adapter $adapter -RecordKind branch -TaskKey $taskKey -BranchId $branchId `
+            -ExpectedRevision $branch.Revision -Changes ([ordered]@{'Branch Outcome'='Selected'}) `
+            -OperationId 'archive-descendant-outcome' -DecisionConfirmed `
+            -DecisionCommonRevision $decisionCommonRevision -Actor 'writer-a' `
+            -Reason 'persist the confirmed outcome' | Out-Null
+
+        $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey
+        $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $taskKey -BranchId $branchId
+        $proof = Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+            -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision $branch.Revision -ExpectedOutcome Selected
+        $branch.Revision | Should -Not -Be $reviewedRevision
+        & git -C $adapter.RepositoryRoot merge-base --is-ancestor $reviewedRevision $branch.Revision
+        $LASTEXITCODE | Should -Be 0
+        $branch.Fields.Lifecycle | Should -Be 'Active'
+        $branch.Fields['Branch Outcome'] | Should -Be 'Selected'
+
+        $commonRecord = [ordered]@{
+            'Authority Scope'=$common.AuthorityScope; 'Task Key'=$common.TaskKey
+            Revision=$common.Revision
+            'Last Activity At'=$common.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        foreach ($name in $common.Fields.Keys) { $commonRecord[$name] = $common.Fields[$name] }
+        $commonRecord['Active Branches'] = @($common.ActiveBranches)
+        $projectedActiveBranches = $commonRecord['Active Branches']
+        ($projectedActiveBranches -is [array]) | Should -BeTrue
+        @($projectedActiveBranches).Count | Should -Be 1
+        $projectedActiveBranches[0] | Should -BeExactly $branchId
+        $branchRecord = [ordered]@{
+            'Authority Scope'=$branch.AuthorityScope; 'Task Key'=$branch.TaskKey
+            'Branch ID'=$branch.BranchId; 'Fork Point'=$branch.ForkPoint
+            'Continuation Generation'=$branch.ContinuationGeneration
+            Revision=$branch.Revision
+            'Last Activity At'=$branch.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        foreach ($name in $branch.Fields.Keys) { $branchRecord[$name] = $branch.Fields[$name] }
+        $now = [DateTimeOffset]::UtcNow.AddDays(8)
+        $selection = Get-HandoffArchiveSelection -CommonRecords @($commonRecord) `
+            -BranchRecords @($branchRecord) -Clock { $now }.GetNewClosure() -InventoryComplete $true `
+            -VerifiedFinalizationProofs @($proof)
+
+        $selection.Durable | Should -BeFalse
+        ($selection.Protected | Where-Object { $_.Kind -eq 'Common' -and $_.TaskKey -eq $taskKey }).Reason |
+            Should -Be 'active-branch-index'
+        @($selection.Selected | Where-Object { $_.Kind -eq 'Branch' -and $_.BranchId -eq $branchId }).Count | Should -Be 1
+        ($selection.Selected | Where-Object { $_.Kind -eq 'Branch' -and $_.BranchId -eq $branchId }).Revision |
+            Should -Be $branch.Revision
+
+        { Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+            -ExpectedCommonRevision $decisionCommonRevision -ExpectedBranchRevision $branch.Revision `
+            -ExpectedOutcome Selected } | Should -Throw '*current Common revision changed*'
+        { Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+            -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision ('f' * 40) `
+            -ExpectedOutcome Selected } | Should -Throw '*changed before finalization proof creation*'
+        { Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+            -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision $branch.Revision `
+            -ExpectedOutcome Superseded } | Should -Throw '*does not match the reviewed common decision binding*'
+
+        $module = Get-Module GitRefHandoffAdapter
+        $tree = & git -C $adapter.RepositoryRoot rev-parse "$reviewedRevision^{tree}"
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create same-content non-descendant fixture.' }
+        $unrelatedRevision = & git -C $adapter.RepositoryRoot -c user.name='Synthetic Proof Test' `
+            -c user.email='proof@example.invalid' commit-tree $tree -m 'same content unrelated commit' 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create same-content non-descendant fixture.' }
+        $unrelatedBinding = [ordered]@{}
+        foreach ($name in $binding.Keys) { $unrelatedBinding[$name] = $binding[$name] }
+        $unrelatedBinding['reviewedRevision'] = [string]$unrelatedRevision
+        { & $module {
+                param($a,$key,$items)
+                Assert-GitHandoffDecisionBranchBindingsForWrite -Adapter $a -TaskKey $key `
+                    -Bindings $items -AllowFinalizationDescendant
+            } $adapter $taskKey @($unrelatedBinding) } | Should -Throw '*no longer descends from its bound revision*'
+
+        $changedContentBinding = [ordered]@{}
+        foreach ($name in $binding.Keys) { $changedContentBinding[$name] = $binding[$name] }
+        $changedContentBinding['reviewedContentSha256'] = ('0' * 64)
+        { & $module {
+                param($a,$key,$items)
+                Assert-GitHandoffDecisionBranchBindingsForWrite -Adapter $a -TaskKey $key `
+                    -Bindings $items -AllowFinalizationDescendant
+            } $adapter $taskKey @($changedContentBinding) } | Should -Throw '*content changed*'
+
+        $changedGenerationBinding = [ordered]@{}
+        foreach ($name in $binding.Keys) { $changedGenerationBinding[$name] = $binding[$name] }
+        $changedGenerationBinding['continuationGeneration'] = [int64]$binding.continuationGeneration + 1
+        { & $module {
+                param($a,$key,$items)
+                Assert-GitHandoffDecisionBranchBindingsForWrite -Adapter $a -TaskKey $key `
+                    -Bindings $items -AllowFinalizationDescendant
+            } $adapter $taskKey @($changedGenerationBinding) } | Should -Throw '*explicitly continued*'
+
+        $null = Set-GitHandoffFields -Adapter $adapter -RecordKind common -TaskKey $taskKey `
+            -ExpectedRevision $common.Revision -Changes ([ordered]@{Current='Changed after the reviewed decision'}) `
+            -OperationId 'archive-descendant-common-drift' -Actor 'writer-a' -Reason 'negative proof fixture'
+        $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey
+        { Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+            -BranchId $branchId -DecisionCommonRevision $decisionCommonRevision `
+            -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision $branch.Revision `
+            -ExpectedOutcome Selected } | Should -Throw '*common decision fields changed*'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: branch activity advances after the adapter returns an inactivity archive candidate.
+    # Purpose: reject the stale selected branch revision before writing Archived lifecycle state.
+    It 'InterT21_rejects_an_inactivity_archive_after_selected_branch_activity_changes' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-branch-cursor'
+            $candidate = $fixture.Candidate
+            $before = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind branch -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -ExpectedRevision $before.Revision `
+                -Changes ([ordered]@{Current='Material branch activity after selector read'}) `
+                -OperationId 'b2-branch-activity-after-selection' -Actor 'writer-b' `
+                -Reason 'record material work after the archive candidate was read' | Out-Null
+            $afterActivity = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-stale-branch-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'reject stale inactivity archive candidate' } | Should -Throw '*Archive selection branch revision changed*'
+
+            $after = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $after.Revision | Should -Be $afterActivity.Revision -Because 'the subsequent material write is the latest branch revision'
+            $after.Revision | Should -Not -Be $candidate.Revision
+            $after.Fields.Lifecycle | Should -Be 'Active'
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches | Should -Contain $fixture.BranchId
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: a branch is explicitly continued after its inactivity archive candidate is selected.
+    # Purpose: reject archival using the candidate's stale continuation generation.
+    It 'InterT22_rejects_an_inactivity_archive_after_explicit_continuation_changes_generation' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-generation-cursor'
+            $candidate = $fixture.Candidate
+            $continued = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -Lifecycle Active -ExplicitContinuation `
+                -OperationId 'b2-continue-after-archive-selection' -Actor 'writer-b' `
+                -Reason 'explicitly continue after the archive candidate was read'
+            $continued.ContinuationGeneration | Should -Be ([int64]$candidate.ContinuationGeneration + 1)
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-stale-generation-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'reject stale inactivity archive candidate' } | Should -Throw '*Archive selection continuation generation changed*'
+
+            $after = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $after.Fields.Lifecycle | Should -Be 'Active'
+            $after.ContinuationGeneration | Should -Be $continued.ContinuationGeneration
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).ActiveBranches | Should -Contain $fixture.BranchId
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: the common record's revision and work-state guard change after candidate selection.
+    # Purpose: preserve the branch and reject archival against a stale common cursor.
+    It 'InterT23_rejects_an_inactivity_archive_after_the_selected_common_cursor_or_guard_changes' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-common-cursor'
+            $candidate = $fixture.Candidate
+            $common = Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey
+            Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind common -TaskKey $fixture.TaskKey `
+                -ExpectedRevision $common.Revision -Changes ([ordered]@{'Work State'='Blocked'}) `
+                -OperationId 'b2-common-guard-after-selection' -Actor 'writer-b' `
+                -Reason 'mark common blocked after the archive candidate was read' | Out-Null
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-stale-common-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'reject stale inactivity archive candidate' } | Should -Throw '*Archive selection common revision changed*'
+
+            (Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId).Fields.Lifecycle |
+                Should -Be 'Active'
+            (Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey).Fields['Work State'] | Should -Be 'Blocked'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: the branch and common records still match the selected archive cursor.
+    # Purpose: verify lifecycle, generation, activity, and common-index readback after archival.
+    It 'InterT24_archives_a_matching_inactivity_candidate_and_reads_back_lifecycle_generation_and_index' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-matching-cursor'
+            $candidate = $fixture.Candidate
+            $before = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $beforeActivity = $before.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+
+            $result = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-matching-archive' `
+                -ExpectedBranchRevision $candidate.Revision `
+                -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                -Reason 'archive the exact selected inactivity candidate'
+
+            $after = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $common = Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey
+            $after.Fields.Lifecycle | Should -Be 'Archived'
+            $after.Revision | Should -Be $result.BranchRevision
+            $after.ContinuationGeneration | Should -Be ([int64]$candidate.ContinuationGeneration)
+            $after.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture) | Should -Be $beforeActivity
+            $common.ActiveBranches | Should -Not -Contain $fixture.BranchId
+            $result.Indexed | Should -BeFalse
+            @($result.IndexOperationIds).Count | Should -BeGreaterThan 0
+            $branchEvent = Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind branch -BranchId $fixture.BranchId -OperationId 'b2-matching-archive' -Field 'Lifecycle'
+            $branchEvent.ReadbackResult | Should -Be 'verified'
+            $indexEvent = Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind common -OperationId $result.IndexOperationIds[0] -Field 'Active Branches'
+            $indexEvent.ReadbackResult | Should -Be 'verified'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Scenario: the branch archive commits but the selected common-index update is rejected once.
+    # Purpose: reconcile the index retry with the original archive cursor and operation ID.
+    It 'InterT25_reconciles_a_failed_selected_branch_index_write_with_the_same_archive_cursor_and_operation_id' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-index-retry'
+            $candidate = $fixture.Candidate
+            $remote = Join-Path $root 'remote.git'
+            Add-SelectiveArchiveIndexRejectHook -RemoteRoot $remote
+            $flag = Join-Path $remote 'deny-index'
+            Set-Content -LiteralPath $flag -Value 'reject changed common index trees only'
+
+            { Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                    -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-index-retry-archive' `
+                    -ExpectedBranchRevision $candidate.Revision `
+                    -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                    -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                    -Reason 'archive the exact selected inactivity candidate' } |
+                Should -Throw '*lifecycle is durable but common index reconciliation is pending*'
+
+            $partialBranch = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $partialCommon = Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey
+            $partialBranch.Fields.Lifecycle | Should -Be 'Archived'
+            $partialCommon.ActiveBranches | Should -Contain $fixture.BranchId
+            Remove-Item -LiteralPath $flag -Force
+
+            $repaired = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-index-retry-archive' `
+                -ExpectedBranchRevision $candidate.Revision `
+                -ExpectedContinuationGeneration $candidate.ContinuationGeneration `
+                -ExpectedCommonRevision $candidate.ParentRevision -Actor 'writer-a' `
+                -Reason 'archive the exact selected inactivity candidate'
+
+            $finalBranch = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
+            $finalCommon = Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey
+            $finalBranch.Fields.Lifecycle | Should -Be 'Archived'
+            $finalCommon.ActiveBranches | Should -Not -Contain $fixture.BranchId
+            $repaired.Indexed | Should -BeFalse
+            @($repaired.IndexOperationIds).Count | Should -BeGreaterThan 0
+            $indexEvent = Get-GitHandoffEvent -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
+                -RecordKind common -OperationId $repaired.IndexOperationIds[0] -Field 'Active Branches'
+            $indexEvent.ReadbackResult | Should -Be 'verified'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
