@@ -109,6 +109,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
+        $workflow | Should -Match 'actions/setup-node@[0-9a-f]{40}'
+        $workflow | Should -Match "node-version: '24'"
+        $workflow | Should -Match 'Get-Command npm\.cmd -CommandType Application'
+        $workflow | Should -Match 'APPROVED_NPM_PATH'
+        $workflow | Should -Match 'Expected npm 11 lockfile semantics'
         $workflow | Should -Match '(?m)^  pull_request:\s*$'
         $workflow | Should -Match '(?m)^  push:\s*$'
         $workflow | Should -Match '(?m)^    runs-on: windows-latest\s*$'
