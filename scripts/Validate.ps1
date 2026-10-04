@@ -69,7 +69,6 @@ $script:AuthorityFiles = [ordered]@{
     'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
     'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
 }
-
 $script:NextAuthorityCommit = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
 $script:NextAuthorityArchiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
 $script:NextAuthorityFiles = [ordered]@{
@@ -561,7 +560,10 @@ function Get-StandardCoreRunPaths {
 }
 
 function Assert-AuthorityConfig {
-    param([Parameter(Mandatory = $true)] $Config)
+    param(
+        [Parameter(Mandatory = $true)] $Config,
+        [switch] $AllowNextAuthority
+    )
 
     Assert-ExactPropertySet -Value $Config -Expected @('schemaVersion', 'standardVersion', 'authority') -Context 'config/standard-v1.json'
     Assert-ExactPropertySet -Value $Config.authority -Expected @('repository', 'commit', 'archiveUrl', 'archiveSha256', 'files') -Context 'config/standard-v1.json authority'
@@ -587,15 +589,17 @@ function Assert-AuthorityConfig {
             archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:AuthorityCommit)"
             archiveSha256 = $script:AuthorityArchiveSha256
             files = $script:AuthorityFiles
-        },
-        [pscustomobject]@{
+        }
+    )
+    if ($AllowNextAuthority) {
+        $approvedPins += [pscustomobject]@{
             repository = $script:AuthorityRepository
             commit = $script:NextAuthorityCommit
             archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:NextAuthorityCommit)"
             archiveSha256 = $script:NextAuthorityArchiveSha256
             files = $script:NextAuthorityFiles
         }
-    )
+    }
     foreach ($approved in $approvedPins) {
         if ([string]$Config.authority.repository -cne [string]$approved.repository -or
             [string]$Config.authority.commit -cne [string]$approved.commit -or
@@ -604,7 +608,6 @@ function Assert-AuthorityConfig {
             @($Config.authority.files).Count -ne $approved.files.Count) {
             continue
         }
-
         $filesMatch = $true
         $expectedPaths = @($approved.files.Keys)
         for ($index = 0; $index -lt $expectedPaths.Count; $index++) {
@@ -621,7 +624,6 @@ function Assert-AuthorityConfig {
         }
         if ($filesMatch) { return $approved }
     }
-
     throw 'config/standard-v1.json is not bound to one complete approved P02 authority snapshot.'
 }
 
@@ -1315,12 +1317,16 @@ try {
     & $gitPath -C $repoRoot merge-base --is-ancestor $baseRevision $candidateCommit
     if ($LASTEXITCODE -ne 0 -or $baseRevision -ceq $candidateCommit) { throw 'Base commit must be a distinct ancestor of the immutable candidate.' }
 
-    # The authority pin belongs to the executing driver checkout. A PR
-    # candidate may contain a newer config, but it cannot select this run's
-    # trusted central archive before that config reaches the protected base.
+    # Verify the executing driver's authority config before touching candidate content.
+    # Normal Run may then select only an exact approved tuple from the immutable candidate.
     $configRoot = Split-Path -Parent $PSScriptRoot
     $config = Read-JsonFile -Path (Join-Path $configRoot 'config/standard-v1.json') -Context 'config/standard-v1.json'
-    $authorityPin = Assert-AuthorityConfig -Config $config
+    $baseAuthority = Assert-AuthorityConfig -Config $config -AllowNextAuthority
+    $candidateAuthority = $baseAuthority
+    if ($ExecutionMode -eq 'Run') {
+        $candidateConfig = Read-JsonFile -Path (Join-Path $repoRoot 'config/standard-v1.json') -Context 'candidate config/standard-v1.json'
+        $candidateAuthority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority
+    }
     $activeSkillIds = Get-ActiveSkillIds -Root $repoRoot
     $eventName = Get-EventName
     $legacyRunRequested = if ($ExecutionMode -eq 'Run') {
@@ -1328,14 +1334,14 @@ try {
     }
     else { $false }
     $coreRunSelected = $ExecutionMode -eq 'Run' -and
-        [string]$authorityPin.commit -ceq $script:NextAuthorityCommit -and -not $legacyRunRequested
+        [string]$candidateAuthority.commit -ceq $script:NextAuthorityCommit -and -not $legacyRunRequested
     if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
         ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
         throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'
     }
     if ($coreRunSelected) {
         if ([string]::IsNullOrWhiteSpace($AuthorityRepositoryRoot)) { throw 'Core Run requires -AuthorityRepositoryRoot for the pinned real Git authority checkout.' }
-        $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $authorityPin
+        $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $candidateAuthority
         $centralRunnerPath = [string]$authorityCheckout.runnerPath
         $pwshPath = Get-ResolvedPowerShellPath
         $trustedRoot = if ([string]::IsNullOrWhiteSpace($TrustedToolRoot)) { Split-Path -Parent $pwshPath } else { [IO.Path]::GetFullPath($TrustedToolRoot) }
@@ -1390,7 +1396,7 @@ try {
                 '-SourceRevision', $candidateCommit,
                 '-BaseRevision', $baseRevision,
                 '-EventName', $eventName,
-                '-AuthorityRevision', [string]$authorityPin.commit,
+                '-AuthorityRevision', [string]$candidateAuthority.commit,
                 '-TimeoutSeconds', [string]$TimeoutSeconds,
                 '-TrustedToolRoot', $trustedRoot
             )
@@ -1411,7 +1417,7 @@ try {
         }
         exit $coreExitCode
     }
-    $authorityPin = Get-LegacyAuthorityPin -SelectedPin $authorityPin
+    $authority = Get-LegacyAuthorityPin -SelectedPin $candidateAuthority
     $goRuntimeVersion = Resolve-GoRuntimeVersion -Expected $ExpectedGoRuntimeVersion
 
     $artifactsRootPath = [IO.Path]::GetFullPath($ArtifactsRoot)
@@ -1481,24 +1487,23 @@ try {
     if ($candidateRoots.Count -ne 1) { throw 'Candidate archive must contain exactly one repository root.' }
     $candidateRoot = [IO.Path]::GetFullPath($candidateRoots[0].FullName)
     Assert-NoReparseAncestors -Path $candidateRoot -Context 'Candidate snapshot root'
-
     $authorityArchive = Join-Path $runRoot 'authority.zip'
     if ([string]::IsNullOrWhiteSpace($AuthorityArchivePath)) {
-        Invoke-WebRequest -Uri ([string]$authorityPin.archiveUrl) -OutFile $authorityArchive
+        Invoke-WebRequest -Uri ([string]$authority.archiveUrl) -OutFile $authorityArchive
     }
     else {
         $supplied = [IO.Path]::GetFullPath($AuthorityArchivePath)
         if (-not (Test-Path -LiteralPath $supplied -PathType Leaf)) { throw "Supplied authority archive does not exist: $supplied" }
         Copy-Item -LiteralPath $supplied -Destination $authorityArchive -Force
     }
-    if ((Get-FileSha256 -Path $authorityArchive) -cne $script:AuthorityArchiveSha256) { throw 'Authority archive SHA-256 does not match the exact P02 authority snapshot.' }
+    if ((Get-FileSha256 -Path $authorityArchive) -cne $authority.archiveSha256) { throw 'Authority archive SHA-256 does not match the exact P02 authority snapshot.' }
     $authorityExtract = Join-Path $trustedRoot 'authority'
     [void](New-Item -ItemType Directory -Path $authorityExtract -Force)
     Expand-Archive -LiteralPath $authorityArchive -DestinationPath $authorityExtract -Force
     $authorityRoots = @(Get-ChildItem -LiteralPath $authorityExtract -Directory -Force)
     if ($authorityRoots.Count -ne 1) { throw 'Authority archive must contain exactly one repository root.' }
     $authorityRoot = [IO.Path]::GetFullPath($authorityRoots[0].FullName)
-    foreach ($entry in $script:AuthorityFiles.GetEnumerator()) {
+    foreach ($entry in $authority.files.GetEnumerator()) {
         $authorityPath = Assert-PathWithinRoot -Path (Join-Path $authorityRoot ($entry.Key -replace '/', [IO.Path]::DirectorySeparatorChar)) -Root $authorityRoot -Context 'Authority file'
         if (-not (Test-Path -LiteralPath $authorityPath -PathType Leaf)) { throw "Authority file is missing: $($entry.Key)" }
         if ((Get-FileSha256 -Path $authorityPath) -cne $entry.Value) { throw "Authority file identity mismatch: $($entry.Key)" }
@@ -1730,9 +1735,9 @@ try {
     if ($ProtectedSourceMergeCheck) {
         $centralRunnerArgs += @(
             '-ProtectedSourceMergeCheck',
-            '-ProtectedCentralRevision', $script:AuthorityCommit,
+            '-ProtectedCentralRevision', $authority.commit,
             '-ProtectedWorkflowRevision', $ProtectedWorkflowRevision,
-            '-ProtectedAuthorityArchiveSha256', $script:AuthorityArchiveSha256
+            '-ProtectedAuthorityArchiveSha256', $authority.archiveSha256
         )
     }
     & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs

@@ -54,9 +54,23 @@ jobs:
             throw 'Protected driver checkout does not match the exact event base SHA.'
           }
           $pin = Get-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+          $baselineAuthority = '51399617ddebe21656fe4265a8d9ad116a943583'
+          if ([string]$candidatePin.authority.commit -cnotin @($baselineAuthority, $nextAuthority)) {
+            throw 'Candidate has an unapproved authority pin.'
+          }
           $mode = switch ([string]$pin.authority.commit) {
-            '51399617ddebe21656fe4265a8d9ad116a943583' { 'legacy'; break }
-            'ea1d368ac7b36f838ce4c3af363972c90fa12930' { 'core'; break }
+            $baselineAuthority { 'legacy'; break }
+            $nextAuthority {
+              if ([string]$candidatePin.authority.commit -ceq $nextAuthority -and
+                  (Test-Path -LiteralPath (Join-Path $driver 'scripts/Invoke-CorePester.ps1') -PathType Leaf)) {
+                'core'
+              }
+              else { 'legacy' }
+              break
+            }
             default { throw 'Protected driver has an unapproved authority pin.' }
           }
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append

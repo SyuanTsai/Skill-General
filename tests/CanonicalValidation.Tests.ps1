@@ -93,11 +93,11 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
     }
     # Scenario: a protected workflow runs a reviewed base driver against a newer PR candidate.
-    # Purpose: the driver must read the authority pin from its own checkout before validating candidate content.
+    # Purpose: verify the protected driver pin before selecting an exact candidate pin for ordinary Run.
     It 'UnitT15_reads_authority_config_from_the_driver_checkout' {
         $script:Validator | Should -Match '\$configRoot = Split-Path -Parent \$PSScriptRoot'
         $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$configRoot ''config/standard-v1\.json''\)'
-        $script:Validator | Should -Not -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
+        $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
     }
 
     # Scenario: the approved candidate config is supplied to the actual driver verifier.
@@ -109,7 +109,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         @($errors).Count | Should -Be 0
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
         } | ForEach-Object { $_.Extent.Text })
@@ -129,6 +129,98 @@ Describe 'Canonical Standard v1 validation adapter' {
         { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $approved } | Should -Not -Throw
     }
 
+    It 'accepts the reviewed next tuple only with the internal opt-in, and keeps default modes old-only' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
+                    '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+        } | ForEach-Object { $_.Extent.Text })
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $next = [pscustomobject]@{
+            schemaVersion = 1; standardVersion = 'v1'
+            authority = [pscustomobject]@{
+                repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+                commit = $script:ExpectedNextAuthorityCommit
+                archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedNextAuthorityCommit)"
+                archiveSha256 = $script:ExpectedNextAuthorityArchiveSha256
+                files = @(foreach ($entry in $script:ExpectedNextAuthorityFiles.GetEnumerator()) {
+                    [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+                })
+            }
+        }
+        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $next
+        $pin.commit | Should -Be $script:ExpectedNextAuthorityCommit
+        $pin.archiveSha256 | Should -Be $script:ExpectedNextAuthorityArchiveSha256
+        @($pin.files.Keys) | Should -Be @($script:ExpectedNextAuthorityFiles.Keys)
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $next } | Should -Throw
+
+        foreach ($change in @(
+            { param($c) $c.authority.archiveSha256 = $script:ExpectedAuthorityArchiveSha256 },
+            { param($c) $c.authority.files[0].sha256 = '0' * 64 },
+            { param($c) [array]::Reverse($c.authority.files) },
+            { param($c) $c.authority.commit = '7c65254d96bd21083ae827e54b9e51afee8ce304' }
+        )) {
+            $forged = $next | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+            & $change $forged
+            { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
+        }
+        @('Run', 'run') | ForEach-Object { ($_ -eq 'Run') | Should -BeTrue }
+        @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
+    }
+
+    It 'verifies the protected driver tuple and the immutable Run candidate tuple before dispatch' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $calls = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -ceq 'Assert-AuthorityConfig'
+        }, $true))
+        $calls.Count | Should -Be 2
+        $baseCall = @($calls | Where-Object { $_.Extent.Text -match '\$config\b' })
+        $candidateCall = @($calls | Where-Object { $_.Extent.Text -match '\$candidateConfig\b' })
+        $baseCall.Count | Should -Be 1
+        $candidateCall.Count | Should -Be 1
+        $baseCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$config\s+-AllowNextAuthority'
+        $candidateCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$candidateConfig\s+-AllowNextAuthority'
+        $ancestor = $candidateCall[0].Parent
+        while ($null -ne $ancestor -and $ancestor -isnot [Management.Automation.Language.IfStatementAst]) { $ancestor = $ancestor.Parent }
+        $ancestor | Should -Not -BeNullOrEmpty
+        $ancestor.Extent.Text | Should -Match '^\s*if\s*\(\$ExecutionMode\s+-eq\s+''Run''\)'
+
+        $candidateRead = $script:Validator.IndexOf('Read-JsonFile -Path (Join-Path $repoRoot ''config/standard-v1.json'')')
+        $candidateSelect = $script:Validator.IndexOf('$candidateAuthority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority')
+        $coreDispatch = $script:Validator.IndexOf('if ($coreRunSelected)')
+        $candidateRead | Should -BeGreaterThan -1
+        $candidateSelect | Should -BeGreaterThan $candidateRead
+        $coreDispatch | Should -BeGreaterThan $candidateSelect
+        @('Run', 'run') | ForEach-Object { ($_ -eq 'Run') | Should -BeTrue }
+        @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
+    }
+    It 'runs the next candidate pin through Core and maps explicit legacy work to the baseline tuple' {
+        $script:Validator | Should -Match '\$candidateAuthority\.commit -ceq \$script:NextAuthorityCommit -and -not \$legacyRunRequested'
+        $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$candidateAuthority'
+        $script:Validator | Should -Match '''-AuthorityRevision'', \[string\]\$candidateAuthority\.commit'
+        $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
+        $script:Validator | Should -Match ([regex]::Escape("'-ProtectedAuthorityArchiveSha256', `$authority.archiveSha256"))
+    }
+    It 'keeps ResumeSemantic tied to the baseline tuple before the normal Run selector' {
+        $resumeIndex = $script:Validator.IndexOf('if ($ExecutionMode -eq ''ResumeSemantic'')')
+        $selectorIndex = $script:Validator.IndexOf('$baseAuthority = Assert-AuthorityConfig')
+        $resumeBlock = $script:Validator.Substring($resumeIndex, $selectorIndex - $resumeIndex)
+        $resumeBlock | Should -Match '\$script:AuthorityCommit'
+        $resumeBlock | Should -Match '\$script:AuthorityArchiveSha256'
+        $resumeBlock | Should -Not -Match 'AllowNextAuthority|\$baseAuthority'
+    }
+
     # Scenario: the config contains an obsolete revision or a forged helper/runner digest.
     # Purpose: reject every required dependency identity mismatch before tool execution.
     It 'UnitT17_rejects_obsolete_revision_and_forged_dependency_hashes_in_the_actual_driver_verifier' {
@@ -137,7 +229,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
         } | ForEach-Object { $_.Extent.Text })
@@ -229,7 +321,7 @@ Describe 'Canonical Standard v1 validation adapter' {
                 })
             }
         }
-        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config } $approved
+        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $approved
         $pin.commit | Should -Be $script:ExpectedNextAuthorityCommit
         @($pin.files.Keys) | Should -Be @($script:ExpectedNextAuthorityFiles.Keys)
         foreach ($path in $script:ExpectedNextAuthorityFiles.Keys) {
@@ -237,10 +329,10 @@ Describe 'Canonical Standard v1 validation adapter' {
         }
         $mixed = $approved | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
         $mixed.authority.archiveSha256 = $script:ExpectedAuthorityArchiveSha256
-        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $mixed } | Should -Throw
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $mixed } | Should -Throw
         $forged = $approved | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
         $forged.authority.files[0].sha256 = '0' * 64
-        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $forged } | Should -Throw
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
     }
 
     It 'routes explicit advanced Run requests through the complete legacy authority tuple' {
@@ -279,8 +371,8 @@ Describe 'Canonical Standard v1 validation adapter' {
         }
         ($legacyRoutingResults | Where-Object name -eq 'ordinary').value | Should -BeFalse
         @($legacyRoutingResults | Where-Object name -ne 'ordinary' | Where-Object { -not $_.value }).Count | Should -Be 0
-        $script:Validator | Should -Match '\$authorityPin = Get-LegacyAuthorityPin -SelectedPin \$authorityPin'
-        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authorityPin\.archiveUrl\)'
+        $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
         $script:Validator | Should -Match 'ProtectedWorkflowRevision requires -ProtectedSourceMergeCheck'
     }
 
@@ -332,7 +424,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $argumentsStart | Should -BeGreaterThan $branchIndex
         $invokeIndex | Should -BeGreaterThan $argumentsStart
         $coreArguments = $script:Validator.Substring($argumentsStart, $invokeIndex - $argumentsStart)
-        $coreArguments | Should -Match '\[string\]\$authorityPin\.commit'
+        $coreArguments | Should -Match '\[string\]\$candidateAuthority\.commit'
         $coreArguments | Should -Match 'TrustedToolRoot.*, \$trustedRoot'
         $coreArguments | Should -Not -Match 'CandidateArchive|DevelopmentHarness|Semantic|Supervisor|Lifecycle|ExpectedPlanSha256'
         $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and.*?\-not \$legacyRunRequested'
@@ -340,7 +432,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:Validator | Should -Match ([regex]::Escape("'-AdapterPath', `$adapterPath"))
         $script:Validator | Should -Match 'Get-StandardCoreRunPaths -ArtifactsRoot \$artifactsRootPath'
         $script:Validator | Should -Match 'Assert-OutsideRoot -Path \$adapterRoot -Root \$coreArtifactsRoot'
-        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authorityPin\.archiveUrl\)'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
         $script:Validator | Should -Match '\$AuthorityRepositoryRoot'
         $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout'
         $script:Validator | Should -Match 'Assert-AuthorityConfig -Config \$config'
