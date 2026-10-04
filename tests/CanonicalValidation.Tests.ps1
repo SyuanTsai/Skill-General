@@ -5,6 +5,8 @@ Describe 'Canonical Standard v1 validation adapter' {
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
         $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Validate.ps1'
         $script:Validator = Get-Content -LiteralPath $script:ValidatorPath -Raw
+        $script:WorkflowPath = Join-Path $script:RepositoryRoot '.github/workflows/validate.yml'
+        $script:Workflow = Get-Content -LiteralPath $script:WorkflowPath -Raw -Encoding utf8
         $script:Adapter = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw |
             ConvertFrom-Json -Depth 20
         $script:ExpectedAuthorityCommit = '51399617ddebe21656fe4265a8d9ad116a943583'
@@ -37,9 +39,9 @@ Describe 'Canonical Standard v1 validation adapter' {
             'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
             'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
         }
-$script:ExpectedNextAuthorityCommit = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
-$script:ExpectedNextAuthorityArchiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
-$script:ExpectedNextAuthorityFiles = [ordered]@{
+        $script:ExpectedNextAuthorityCommit = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+        $script:ExpectedNextAuthorityArchiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
+        $script:ExpectedNextAuthorityFiles = [ordered]@{
             'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
             'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
             'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
@@ -67,30 +69,147 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
             'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
             'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
         }
+
+        $selectorStepPattern = '(?ms)^      - name: Select protected authority mode\r?\n(?<body>.*?)(?=^      - name: |\z)'
+        $selectorStep = [regex]::Match($script:Workflow, $selectorStepPattern)
+        if (-not $selectorStep.Success) { throw 'Protected authority selector step is missing.' }
+        $selectorBody = $selectorStep.Groups['body'].Value
+        $selectorRunHeader = [regex]::Match($selectorBody, '(?m)^        run: \|\r?\n')
+        if (-not $selectorRunHeader.Success) { throw 'Protected authority selector run block is missing.' }
+        $selectorLines = @($selectorBody.Substring($selectorRunHeader.Index + $selectorRunHeader.Length) -split '\r?\n')
+        $script:SelectorScript = (@($selectorLines | ForEach-Object {
+            if ($_.Length -eq 0) { '' }
+            elseif ($_.StartsWith('          ', [StringComparison]::Ordinal)) { $_.Substring(10) }
+            else { throw "Unexpected selector indentation: $_" }
+        }) -join "`n")
+
+        function Invoke-WorkflowSelectorFixture {
+            param(
+                [Parameter(Mandatory)][string] $DriverAuthority,
+                [Parameter(Mandatory)][string] $CandidateAuthority,
+                [Parameter(Mandatory)][string] $ExpectedDriverSha,
+                [Parameter(Mandatory)][string] $ActualDriverSha,
+                [bool] $IncludeCoreWrapper = $true
+            )
+            $workspace = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $driver = Join-Path $workspace 'driver'
+            $candidate = Join-Path $workspace 'candidate'
+            [void](New-Item -ItemType Directory -Force -Path (Join-Path $driver 'config'), (Join-Path $candidate 'config'), (Join-Path $driver 'scripts'))
+            if ($IncludeCoreWrapper) { [IO.File]::WriteAllText((Join-Path $driver 'scripts/Invoke-CorePester.ps1'), '# fixture') }
+            @{ authority = @{ commit = $DriverAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Encoding utf8
+            @{ authority = @{ commit = $CandidateAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Encoding utf8
+
+            $names = @('GITHUB_WORKSPACE', 'EXPECTED_DRIVER_SHA', 'GITHUB_OUTPUT', 'SYP_FIXTURE_DRIVER_SHA')
+            $previous = @{}
+            foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+            $priorLastExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+            $hadPriorLastExit = $null -ne $priorLastExitVariable
+            $priorLastExitValue = if ($hadPriorLastExit) { $priorLastExitVariable.Value } else { $null }
+            try {
+                [Environment]::SetEnvironmentVariable('GITHUB_WORKSPACE', $workspace, 'Process')
+                [Environment]::SetEnvironmentVariable('EXPECTED_DRIVER_SHA', $ExpectedDriverSha, 'Process')
+                [Environment]::SetEnvironmentVariable('SYP_FIXTURE_DRIVER_SHA', $ActualDriverSha, 'Process')
+                [Environment]::SetEnvironmentVariable('GITHUB_OUTPUT', (Join-Path $workspace 'github-output.txt'), 'Process')
+                function git {
+                    $global:LASTEXITCODE = 0
+                    if ($args.Count -eq 4 -and $args[0] -ceq '-C' -and $args[2] -ceq 'rev-parse' -and $args[3] -ceq 'HEAD') {
+                        return $env:SYP_FIXTURE_DRIVER_SHA
+                    }
+                    $global:LASTEXITCODE = 1
+                    throw "Unexpected selector Git invocation: $($args -join ' ')"
+                }
+                & ([scriptblock]::Create($script:SelectorScript))
+                $output = [IO.File]::ReadAllText($env:GITHUB_OUTPUT).Trim()
+                if ($output -notmatch '^validation_mode=(legacy|core)$') { throw "Unexpected selector output: $output" }
+                return $Matches[1]
+            }
+            finally {
+                Remove-Item Function:\git -ErrorAction SilentlyContinue
+                foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+                if ($hadPriorLastExit) {
+                    Set-Variable -Name LASTEXITCODE -Value $priorLastExitValue -Scope Global
+                }
+                else {
+                    Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        function Invoke-WorkflowCredentialFixture {
+            param([Parameter(Mandatory)][ValidateSet('core', 'legacy')][string] $Mode)
+            $stepPattern = '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)'
+            $stepMatch = [regex]::Match($script:Workflow, $stepPattern)
+            if (-not $stepMatch.Success) { throw 'Canonical workflow validation step is missing.' }
+            $body = $stepMatch.Groups['body'].Value
+            $runHeader = [regex]::Match($body, '(?m)^        run: \|\r?\n')
+            if (-not $runHeader.Success) { throw 'Canonical workflow validation run block is missing.' }
+            $runLines = @($body.Substring($runHeader.Index + $runHeader.Length) -split '\r?\n')
+            $runScript = (@($runLines | ForEach-Object {
+                if ($_.Length -eq 0) { '' }
+                elseif ($_.StartsWith('          ', [StringComparison]::Ordinal)) { $_.Substring(10) }
+                else { throw "Unexpected indentation in validation run block: $_" }
+            }) -join "`n")
+            $guardMatch = [regex]::Match($runScript, '(?ms)^if \(\$env:VALIDATION_MODE -ceq ''core''\) \{.*?^\}')
+            if (-not $guardMatch.Success) { throw 'Core token-isolation guard is missing from the canonical workflow.' }
+            $tokens = $null
+            $parseErrors = $null
+            [void][Management.Automation.Language.Parser]::ParseInput($guardMatch.Value, [ref]$tokens, [ref]$parseErrors)
+            if (@($parseErrors).Count -ne 0) { throw 'Core token-isolation guard does not parse as PowerShell.' }
+
+            $guardIndex = $runScript.IndexOf($guardMatch.Value, [StringComparison]::Ordinal)
+            $childIndex = $runScript.IndexOf('pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1', [StringComparison]::Ordinal)
+            $names = @('VALIDATION_MODE', 'GITHUB_TOKEN', 'GH_TOKEN', 'SYP_CREDENTIAL_SENTINEL')
+            $previous = @{}
+            foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+            try {
+                [Environment]::SetEnvironmentVariable('VALIDATION_MODE', $Mode, 'Process')
+                [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', 'fixture-github-token', 'Process')
+                [Environment]::SetEnvironmentVariable('GH_TOKEN', 'fixture-gh-token', 'Process')
+                [Environment]::SetEnvironmentVariable('SYP_CREDENTIAL_SENTINEL', 'preserve-me', 'Process')
+                & ([scriptblock]::Create($guardMatch.Value))
+                return [pscustomobject]@{
+                    mode = $Mode
+                    guardBeforeChild = ($guardIndex -ge 0 -and $childIndex -gt $guardIndex)
+                    githubToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN', 'Process')
+                    ghToken = [Environment]::GetEnvironmentVariable('GH_TOKEN', 'Process')
+                    sentinel = [Environment]::GetEnvironmentVariable('SYP_CREDENTIAL_SENTINEL', 'Process')
+                }
+            }
+            finally {
+                foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+            }
+        }
     }
 
     # Scenario: this driver selects the reviewed immutable central snapshot.
     # Purpose: enforce the complete approved authority identity without local policy.
-    It 'UnitT10_pins_the_exact_reviewed_authority_without_local_deviation_policy' {
+    It 'UnitT10_pins_one_exact_reviewed_authority_without_local_deviation_policy' {
         @($script:Adapter.PSObject.Properties.Name) | Should -Be @('schemaVersion', 'standardVersion', 'authority')
-        $script:Adapter.authority.commit | Should -Be $script:ExpectedAuthorityCommit
-        $script:Adapter.authority.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedAuthorityCommit)"
-        $script:Adapter.authority.archiveSha256 | Should -Be $script:ExpectedAuthorityArchiveSha256
+        $expectedCommit = $script:ExpectedAuthorityCommit
+        $expectedArchiveSha256 = $script:ExpectedAuthorityArchiveSha256
+        $expectedFiles = $script:ExpectedAuthorityFiles
+        if ($script:Adapter.authority.commit -ceq $script:ExpectedNextAuthorityCommit) {
+            $expectedCommit = $script:ExpectedNextAuthorityCommit
+            $expectedArchiveSha256 = $script:ExpectedNextAuthorityArchiveSha256
+            $expectedFiles = $script:ExpectedNextAuthorityFiles
+        }
+        $script:Adapter.authority.commit | Should -Be $expectedCommit
+        $script:Adapter.authority.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$expectedCommit"
+        $script:Adapter.authority.archiveSha256 | Should -Be $expectedArchiveSha256
         $script:Validator | Should -Match 'https://codeload\.github\.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/'
-        @($script:Adapter.authority.files).Count | Should -Be $script:ExpectedAuthorityFiles.Count
+        @($script:Adapter.authority.files).Count | Should -Be $expectedFiles.Count
         foreach ($file in @($script:Adapter.authority.files)) {
-            $script:ExpectedAuthorityFiles.Contains($file.path) | Should -BeTrue
-            $file.sha256 | Should -Be $script:ExpectedAuthorityFiles[$file.path]
+            $expectedFiles.Contains($file.path) | Should -BeTrue
+            $file.sha256 | Should -Be $expectedFiles[$file.path]
         }
         $script:Adapter.PSObject.Properties.Name | Should -Not -Contain 'deviations'
     }
-
     # Scenario: a protected workflow runs a reviewed base driver against a newer PR candidate.
-    # Purpose: the driver must read the authority pin from its own checkout before validating candidate content.
+    # Purpose: verify the protected driver pin before selecting an exact candidate pin for ordinary Run.
     It 'UnitT15_reads_authority_config_from_the_driver_checkout' {
         $script:Validator | Should -Match '\$configRoot = Split-Path -Parent \$PSScriptRoot'
         $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$configRoot ''config/standard-v1\.json''\)'
-        $script:Validator | Should -Not -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
+        $script:Validator | Should -Match 'Read-JsonFile -Path \(Join-Path \$repoRoot ''config/standard-v1\.json''\)'
     }
 
     # Scenario: the approved candidate config is supplied to the actual driver verifier.
@@ -166,7 +285,7 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
         @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
     }
 
-    It 'gates the base and immutable candidate tuples by ordinary Run mode' {
+    It 'verifies the protected driver tuple and the immutable Run candidate tuple before dispatch' {
         $tokens = $null
         $errors = $null
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
@@ -181,39 +300,29 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
         $candidateCall = @($calls | Where-Object { $_.Extent.Text -match '\$candidateConfig\b' })
         $baseCall.Count | Should -Be 1
         $candidateCall.Count | Should -Be 1
-        $baseCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$config\s+-AllowNextAuthority:\(\$ExecutionMode\s+-eq\s+''Run''\)'
+        $baseCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$config\s+-AllowNextAuthority'
         $candidateCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$candidateConfig\s+-AllowNextAuthority'
         $ancestor = $candidateCall[0].Parent
         while ($null -ne $ancestor -and $ancestor -isnot [Management.Automation.Language.IfStatementAst]) { $ancestor = $ancestor.Parent }
         $ancestor | Should -Not -BeNullOrEmpty
         $ancestor.Extent.Text | Should -Match '^\s*if\s*\(\$ExecutionMode\s+-eq\s+''Run''\)'
 
-        $candidateRead = $script:Validator.IndexOf('Read-JsonFile -Path (Join-Path $candidateRoot ''config/standard-v1.json'')')
-        $candidateSelect = $script:Validator.IndexOf('$authority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority')
-        $authorityDownload = $script:Validator.IndexOf('Invoke-WebRequest -Uri ([string]$authority.archiveUrl)')
+        $candidateRead = $script:Validator.IndexOf('Read-JsonFile -Path (Join-Path $repoRoot ''config/standard-v1.json'')')
+        $candidateSelect = $script:Validator.IndexOf('$candidateAuthority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority')
+        $coreDispatch = $script:Validator.IndexOf('if ($coreRunSelected)')
         $candidateRead | Should -BeGreaterThan -1
         $candidateSelect | Should -BeGreaterThan $candidateRead
-        $authorityDownload | Should -BeGreaterThan $candidateSelect
+        $coreDispatch | Should -BeGreaterThan $candidateSelect
         @('Run', 'run') | ForEach-Object { ($_ -eq 'Run') | Should -BeTrue }
         @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
     }
-    It 'uses the candidate-selected pin for normal-run download, archive and protected runner identity' {
-        $selectorIndex = $script:Validator.IndexOf('$authority = Assert-AuthorityConfig -Config $candidateConfig')
-        $archiveStart = $script:Validator.IndexOf('$authorityArchive = Join-Path $runRoot ''authority.zip''', $selectorIndex)
-        $resolverStart = $script:Validator.IndexOf('$resolverPath = Join-Path $authorityRoot', $archiveStart)
-        $selectorIndex | Should -BeGreaterThan -1
-        $archiveStart | Should -BeGreaterThan $selectorIndex
-        $resolverStart | Should -BeGreaterThan $archiveStart
-        $runAuthorityBlock = $script:Validator.Substring($archiveStart, $resolverStart - $archiveStart)
-        $runAuthorityBlock | Should -Match '\$authority\.archiveUrl'
-        $runAuthorityBlock | Should -Match '\$authority\.archiveSha256'
-        $runAuthorityBlock | Should -Match '\$authority\.files'
-        $runAuthorityBlock | Should -Not -Match '\$script:Authority(ArchiveSha256|Files)|\$baseAuthority'
-        $runnerStart = $script:Validator.IndexOf('$centralRunnerArgs = @(', $resolverStart)
-        $runnerInvoke = $script:Validator.IndexOf('& $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs', $runnerStart)
-        $runnerBlock = $script:Validator.Substring($runnerStart, $runnerInvoke - $runnerStart)
-        $runnerBlock | Should -Match '''-ProtectedCentralRevision'', \$authority\.commit'
-        $runnerBlock | Should -Match '''-ProtectedAuthorityArchiveSha256'', \$authority\.archiveSha256'
+    It 'runs the next candidate pin through Core and maps explicit legacy work to the baseline tuple' {
+        $script:Validator | Should -Match '\$candidateAuthority\.commit -ceq \$script:NextAuthorityCommit -and -not \$legacyRunRequested'
+        $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$candidateAuthority'
+        $script:Validator | Should -Match '''-AuthorityRevision'', \[string\]\$candidateAuthority\.commit'
+        $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
+        $script:Validator | Should -Match ([regex]::Escape("'-ProtectedAuthorityArchiveSha256', `$authority.archiveSha256"))
     }
     It 'keeps ResumeSemantic tied to the baseline tuple before the normal Run selector' {
         $resumeIndex = $script:Validator.IndexOf('if ($ExecutionMode -eq ''ResumeSemantic'')')
@@ -248,6 +357,231 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
         }
     }
 
+    # Scenario: the default Run adapter is prepared for an ordinary Core v2 repository check.
+    # Purpose: bind a trusted PowerShell executable by hash and keep the dispatch schema minimal.
+    It 'UnitT20_builds_the_minimal_core_v2_adapter_for_repository_validation' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $definition = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'New-StandardCoreAdapterV2'
+        }) | Select-Object -First 1
+        $definition | Should -Not -BeNullOrEmpty
+
+        $adapterModule = New-Module -ScriptBlock ([scriptblock]::Create($definition.Extent.Text))
+        $powerShellExecutable = Join-Path $PSHOME 'pwsh.exe'
+        $adapter = & $adapterModule {
+            param($executable)
+            New-StandardCoreAdapterV2 -PowerShellPath $executable -TrustedToolRoot (Split-Path -Parent $executable) -ActiveSkillIds @('Fixture.Skill')
+        } $powerShellExecutable
+        $adapter.schemaVersion | Should -Be 2
+        $adapter.adapter | Should -Be 'standard-core-adapter-v2'
+        $adapter.skillsRoot | Should -Be 'skills'
+        @($adapter.activeSkills) | Should -Be @('Fixture.Skill')
+        @($adapter.checks).Count | Should -Be 2
+        $check = $adapter.checks[0]
+        $check.id | Should -Be 'repository-general'
+        $check.kind | Should -Be 'general'
+        $check.executable | Should -Be ([IO.Path]::GetFullPath($powerShellExecutable))
+        $check.executableSha256 | Should -Be ((Get-FileHash -LiteralPath $powerShellExecutable -Algorithm SHA256).Hash.ToLowerInvariant())
+        @($check.arguments) | Should -Be @('-NoProfile', '-NonInteractive', '-File', 'scripts/Test-SkillGeneral.ps1', '-ReadOnlySnapshot')
+        $pesterCheck = $adapter.checks[1]
+        $pesterCheck.id | Should -Be 'repository-pester'
+        $pesterCheck.kind | Should -Be 'pester'
+        $pesterCheck.executable | Should -Be ([IO.Path]::GetFullPath($powerShellExecutable))
+        $pesterCheck.executableSha256 | Should -Be $check.executableSha256
+        @($pesterCheck.arguments) | Should -Be @('-NoProfile', '-NonInteractive', '-File', 'scripts/Invoke-CorePester.ps1')
+        { & $adapterModule { param($executable, $root) New-StandardCoreAdapterV2 -PowerShellPath $executable -TrustedToolRoot $root -ActiveSkillIds @('Fixture.Skill') } $script:ValidatorPath (Split-Path -Parent $powerShellExecutable) } | Should -Throw
+    }
+
+    It 'keeps Core Pester output typed and preserves real test counts' {
+        $wrapperPath = Join-Path $script:RepositoryRoot 'scripts/Invoke-CorePester.ps1'
+        $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+        $tokens = $null
+        $errors = $null
+        [void][Management.Automation.Language.Parser]::ParseInput($wrapper, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $wrapper | Should -Match 'Invoke-Pester -Path \$testRoot -Output None -PassThru'
+        $wrapper | Should -Match "report = 'standard-core-pester-result-v1'"
+        $wrapper | Should -Match '\$failed = \[int\]\$result\.FailedCount'
+        $wrapper | Should -Match '\$skipped = \[int\]\$result\.SkippedCount'
+        $wrapper | Should -Match '\$failedBlocks = \[int\]\$result\.FailedBlocksCount'
+        $wrapper | Should -Match '\$failedContainers = \[int\]\$result\.FailedContainersCount'
+        $wrapper | Should -Match '\$ErrorActionPreference = ''Continue'''
+        $wrapper | Should -Match '\(\$passed \+ \$skipped\) -ne \$total'
+    }
+
+    It 'rejects a Pester discovery failure even when its other test passes' {
+        $fixtureRoot = Join-Path $TestDrive 'core-pester-discovery-failure'
+        $fixtureTests = Join-Path $fixtureRoot 'tests'
+        [void](New-Item -ItemType Directory -Path $fixtureTests -Force)
+        [IO.File]::WriteAllText((Join-Path $fixtureTests 'Broken.Tests.ps1'), "throw 'synthetic discovery failure'`n")
+        [IO.File]::WriteAllText((Join-Path $fixtureTests 'Healthy.Tests.ps1'), "Describe 'healthy' { It 'passes' { 1 | Should -Be 1 } }`n")
+        $wrapperPath = Join-Path $script:RepositoryRoot 'scripts/Invoke-CorePester.ps1'
+        $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+        $oldPath = $env:PSModulePath
+        $pesterModule = Get-Module Pester | Select-Object -First 1
+        $env:PSModulePath = (Split-Path -Parent (Split-Path -Parent $pesterModule.ModuleBase)) + [IO.Path]::PathSeparator + $oldPath
+        $diagnostics = Join-Path $fixtureRoot 'diagnostics.err'
+        Push-Location $fixtureRoot
+        try {
+            $output = @(& $pwsh -NoProfile -NonInteractive -File $wrapperPath 2> $diagnostics)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+            $env:PSModulePath = $oldPath
+        }
+        $exitCode | Should -Be 1
+        $output.Count | Should -Be 1
+        $counts = $output[0] | ConvertFrom-Json
+        $counts.total | Should -Be 1
+        $counts.passed | Should -Be 1
+        $counts.failed | Should -Be 0
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container failed:.*Broken\.Tests\.ps1'
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container error: synthetic discovery failure'
+    }
+
+    It 'accepts only the exact reviewed Core authority tuple' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+        } | ForEach-Object { $_.Extent.Text })
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $approved = [pscustomobject]@{
+            schemaVersion = 1; standardVersion = 'v1'
+            authority = [pscustomobject]@{
+                repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+                commit = $script:ExpectedNextAuthorityCommit
+                archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedNextAuthorityCommit)"
+                archiveSha256 = $script:ExpectedNextAuthorityArchiveSha256
+                files = @(foreach ($entry in $script:ExpectedNextAuthorityFiles.GetEnumerator()) {
+                    [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+                })
+            }
+        }
+        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $approved
+        $pin.commit | Should -Be $script:ExpectedNextAuthorityCommit
+        @($pin.files.Keys) | Should -Be @($script:ExpectedNextAuthorityFiles.Keys)
+        foreach ($path in $script:ExpectedNextAuthorityFiles.Keys) {
+            $pin.files[$path] | Should -Be $script:ExpectedNextAuthorityFiles[$path]
+        }
+        $mixed = $approved | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $mixed.authority.archiveSha256 = $script:ExpectedAuthorityArchiveSha256
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $mixed } | Should -Throw
+        $forged = $approved | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+        $forged.authority.files[0].sha256 = '0' * 64
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
+    }
+
+    It 'routes explicit advanced Run requests through the complete legacy authority tuple' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Get-LegacyAuthorityPin', 'Test-LegacyRunRequested'))
+        } | ForEach-Object { $_.Extent.Text })
+        $legacyModule = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $legacy = & $legacyModule {
+            $selected = [pscustomobject]@{
+                repository = $script:AuthorityRepository
+                commit = $script:NextAuthorityCommit
+            }
+            Get-LegacyAuthorityPin -SelectedPin $selected
+        }
+        $legacy.commit | Should -Be '51399617ddebe21656fe4265a8d9ad116a943583'
+        $legacy.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($legacy.commit)"
+        $legacy.archiveSha256 | Should -Be 'b115762de7d4da6f0f95143e1853bd3822fe224d2e673539ace3f480df6ef50d'
+        @($legacy.files.Keys).Count | Should -Be 26
+
+        $legacyRoutingResults = & $legacyModule {
+            $ordinary = [ordered]@{}
+            $results = [System.Collections.Generic.List[object]]::new()
+            $results.Add([pscustomobject]@{ name = 'ordinary'; value = (Test-LegacyRunRequested -BoundParameters $ordinary) })
+            foreach ($name in @('AuthorityArchivePath', 'ExpectedGoRuntimeVersion', 'SemanticTriggered', 'SemanticRunPlanPath', 'SourceMergeExceptionReview', 'ProtectedSourceMergeCheck', 'ProtectedWorkflowRevision')) {
+                $explicit = [ordered]@{ $name = $true }
+                $results.Add([pscustomobject]@{ name = $name; value = (Test-LegacyRunRequested -BoundParameters $explicit) })
+            }
+            return $results.ToArray()
+        }
+        ($legacyRoutingResults | Where-Object name -eq 'ordinary').value | Should -BeFalse
+        @($legacyRoutingResults | Where-Object name -ne 'ordinary' | Where-Object { -not $_.value }).Count | Should -Be 0
+        $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
+        $script:Validator | Should -Match 'ProtectedWorkflowRevision requires -ProtectedSourceMergeCheck'
+    }
+
+    It 'places the Core adapter beside its artifacts root and keeps output inside the root' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $_.Name -in @('Test-PathWithinOrEqual', 'Assert-PathWithinRoot', 'Get-StandardCoreRunPaths')
+        } | ForEach-Object { $_.Extent.Text })
+        $pathModule = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $parent = Join-Path ([IO.Path]::GetTempPath()) ("core-path-tests-" + [guid]::NewGuid().ToString('N'))
+        $explicitRoot = Join-Path $parent 'explicit-artifacts'
+        $explicitOutput = Join-Path $explicitRoot 'reports/core.json'
+        $explicit = & $pathModule {
+            param($root, $output)
+            Get-StandardCoreRunPaths -ArtifactsRoot $root -ArtifactsRootWasExplicit $true -OutputPath $output
+        } $explicitRoot $explicitOutput
+        $explicit.artifactsRoot | Should -Be ([IO.Path]::GetFullPath($explicitRoot))
+        $explicit.outputPath | Should -Be ([IO.Path]::GetFullPath($explicitOutput))
+        $explicitOutputInside = & $pathModule { param($path, $root) Test-PathWithinOrEqual -Path $path -Root $root } $explicit.outputPath $explicit.artifactsRoot
+        $explicitAdapterInside = & $pathModule { param($path, $root) Test-PathWithinOrEqual -Path $path -Root $root } $explicit.adapterRoot $explicit.artifactsRoot
+        $explicitOutputInside | Should -BeTrue
+        $explicitAdapterInside | Should -BeFalse
+
+        $defaultOne = & $pathModule {
+            param($root)
+            Get-StandardCoreRunPaths -ArtifactsRoot $root -ArtifactsRootWasExplicit $false
+        } $parent
+        $defaultTwo = & $pathModule {
+            param($root)
+            Get-StandardCoreRunPaths -ArtifactsRoot $root -ArtifactsRootWasExplicit $false
+        } $parent
+        $defaultOne.artifactsRoot | Should -Not -Be $defaultTwo.artifactsRoot
+        $defaultOutputInside = & $pathModule { param($path, $root) Test-PathWithinOrEqual -Path $path -Root $root } $defaultOne.outputPath $defaultOne.artifactsRoot
+        $defaultAdapterInside = & $pathModule { param($path, $root) Test-PathWithinOrEqual -Path $path -Root $root } $defaultOne.adapterRoot $defaultOne.artifactsRoot
+        $defaultOutputInside | Should -BeTrue
+        $defaultAdapterInside | Should -BeFalse
+        { & $pathModule { param($root, $output) Get-StandardCoreRunPaths -ArtifactsRoot $root -ArtifactsRootWasExplicit $false -OutputPath $output } $parent $explicitOutput } | Should -Throw
+    }
+
+    It 'dispatches the selected ordinary Run through Core v2 without semantic or acquisition inputs' {
+        $branchIndex = $script:Validator.IndexOf('if ($coreRunSelected)')
+        $argumentsStart = $script:Validator.IndexOf('$coreRunnerArgs = @(', $branchIndex)
+        $invokeIndex = $script:Validator.IndexOf('& $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @coreRunnerArgs', $argumentsStart)
+        $branchIndex | Should -BeGreaterThan -1
+        $argumentsStart | Should -BeGreaterThan $branchIndex
+        $invokeIndex | Should -BeGreaterThan $argumentsStart
+        $coreArguments = $script:Validator.Substring($argumentsStart, $invokeIndex - $argumentsStart)
+        $coreArguments | Should -Match '\[string\]\$candidateAuthority\.commit'
+        $coreArguments | Should -Match 'TrustedToolRoot.*, \$trustedRoot'
+        $coreArguments | Should -Not -Match 'CandidateArchive|DevelopmentHarness|Semantic|Supervisor|Lifecycle|ExpectedPlanSha256'
+        $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and.*?\-not \$legacyRunRequested'
+        $script:Validator | Should -Match ([regex]::Escape("'-ArtifactsRoot', `$coreArtifactsRoot"))
+        $script:Validator | Should -Match ([regex]::Escape("'-AdapterPath', `$adapterPath"))
+        $script:Validator | Should -Match 'Get-StandardCoreRunPaths -ArtifactsRoot \$artifactsRootPath'
+        $script:Validator | Should -Match 'Assert-OutsideRoot -Path \$adapterRoot -Root \$coreArtifactsRoot'
+        $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
+        $script:Validator | Should -Match '\$AuthorityRepositoryRoot'
+        $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout'
+        $script:Validator | Should -Match 'Assert-AuthorityConfig -Config \$config'
+    }
     It 'verifies authority before resolving or executing any validation tool' {
         $archiveIndex = $script:Validator.IndexOf('Expand-Archive')
         $archiveHashIndex = $script:Validator.IndexOf('Authority archive SHA-256 does not match')
@@ -262,6 +596,77 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
         $centralIndex | Should -BeGreaterThan $resolverIndex
     }
 
+    It 'rejects hidden authority worktree edits while accepting Windows CRLF checkout text' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $names = @('Test-PathWithinOrEqual', 'Test-PathEqual', 'Assert-PathWithinRoot',
+            'Assert-NoReparseAncestors', 'Resolve-GitRevision', 'Get-GitBlobSha256',
+            'Test-AuthorityWorktreeSha256', 'Assert-StandardCoreAuthorityCheckout',
+            'New-StandardCoreAuthoritySnapshot')
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in $names
+        } | ForEach-Object { $_.Extent.Text })
+        $parts.Count | Should -Be $names.Count
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+        $authorityRoot = Join-Path $TestDrive 'authority-worktree'
+        $runnerPath = Join-Path $authorityRoot 'scripts/Invoke-StandardValidation.ps1'
+        $contractPath = Join-Path $authorityRoot 'docs/standards/standard-core-validation-v2.json'
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $runnerPath) -Force)
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $contractPath) -Force)
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'trusted'`n", $utf8)
+        [IO.File]::WriteAllText($contractPath, "{}`n", $utf8)
+        & $gitPath -C $authorityRoot init -q | Out-Null
+        & $gitPath -C $authorityRoot config core.autocrlf false
+        & $gitPath -C $authorityRoot config user.name 'Example Reviewer'
+        & $gitPath -C $authorityRoot config user.email 'reviewer@example.com'
+        & $gitPath -C $authorityRoot remote add origin 'https://example.com/authority.git'
+        & $gitPath -C $authorityRoot add -- scripts/Invoke-StandardValidation.ps1 docs/standards/standard-core-validation-v2.json
+        & $gitPath -C $authorityRoot commit -qm 'Test authority snapshot'
+        $head = ([string](& $gitPath -C $authorityRoot rev-parse HEAD)).Trim()
+        $runnerSha = (Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $pin = [pscustomobject]@{
+            commit = $head
+            repository = 'https://example.com/authority.git'
+            files = [ordered]@{'scripts/Invoke-StandardValidation.ps1' = $runnerSha}
+        }
+        $approved = & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin
+        $approved.revision | Should -Be $head
+        $ownedRoot = Join-Path $TestDrive 'snapshot-owner'
+        [void](New-Item -ItemType Directory -Path $ownedRoot)
+        $snapshot = & $verifier { param($g, $root, $owned, $p) New-StandardCoreAuthoritySnapshot -GitPath $g -SourceRoot $root -OwnedRoot $owned -AuthorityPin $p } $gitPath $authorityRoot $ownedRoot $pin
+        $snapshot.revision | Should -Be $head
+
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'untrusted'`n", $utf8)
+        & $gitPath -C $authorityRoot update-index --assume-unchanged -- scripts/Invoke-StandardValidation.ps1
+        @(& $gitPath -C $authorityRoot status --porcelain=v1 --untracked-files=all).Count | Should -Be 0
+        [IO.File]::ReadAllText($snapshot.runnerPath, $utf8) | Should -Be "Write-Output 'trusted'`n"
+        (& $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $snapshot.root $pin).revision |
+            Should -Be $head
+        { & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin } |
+            Should -Throw '*Pinned authority file identity mismatch*'
+
+        & $gitPath -C $authorityRoot update-index --no-assume-unchanged -- scripts/Invoke-StandardValidation.ps1
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'trusted'`n", $utf8)
+        [IO.File]::WriteAllText($contractPath, "{`"changed`":true}`n", $utf8)
+        & $gitPath -C $authorityRoot update-index --assume-unchanged -- docs/standards/standard-core-validation-v2.json
+        @(& $gitPath -C $authorityRoot status --porcelain=v1 --untracked-files=all).Count | Should -Be 0
+        { & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin } |
+            Should -Throw '*Pinned Core v2 contract worktree content differs*'
+
+        $crlfPath = Join-Path $TestDrive 'crlf-checkout.ps1'
+        [IO.File]::WriteAllText($crlfPath, "Write-Output 'a'`r`nWrite-Output 'b'`r`n", $utf8)
+        $lfBytes = $utf8.GetBytes("Write-Output 'a'`nWrite-Output 'b'`n")
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { $lfSha = ([BitConverter]::ToString($hasher.ComputeHash($lfBytes)) -replace '-', '').ToLowerInvariant() }
+        finally { $hasher.Dispose() }
+        (& $verifier { param($path, $sha) Test-AuthorityWorktreeSha256 -Path $path -ExpectedSha256 $sha } $crlfPath $lfSha) |
+            Should -BeTrue
+    }
+
     It 'passes resolver named arguments through the trusted PowerShell host' {
         $script:Validator | Should -Match '& \$PowerShellPath -NoProfile -NonInteractive -File \$ResolverPath @Arguments'
         $script:Validator | Should -Match 'Invoke-Resolver -PowerShellPath \$pwshPath'
@@ -274,7 +679,16 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
     }
 
     It 'keeps repository Pester child output JSON-only' {
-        $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output None -PassThru 3>\$null 6>\$null'
+        $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output Detailed -PassThru 3>\$null 6>&1 \|'
+        $script:Validator | Should -Match 'if \(\$_ -is \[Management\.Automation\.InformationRecord\]\)'
+        $script:Validator | Should -Match '\[IO\.File\]::WriteAllLines\(\$progressPath, \$progressTail\.ToArray\(\)'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester progress: \$entry"\)'
+        $script:Validator | Should -Match 'Pester counts: total='
+        $script:Validator | Should -Match 'Pester progress:'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester container failed:'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester block failed:'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester test failed:'
+        $script:Validator | Should -Match '\[int64\]\$result\.FailedContainersCount -ne 0 -or'
     }
 
     It 'uses the P02 central runner as the only stage and severity orchestrator' {
@@ -353,5 +767,93 @@ $script:ExpectedNextAuthorityFiles = [ordered]@{
         $childRunnerMarker = '$childRunnerText = @' + [char]39
         $entryPoint = $script:Validator.Substring(0, $script:Validator.IndexOf($childRunnerMarker))
         $entryPoint | Should -Not -Match 'Import-Module.*Pester'
+    }
+
+    # Scenario: the workflow uses ordinary Core to validate the immutable source snapshot.
+    # Purpose: remove the runner's GitHub token from the Core validator process before it launches any child.
+    It 'UnitT21_clears_github_tokens_before_launching_the_core_validator_child' {
+        $result = Invoke-WorkflowCredentialFixture -Mode 'core'
+        $result.guardBeforeChild | Should -BeTrue
+        $result.githubToken | Should -BeNullOrEmpty
+        $result.ghToken | Should -BeNullOrEmpty
+        $result.sentinel | Should -BeExactly 'preserve-me'
+    }
+
+    # Scenario: the legacy resolver still needs its explicitly scoped read-only GitHub token.
+    # Purpose: keep token isolation limited to ordinary Core while preserving unrelated process environment.
+    It 'UnitT22_preserves_legacy_workflow_tokens_and_unrelated_environment' {
+        $result = Invoke-WorkflowCredentialFixture -Mode 'legacy'
+        $result.guardBeforeChild | Should -BeTrue
+        $result.githubToken | Should -BeExactly 'fixture-github-token'
+        $result.ghToken | Should -BeExactly 'fixture-gh-token'
+        $result.sentinel | Should -BeExactly 'preserve-me'
+    }
+
+    # Scenario: the ordinary-base migration PR is evaluated by its existing baseline-pinned protected driver.
+    # Purpose: preserve the legacy bootstrap route until the exact ea1 migration candidate becomes protected main.
+    It 'UnitT23_keeps_baseline_protected_driver_on_legacy_for_the_ea1_migration_candidate' {
+        $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40)
+        $mode | Should -BeExactly 'legacy'
+    }
+
+    # Scenario: the protected base has already adopted the exact ea1 Core authority.
+    # Purpose: reject a baseline-pinned candidate instead of silently downgrading the protected validation mode.
+    It 'UnitT24_rejects_a_baseline_candidate_under_the_protected_core_driver' {
+        { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedAuthorityCommit -ExpectedDriverSha ('b' * 40) -ActualDriverSha ('b' * 40) } | Should -Throw -ExpectedMessage '*cannot downgrade*'
+    }
+
+    # Scenario: the protected base claims the ea1 Core pin but lacks its reviewed Pester wrapper.
+    # Purpose: fail closed rather than choosing legacy validation when the trusted Core implementation is incomplete.
+    It 'UnitT25_rejects_a_protected_core_driver_without_its_trusted_wrapper' {
+        { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) -IncludeCoreWrapper:$false } | Should -Throw -ExpectedMessage '*missing the trusted Pester wrapper*'
+    }
+
+    # Scenario: protected main and immutable candidate both use ea1 with the exact Core wrapper available.
+    # Purpose: select ordinary Core only for the fully bound protected tuple.
+    It 'UnitT26_selects_core_for_the_exact_protected_ea1_tuple' {
+        $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
+        $mode | Should -BeExactly 'core'
+    }
+
+    # Scenario: an operator manually starts the canonical workflow on its approved branch.
+    # Purpose: retain the baseline workflow_dispatch entry point through the base migration.
+    It 'UnitT27_preserves_manual_canonical_validation_dispatch' {
+        $script:Workflow | Should -Match '(?m)^  workflow_dispatch:\s*$'
+    }
+
+    # Scenario: the selector test substitutes Git for a fixture driver checkout.
+    # Purpose: restore an existing native exit code so the fixture cannot contaminate later Pester cases.
+    It 'UnitT28_restores_a_preexisting_native_exit_code_after_selector_fixtures' {
+        $prior = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        $hadPrior = $null -ne $prior
+        $priorValue = if ($hadPrior) { $prior.Value } else { $null }
+        try {
+            $global:LASTEXITCODE = 239
+            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('e' * 40) -ActualDriverSha ('e' * 40)
+            $mode | Should -BeExactly 'core'
+            (Get-Variable -Name LASTEXITCODE -Scope Global).Value | Should -Be 239
+        }
+        finally {
+            if ($hadPrior) { Set-Variable -Name LASTEXITCODE -Value $priorValue -Scope Global }
+            else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # Scenario: the selector fixture runs in a process without any prior native command.
+    # Purpose: remove the mock's temporary LASTEXITCODE variable when the caller had none.
+    It 'UnitT29_removes_the_native_exit_code_variable_when_it_was_previously_unset' {
+        $prior = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        $hadPrior = $null -ne $prior
+        $priorValue = if ($hadPrior) { $prior.Value } else { $null }
+        try {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue
+            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('f' * 40) -ActualDriverSha ('f' * 40)
+            $mode | Should -BeExactly 'core'
+            (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
+        }
+        finally {
+            if ($hadPrior) { Set-Variable -Name LASTEXITCODE -Value $priorValue -Scope Global }
+            else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
+        }
     }
 }

@@ -17,17 +17,16 @@ permissions:
 jobs:
   canonical-validation:
     name: Skill-General Standard v1
+    runs-on: windows-latest
+    timeout-minutes: 90
     outputs:
-      source_conformance: ${{ steps.source-conformance.outputs.status }}
-    # Keep the pinned checkout action as a YAML scalar alias. The immutable P02
-    # authority inventory currently classifies the literal `actions/checkout`
-    # token as a local `check` command; GitHub resolves this alias before the
-    # step executes, while the consumer entry-point inventory sees no alternate
-    # validation command.
+      source_conformance: ${{ steps.canonical-source-report.outputs.source_conformance }}
+    # The approved authority inventory treats a literal checkout action token
+    # as a candidate command. GitHub resolves this pinned scalar alias first.
     env:
       CHECKOUT_ACTION_REFERENCE: &checkout-action-reference actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    runs-on: ubuntu-latest
+      EXPECTED_DRIVER_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Checkout protected base driver
         uses: *checkout-action-reference # actions/checkout v7
@@ -45,34 +44,200 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Select protected authority mode
+        id: authority-mode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $driver = Join-Path $env:GITHUB_WORKSPACE 'driver'
+          $driverHead = ([string](& git -C $driver rev-parse HEAD)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $driverHead -cne $env:EXPECTED_DRIVER_SHA) {
+            throw 'Protected driver checkout does not match the exact event base SHA.'
+          }
+          $pin = Get-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+          $baselineAuthority = '51399617ddebe21656fe4265a8d9ad116a943583'
+          if ([string]$candidatePin.authority.commit -cnotin @($baselineAuthority, $nextAuthority)) {
+            throw 'Candidate has an unapproved authority pin.'
+          }
+          $mode = switch ([string]$pin.authority.commit) {
+            $baselineAuthority { 'legacy'; break }
+            $nextAuthority {
+              if ([string]$candidatePin.authority.commit -cne $nextAuthority) {
+                throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
+              }
+              if (-not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
+                throw 'Protected Core driver is missing the trusted Pester wrapper.'
+              }
+              'core'
+              break
+            }
+            default { throw 'Protected driver has an unapproved authority pin.' }
+          }
+          "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout pinned Core authority
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+        uses: *checkout-action-reference # actions/checkout v7
+        with:
+          repository: SyuanTsai/SyuanTsai-AI-Instructions
+          ref: ea1d368ac7b36f838ce4c3af363972c90fa12930
+          path: authority
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Set up approved Go runtime
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 'stable'
           check-latest: true
           cache: false
 
-      - name: Capture resolved stable Go runtime
+      - name: Set up Node for central npm lock resolution
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          check-latest: true
+
+      - name: Bind npm 11 executable
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $versionOutput = @(& go version)
-          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -ne 1 -or
-              [string]$versionOutput[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
-            throw "setup-go did not provide one stable Go runtime version. Evidence='$($versionOutput -join ' | ')'"
+          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          $npmVersion = ([string](npm.cmd --version)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $npmVersion -cnotmatch '^11\.[0-9]+\.[0-9]+$') {
+            throw "Expected npm 11 lockfile semantics; executable '$npmPath' reported '$npmVersion'."
           }
-          "STANDARD_GO_RUNTIME_VERSION=$($Matches.version)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APPROVED_NPM_PATH=$npmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using npm $npmVersion from $npmPath"
 
-      - name: Run canonical Standard v1 validation
+      - name: Install and verify Microsoft's latest stable PowerShell
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $IsWindows) { throw 'Validation requires Windows.' }
+          $ownedRoot = Join-Path $env:RUNNER_TEMP "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $ownedRoot) { throw 'Run-owned directory already exists.' }
+          New-Item -ItemType Directory -Path $ownedRoot -ErrorAction Stop | Out-Null
+          "RUN_OWNED_ROOT=$ownedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $channel = Invoke-WebRequest -Uri ('https://aka.ms/powershell-' + 'release?tag=stable') -MaximumRedirection 10
+          $channelUrl = [string]$channel.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+          if ($channelUrl -cnotmatch ('^https://github\.com/PowerShell/PowerShell/' + 'releases/tag/(?<tag>v[0-9]+\.[0-9]+\.[0-9]+)$')) {
+            throw 'The official stable channel did not resolve to one PowerShell release tag.'
+          }
+          $tag = $Matches.tag
+          $release = Invoke-RestMethod -Uri ("https://api.github.com/repos/PowerShell/PowerShell/" + "releases/tags/$tag") -Headers $headers
+          if ($release.draft -or $release.prerelease -or [string]$release.tag_name -cne $tag -or
+              $tag -cnotmatch '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw 'The official stable channel release identity is invalid.'
+          }
+          $expectedVersion = $Matches.version
+          $assetName = "PowerShell-$expectedVersion-win-x64.zip"
+          $matchingAssets = @($release.assets | Where-Object { [string]$_.name -ceq $assetName })
+          if ($matchingAssets.Count -ne 1) { throw 'Latest release lacks one unique Windows x64 ZIP.' }
+          $asset = $matchingAssets[0]
+          $expectedUrl = ("https://github.com/PowerShell/PowerShell/" + "releases/download/$tag/$assetName")
+          if ([string]$asset.state -cne 'uploaded' -or [long]$asset.size -le 0 -or
+              [string]$asset.browser_download_url -cne $expectedUrl -or
+              [string]$asset.digest -cnotmatch '^sha256:(?<sha>[0-9a-fA-F]{64})$') {
+            throw 'Latest release asset identity, size, URL or digest is invalid.'
+          }
+          $expectedSha = $Matches.sha.ToLowerInvariant()
+          $zipPath = Join-Path $ownedRoot $assetName
+          Invoke-WebRequest -Uri $expectedUrl -OutFile $zipPath
+          if ((Get-Item -LiteralPath $zipPath).Length -ne [long]$asset.size -or
+              (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedSha) {
+            throw 'Latest PowerShell archive does not match the official release bytes.'
+          }
+          $runtimeRoot = Join-Path $ownedRoot 'powershell'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $runtimeRoot
+          $runtimePath = Join-Path $runtimeRoot 'pwsh.exe'
+          if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw 'Verified archive lacks pwsh.exe.' }
+          $env:PATH = "$runtimeRoot;$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($runtimePath)) {
+            throw 'PowerShell command resolution differs from the verified archive.'
+          }
+          $runtimeEvidence = pwsh -NoLogo -NoProfile -NonInteractive -Command `
+            '[pscustomobject]@{version=$PSVersionTable.PSVersion.ToString();path=(Get-Process -Id $PID).Path}|ConvertTo-Json -Compress' |
+            ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $runtimeEvidence.version -cne $expectedVersion -or
+              [IO.Path]::GetFullPath([string]$runtimeEvidence.path) -ine [IO.Path]::GetFullPath($runtimePath)) {
+            throw 'Verified PowerShell executable path or runtime version differs from the official release.'
+          }
+          "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
+
+      - name: Install pinned Pester for ordinary Core
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = @(
+            '$ErrorActionPreference = ''Stop'''
+            'Install-PSResource -Name Pester -Version ''6.2.0'' -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -AcceptLicense -ErrorAction Stop'
+            '$modules = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -eq 6 } | Sort-Object Version -Descending)'
+            'if ($modules.Count -eq 0 -or $modules[0].Version.ToString() -cne ''6.2.0'') { throw ''Ordinary Core requires the reviewed Pester 6.2.0 runtime.'' }'
+            'Import-Module -Name $modules[0].Path -ErrorAction Stop'
+          ) -join '; '
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+            throw 'Pester installer PowerShell differs from the verified runtime.'
+          }
+          pwsh -NoLogo -NoProfile -NonInteractive -Command $install
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Pester installation or verification failed.' }
+
+      - name: Validate exact candidate with the verified runtime
+        id: canonical-source-report
         shell: pwsh
         working-directory: driver
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
+          VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:VALIDATION_MODE -ceq 'core') {
+            [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $null, 'Process')
+            [Environment]::SetEnvironmentVariable('GH_TOKEN', $null, 'Process')
+          }
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
+          $runnerNpmPrefix = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'Process')
+          if ($runnerNpmPrefix -ceq 'C:\npm\prefix') {
+            [Environment]::SetEnvironmentVariable('NPM_CONFIG_PREFIX', $null, 'Process')
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($runnerNpmPrefix)) {
+            throw 'Unexpected npm prefix in the Windows runner environment.'
+          }
+          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($npmPath) -ine [IO.Path]::GetFullPath($env:APPROVED_NPM_PATH)) {
+            throw 'The npm executable changed after the approved runtime was bound.'
+          }
+          }
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+            throw 'Child PowerShell resolution differs from the verified runtime.'
+          }
+          $checkoutHead = ([string](& git -C $candidate rev-parse HEAD)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutHead -cne $env:EXPECTED_SOURCE_SHA) {
+            throw 'Candidate checkout does not match the exact GitHub event source SHA.'
+          }
           $baseCommit = if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
             $commonBase = @(& git -C $candidate merge-base $env:PULL_REQUEST_BASE_SHA HEAD)
             if ($LASTEXITCODE -ne 0 -or $commonBase.Count -ne 1 -or
@@ -82,176 +247,311 @@ jobs:
             [string]$commonBase[0]
           }
           elseif ($env:GITHUB_EVENT_NAME -eq 'push' -and
-              -not [string]::IsNullOrWhiteSpace($env:PUSH_BEFORE_SHA) -and
-              $env:PUSH_BEFORE_SHA -notmatch '^0+$') {
+              [string]$env:PUSH_BEFORE_SHA -cmatch '^[0-9a-f]{40}$' -and
+              $env:PUSH_BEFORE_SHA -cnotmatch '^0+$') {
             $env:PUSH_BEFORE_SHA
           }
-          elseif (git -C (Join-Path $env:GITHUB_WORKSPACE 'candidate') rev-parse HEAD^ 2>$null) {
-            'HEAD^'
-          }
           else {
-            ''
+            $parents = @(& git -C $candidate rev-parse HEAD^)
+            if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 1 -or
+                [string]$parents[0] -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'A main push has no verifiable base commit.'
+            }
+            [string]$parents[0]
           }
-          $outputPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
-          if ((& git -C $candidate rev-parse HEAD) -cne $env:EXPECTED_SOURCE_SHA) {
-            throw 'Candidate checkout does not match the exact GitHub event source SHA.'
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
+          $goVersion = @(& go version)
+          if ($LASTEXITCODE -ne 0 -or $goVersion.Count -ne 1 -or
+              [string]$goVersion[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
+            throw 'The approved stable Go runtime could not be identified.'
           }
-          $driverArgs = @{
-            RepositoryRoot = $candidate
-            ArtifactsRoot = $env:RUNNER_TEMP
-            BaseCommit = $baseCommit
-            ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION
-            OutputPath = $outputPath
+          $expectedGoRuntimeVersion = $Matches.version
+          $outputPath = Join-Path $env:RUN_OWNED_ROOT 'skill-general-conformance-report.json'
+          $driverArgs = @('-RepositoryRoot', $candidate,
+            '-ArtifactsRoot', $env:RUN_OWNED_ROOT,
+            '-BaseCommit', $baseCommit,
+            '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
+            '-TimeoutSeconds', '4200',
+            '-OutputPath', $outputPath)
           }
-          if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and
-              $env:EXPECTED_SOURCE_SHA -ceq '66c466540480306c7f5346338d70d036bddb4930' -and
-              $env:GITHUB_REF -match '^refs/pull/12/merge$') {
-            $driverArgs.SourceMergeExceptionReview = $true
-            $driverArgs.ProtectedSourceMergeCheck = $true
-            $driverArgs.ProtectedWorkflowRevision = $env:PULL_REQUEST_BASE_SHA
+          elseif ($env:VALIDATION_MODE -ceq 'core') {
+            $artifactsRoot = Join-Path $env:RUN_OWNED_ROOT 'artifacts'
+            if (Test-Path -LiteralPath $artifactsRoot) { throw 'Core artifacts directory already exists.' }
+            New-Item -ItemType Directory -Path $artifactsRoot -ErrorAction Stop | Out-Null
+            $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
+            $driverArgs = @('-RepositoryRoot', $candidate,
+              '-ArtifactsRoot', $artifactsRoot,
+              '-BaseCommit', $baseCommit,
+              '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
+              '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
+              '-TimeoutSeconds', '4200',
+              '-OutputPath', $outputPath)
           }
-          & ./scripts/Validate.ps1 @driverArgs
-
-      - name: Route source conformance from canonical evidence
-        id: source-conformance
-        if: ${{ always() }}
-        shell: pwsh
-        env:
-          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          $status = 'failed'
-          try {
-            $reportPath = Join-Path $env:RUNNER_TEMP 'skill-general-conformance-report.json'
-            if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
-              $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-              $source = $report.sourceConformance
-              $canonical = $source.canonicalValidation
-              if ($report.schemaVersion -eq 1 -and
-                  $report.evidence -ceq 'standard-validation-evidence-v1' -and
-                  $report.contract -ceq 'standard-validation-contract-v1' -and
-                  $report.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                  $source.schemaVersion -eq 1 -and
-                  $source.contract -ceq 'standard-source-conformance-v1' -and
-                  $source.scope -ceq 'source-stages-1-5' -and
-                  $source.status -ceq 'passed' -and
-                  $source.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                  $source.candidateId -ceq $report.candidate.candidateId -and
-                  $source.releaseEligible -eq $false -and
-                  @($source.failureReasons).Count -eq 0 -and
-                  $canonical.state -ceq $report.state -and
-                  $canonical.exitCode -eq $report.exitCode -and
-                  $canonical.releaseEligible -eq $report.releaseEligible -and
-                  $canonical.stage6Status -ceq $report.stages[5].status) {
-                $status = 'passed'
-              }
-              elseif ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and
-                  $env:PULL_REQUEST_NUMBER -ceq '12' -and
-                  $env:GITHUB_REF -match '^refs/pull/12/merge$' -and
-                  $env:EXPECTED_SOURCE_SHA -ceq '66c466540480306c7f5346338d70d036bddb4930') {
-                $decision = $report.sourceMergeDecision
-                $proposal = $report.sourceMergeExceptionProposal
-                $driverText = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'driver/scripts/Validate.ps1') -Raw -Encoding utf8
-                $centralPin = [regex]::Match($driverText, "(?m)^\`$script:AuthorityCommit = '([0-9a-f]{40})'\s*$").Groups[1].Value
-                $archivePin = [regex]::Match($driverText, "(?m)^\`$script:AuthorityArchiveSha256 = '([0-9a-f]{64})'\s*$").Groups[1].Value
-                if ($centralPin -and $archivePin -and
-                    $report.candidate.sourceRepository -ceq 'https://github.com/SyuanTsai/Skill-General.git' -and
-                    $report.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                    $report.state -ceq 'FAILED' -and $report.exitCode -eq 20 -and
-                    $report.releaseEligible -eq $false -and
-                    $report.stages[3].status -ceq 'failed' -and
-                    $report.stages[4].status -ceq 'not-run' -and
-                    $source.status -ceq 'failed' -and
-                    $proposal.status -ceq 'eligible-for-policy-review' -and
-                    $proposal.releaseEligible -eq $false -and
-                    $decision.contract -ceq 'protected-source-merge-decision-v1' -and
-                    $decision.status -ceq 'eligible-for-protected-check' -and
-                    $decision.fixtureRoute -ceq 'rejected' -and
-                    $decision.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                    $decision.centralRevision -ceq $centralPin -and
-                    $decision.archiveSha256 -ceq $archivePin -and
-                    $decision.workflowRevision -ceq $env:PULL_REQUEST_BASE_SHA -and
-                    $decision.releaseEligible -eq $false -and
-                    @($decision.failureReasons).Count -eq 0 -and
-                    @($decision.requiredContexts).Count -eq 3 -and
-                    $decision.requiredContexts[0] -ceq 'repository-contract' -and
-                    $decision.requiredContexts[1] -ceq ('skill' + '-validator') -and
-                    $decision.requiredContexts[2] -ceq ('skill' + '-tools')) {
-                  $status = 'passed'
-                  Write-Host 'Exact PR12 source merge exception passed; canonical validation remains FAILED/20.'
+          else { throw 'Protected authority mode is missing or invalid.' }
+          pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
+          $validatorExitCode = [int]$LASTEXITCODE
+          if ($validatorExitCode -ne 0) {
+            if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+              try {
+                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                if ([string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA) {
+                  $pesterEvents = @($failedReport.stages |
+                    Where-Object { $_.id -ceq 'repository-tests' } |
+                    ForEach-Object { $_.events } |
+                    Where-Object { $_.stageId -ceq 'repository-tests' -and $_.toolId -ceq 'repository-test-pester' })
+                  foreach ($event in $pesterEvents) {
+                    $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                    $eventPath = [IO.Path]::GetFullPath([string]$event.outputPath)
+                    if (-not $eventPath.StartsWith($ownedRoot + [IO.Path]::DirectorySeparatorChar,
+                        [StringComparison]::OrdinalIgnoreCase) -or
+                        [IO.Path]::GetFileName($eventPath) -cne "event-$($event.eventId).json") { continue }
+                    $cursor = Split-Path -Parent $eventPath
+                    $safePath = $true
+                    while ($cursor.Length -ge $ownedRoot.Length) {
+                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        $safePath = $false
+                        break
+                      }
+                      if ($cursor -ieq $ownedRoot) { break }
+                      $cursor = Split-Path -Parent $cursor
+                    }
+                    if (-not $safePath -or -not (Test-Path -LiteralPath $eventPath -PathType Leaf)) { continue }
+                    $rawEvent = Get-Content -LiteralPath $eventPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                    if ([string]$rawEvent.eventId -cne [string]$event.eventId -or
+                        [string]$rawEvent.stageId -cne 'repository-tests' -or
+                        [string]$rawEvent.toolId -cne 'repository-test-pester') { continue }
+                    $diagnostic = [string]$rawEvent.stderr
+                    if ($diagnostic.Length -gt 12000) {
+                      $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
+                    }
+                    foreach ($line in @($diagnostic -split '\r?\n')) {
+                      if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                    }
+                    $eventIdCompact = ([string]$event.eventId).Replace('-', '')
+                    if ($event.status -ceq 'timeout' -and $eventIdCompact -cmatch '^[0-9a-f]{32}$') {
+                      $childWorkRoot = Join-Path $ownedRoot 'child-work'
+                      if (Test-Path -LiteralPath $childWorkRoot -PathType Container) {
+                        $childRoots = @(Get-ChildItem -LiteralPath $childWorkRoot -Directory -Force -ErrorAction Stop)
+                        if ($childRoots.Count -eq 1 -and $childRoots[0].Name -cmatch '^[0-9a-f]{32}$') {
+                          $progressPath = Join-Path (Join-Path $childRoots[0].FullName $eventIdCompact) 'repository-pester-progress.log'
+                          if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
+                            $cursor = $progressPath
+                            $safePath = $true
+                            while ($cursor.Length -ge $ownedRoot.Length) {
+                              if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                                $safePath = $false
+                                break
+                              }
+                              if ($cursor -ieq $ownedRoot) { break }
+                              $cursor = Split-Path -Parent $cursor
+                            }
+                            if ($safePath -and $cursor -ieq $ownedRoot) {
+                              foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
+                                $boundedLine = [string]$line
+                                if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                                if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
+              catch { Write-Output 'Run-owned Pester diagnostic could not be read.' }
+            }
+            elseif ($env:VALIDATION_MODE -ceq 'core' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+              try {
+                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $coreRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $runRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.runRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $checks = @($failedReport.checks)
+                if ($failedReport.schemaVersion -eq 2 -and
+                    [string]$failedReport.evidence -ceq 'standard-core-validation-evidence-v2' -and
+                    [string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
+                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.root) -ieq $coreRoot -and
+                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.outputPath) -ieq [IO.Path]::GetFullPath($outputPath) -and
+                    $runRoot.StartsWith($coreRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+                    $checks.Count -eq 2 -and $checks[1].id -ceq 'repository-pester' -and $checks[1].kind -ceq 'pester') {
+                  $stderrPath = [IO.Path]::GetFullPath([string]$checks[1].stderrPath)
+                  $expectedRawRoot = Join-Path $runRoot 'raw'
+                  if ([IO.Path]::GetDirectoryName($stderrPath) -ieq $expectedRawRoot -and
+                      [IO.Path]::GetFileName($stderrPath) -ceq '002-repository-pester.stderr.txt' -and
+                      (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
+                    $cursor = $stderrPath
+                    $safePath = $true
+                    while ($cursor.Length -ge $ownedRoot.Length) {
+                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        $safePath = $false
+                        break
+                      }
+                      if ($cursor -ieq $ownedRoot) { break }
+                      $cursor = Split-Path -Parent $cursor
+                    }
+                    if ($safePath -and $cursor -ieq $ownedRoot -and
+                        (Get-FileHash -LiteralPath $stderrPath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq [string]$checks[1].stderrSha256) {
+                      $diagnostic = Get-Content -LiteralPath $stderrPath -Raw -Encoding utf8
+                      if ($diagnostic.Length -gt 12000) {
+                        $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
+                      }
+                      foreach ($line in @($diagnostic -split '\r?\n')) {
+                        if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                      }
+                    }
+                  }
+                  if ($checks[1].status -ceq 'timeout') {
+                    $snapshotRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.snapshotRoot)
+                    if ($snapshotRoot -ieq (Join-Path $runRoot 'candidate')) {
+                      $progressPath = Join-Path $snapshotRoot 'repository-pester-progress.log'
+                      if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
+                        $cursor = $progressPath
+                        $safePath = $true
+                        while ($cursor.Length -ge $ownedRoot.Length) {
+                          if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                            $safePath = $false
+                            break
+                          }
+                          if ($cursor -ieq $ownedRoot) { break }
+                          $cursor = Split-Path -Parent $cursor
+                        }
+                        if ($safePath -and $cursor -ieq $ownedRoot) {
+                          foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
+                            $boundedLine = [string]$line
+                            if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                            if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              catch { Write-Output 'Run-owned Core Pester diagnostic could not be read.' }
+            }
+            throw "Canonical validator exited $validatorExitCode."
+          }
+          if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
+          $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+          if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
+              $report.state -cne 'PASS' -or $report.exitCode -ne 0) {
+            throw 'Canonical report does not prove full exact-head source validation.'
+          }
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
+            if ($report.sourceConformance.status -cne 'passed') {
+              throw 'Legacy canonical report lacks passed source conformance.'
             }
           }
-          catch {
-            Write-Warning "Could not read source conformance evidence: $($_.Exception.Message)"
+          elseif ($env:VALIDATION_MODE -ceq 'core') {
+            $checks = @($report.checks)
+            if ($report.schemaVersion -ne 2 -or
+                $report.evidence -cne 'standard-core-validation-evidence-v2' -or
+                $report.releaseEligible -ne $false -or
+                $report.contentMode -cne 'immutable-source' -or
+                $report.candidate.repository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
+                $report.candidate.baseRevision -cne $baseCommit -or
+                $report.candidate.eventName -cne $env:GITHUB_EVENT_NAME -or
+                $report.candidate.contentMode -cne 'immutable-source' -or
+                $report.authority.revision -cne 'ea1d368ac7b36f838ce4c3af363972c90fa12930' -or
+                $report.authority.contentMode -cne 'source' -or
+                $report.adapter.identity -cne 'standard-core-adapter-v2' -or
+                $report.failure -ne $null -or $checks.Count -ne 2 -or
+                [IO.Path]::GetFullPath([string]$report.artifacts.root) -ine [IO.Path]::GetFullPath($artifactsRoot) -or
+                [IO.Path]::GetFullPath([string]$report.artifacts.outputPath) -ine [IO.Path]::GetFullPath($outputPath)) {
+              throw 'Core report lacks exact immutable candidate and authority evidence.'
+            }
+            if ($checks[0].id -cne 'repository-general' -or $checks[0].kind -cne 'general' -or
+                $checks[1].id -cne 'repository-pester' -or $checks[1].kind -cne 'pester') {
+              throw 'Core report does not contain the two reviewed repository checks.'
+            }
+            foreach ($check in $checks) {
+              if ($check.status -cne 'passed' -or $check.exitCode -ne 0 -or $check.cleanedUp -ne $true) {
+                throw "Core check '$($check.id)' did not finish successfully and cleanly."
+              }
+            }
+            $counts = $checks[1].testCounts
+            if ($null -eq $counts -or $counts.total -le 0 -or $counts.passed -le 0 -or
+                $counts.failed -ne 0 -or $counts.skipped -lt 0 -or
+                ($counts.passed + $counts.skipped) -ne $counts.total) {
+              throw 'Core Pester evidence lacks a complete passing test count.'
+            }
           }
-          "status=$status" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "Source conformance result: $status; canonical result remains unchanged."
+          else { throw 'Protected authority mode changed before report acceptance.' }
+          "source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Retain exact PR12 review evidence
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 12 }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: pr12-source-merge-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/skill-general-conformance-report.json
-            ${{ runner.temp }}/sgv1-*/**/*.json
-          if-no-files-found: error
-          retention-days: 90
+      - name: Clean only this run's temporary files
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:RUN_OWNED_ROOT)) {
+            Write-Host 'No run-owned directory was recorded; cleanup skipped.'
+            return
+          }
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
+          if (-not $ownedRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar,
+              [StringComparison]::OrdinalIgnoreCase) -or
+              -not [string]::Equals($ownedRoot, $expectedRoot,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Refusing to clean a path without this run ownership evidence.'
+          }
+          if (Test-Path -LiteralPath $ownedRoot) {
+            Remove-Item -LiteralPath $ownedRoot -Recurse -Force
+          }
 
-  # These jobs preserve the repository's existing required status contexts and
-  # route the central report's source-only projection for source integration.
   repository-contract:
     name: repository-contract
+    needs: canonical-validation
     if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 2
     steps:
-      - name: Mirror source conformance result
-        shell: bash
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
         run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
+          }
 
   skill-validator:
     name: skill-validator
+    needs: canonical-validation
     if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 2
     steps:
-      - name: Mirror source conformance result
-        shell: bash
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
         run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
+          }
 
   skill-tools:
     name: skill-tools
+    needs: canonical-validation
     if: ${{ always() }}
-    needs:
-      - canonical-validation
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 2
     steps:
-      - name: Mirror source conformance result
-        shell: bash
+      - name: Project canonical validation result
+        shell: pwsh
+        env:
+          CANONICAL_VALIDATION_RESULT: ${{ needs.canonical-validation.result }}
+          SOURCE_CONFORMANCE_RESULT: ${{ needs.canonical-validation.outputs.source_conformance }}
         run: |
-          set -euo pipefail
-          result='${{ needs['canonical-validation'].outputs.source_conformance }}'
-          if [[ "$result" != 'passed' ]]; then
-            echo "Source conformance result: $result"
-            exit 1
-          fi
-          echo 'Central source conformance passed.'
+          if ($env:CANONICAL_VALIDATION_RESULT -cne 'success' -or
+              $env:SOURCE_CONFORMANCE_RESULT -cne 'passed') {
+            throw 'Canonical Windows validation and its exact-source report must both pass.'
+          }

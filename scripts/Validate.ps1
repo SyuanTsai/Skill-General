@@ -12,6 +12,8 @@ param(
         else { [IO.Path]::GetTempPath() }
     ),
     [string] $AuthorityArchivePath,
+    [string] $AuthorityRepositoryRoot,
+    [string] $TrustedToolRoot,
     [string] $BaseCommit,
     [string] $ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION,
     [string] $OutputPath,
@@ -158,6 +160,75 @@ function Read-JsonFile {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string] $Path)
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+}
+
+function Get-GitBlobSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string] $GitPath,
+        [Parameter(Mandatory = $true)][string] $RepositoryRoot,
+        [Parameter(Mandatory = $true)][string] $Revision,
+        [Parameter(Mandatory = $true)][string] $RelativePath
+    )
+
+    $normalizedPath = $RelativePath.Replace([char]92, [char]47)
+    $treeEntry = @(& $GitPath -C $RepositoryRoot ls-tree $Revision -- $normalizedPath)
+    if ($LASTEXITCODE -ne 0 -or $treeEntry.Count -ne 1) { throw "Pinned authority path is not one tracked file: $normalizedPath" }
+    $treePattern = '^(?<mode>100644|100755) blob (?<objectId>[0-9a-f]{40})\t' + [regex]::Escape($normalizedPath) + '$'
+    if ([string]$treeEntry[0] -cnotmatch $treePattern) { throw "Pinned authority path is not a regular Git blob: $normalizedPath" }
+    $objectId = [string]$Matches.objectId
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $GitPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @('-C', $RepositoryRoot, 'cat-file', 'blob', $objectId)) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        if (-not $process.Start()) { throw "Could not start Git blob reader for '$normalizedPath'." }
+        $hash = $hasher.ComputeHash($process.StandardOutput.BaseStream)
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "Git blob reader failed for '$normalizedPath': $stderr" }
+        return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+    }
+    finally {
+        $hasher.Dispose()
+        $process.Dispose()
+    }
+}
+
+function Test-AuthorityWorktreeSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $ExpectedSha256
+    )
+
+    # Git may check out text with CRLF on Windows. Compare actual bytes first,
+    # then permit only that line-ending conversion from the pinned Git blob.
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $actual = ([BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+        if ($actual -ceq $ExpectedSha256) { return $true }
+        $normalized = [IO.MemoryStream]::new($bytes.Length)
+        try {
+            for ($index = 0; $index -lt $bytes.Length; $index++) {
+                if ($bytes[$index] -eq 13 -and $index + 1 -lt $bytes.Length -and $bytes[$index + 1] -eq 10) {
+                    continue
+                }
+                $normalized.WriteByte($bytes[$index])
+            }
+            $actual = ([BitConverter]::ToString($hasher.ComputeHash($normalized.ToArray())) -replace '-', '').ToLowerInvariant()
+            return $actual -ceq $ExpectedSha256
+        }
+        finally { $normalized.Dispose() }
+    }
+    finally { $hasher.Dispose() }
 }
 
 function Assert-Sha256 {
@@ -357,6 +428,199 @@ function Get-EventName {
         'workflow_dispatch' { return 'workflow_dispatch' }
         'pre-push' { return 'pre-push' }
         default { return 'local' }
+    }
+}
+
+function Assert-StandardCoreAuthorityCheckout {
+    param(
+        [Parameter(Mandatory = $true)][string] $GitPath,
+        [Parameter(Mandatory = $true)][string] $AuthorityRoot,
+        [Parameter(Mandatory = $true)] $AuthorityPin
+    )
+
+    $fullRoot = [IO.Path]::GetFullPath($AuthorityRoot)
+    if (-not (Test-Path -LiteralPath $fullRoot -PathType Container)) { throw "Pinned authority Git checkout is missing: $fullRoot" }
+    Assert-NoReparseAncestors -Path $fullRoot -Context 'Pinned authority checkout'
+    $top = @(& $GitPath -C $fullRoot rev-parse --show-toplevel 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or -not (Test-PathEqual -Left ([string]$top[0]) -Right $fullRoot)) {
+        throw 'Pinned authority path is not the root of a Git checkout.'
+    }
+    $head = Resolve-GitRevision -GitPath $GitPath -Root $fullRoot -Revision 'HEAD' -Context 'Pinned authority HEAD'
+    if ($head -cne [string]$AuthorityPin.commit) { throw 'Pinned authority checkout HEAD does not match the selected authority revision.' }
+    $origins = @(& $GitPath -C $fullRoot config --local --get-all remote.origin.url 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $origins.Count -ne 1) { throw 'Pinned authority checkout must have exactly one origin URL.' }
+    $origin = ([string]$origins[0]).Trim().TrimEnd('/') -replace '\.git$', ''
+    $expectedOrigin = ([string]$AuthorityPin.repository).Trim().TrimEnd('/') -replace '\.git$', ''
+    if (-not $origin.Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Pinned authority checkout origin does not match the selected authority repository.'
+    }
+    $dirty = @(& $GitPath -C $fullRoot status --porcelain=v1 --untracked-files=all)
+    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Pinned authority checkout must be clean and immutable.' }
+
+    foreach ($entry in $AuthorityPin.files.GetEnumerator()) {
+        $filePath = Assert-PathWithinRoot -Path (Join-Path $fullRoot ($entry.Key -replace '/', [IO.Path]::DirectorySeparatorChar)) -Root $fullRoot -Context 'Pinned authority file'
+        Assert-NoReparseAncestors -Path $filePath -Context 'Pinned authority file'
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf) -or
+            (Get-GitBlobSha256 -GitPath $GitPath -RepositoryRoot $fullRoot -Revision $head -RelativePath $entry.Key) -cne [string]$entry.Value -or
+            -not (Test-AuthorityWorktreeSha256 -Path $filePath -ExpectedSha256 ([string]$entry.Value))) {
+            throw "Pinned authority file identity mismatch: $($entry.Key)"
+        }
+    }
+    $coreContract = Join-Path $fullRoot 'docs/standards/standard-core-validation-v2.json'
+    Assert-NoReparseAncestors -Path $coreContract -Context 'Pinned Core v2 contract'
+    if (-not (Test-Path -LiteralPath $coreContract -PathType Leaf)) {
+        throw 'Pinned authority checkout is missing the tracked Core v2 contract.'
+    }
+    $coreContractSha256 = Get-GitBlobSha256 -GitPath $GitPath -RepositoryRoot $fullRoot -Revision $head -RelativePath 'docs/standards/standard-core-validation-v2.json'
+    if (-not (Test-AuthorityWorktreeSha256 -Path $coreContract -ExpectedSha256 $coreContractSha256)) {
+        throw 'Pinned Core v2 contract worktree content differs from the immutable authority commit.'
+    }
+    return [pscustomobject]@{
+        root = $fullRoot
+        runnerPath = (Join-Path $fullRoot 'scripts/Invoke-StandardValidation.ps1')
+        revision = $head
+    }
+}
+
+function New-StandardCoreAuthoritySnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string] $GitPath,
+        [Parameter(Mandatory = $true)][string] $SourceRoot,
+        [Parameter(Mandatory = $true)][string] $OwnedRoot,
+        [Parameter(Mandatory = $true)] $AuthorityPin
+    )
+
+    $snapshotRoot = Assert-PathWithinRoot -Path (Join-Path $OwnedRoot 'authority') -Root $OwnedRoot -Context 'Core authority snapshot'
+    if (Test-Path -LiteralPath $snapshotRoot) { throw 'Core authority snapshot path already exists.' }
+    $hooksRoot = Join-Path $OwnedRoot '.empty-git-hooks'
+    [void](New-Item -ItemType Directory -Path $hooksRoot -ErrorAction Stop)
+    Assert-NoReparseAncestors -Path $hooksRoot -Context 'Core authority snapshot hooks'
+    # A local no-hardlink clone copies available Git objects, including partial
+    # clone packs, without sharing the caller's mutable worktree or object files.
+    & $GitPath -c "core.hooksPath=$hooksRoot" -c core.autocrlf=false -c core.longpaths=true clone --quiet --local --no-hardlinks --no-checkout -- $SourceRoot $snapshotRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the pinned authority Git objects in the run-owned snapshot.' }
+    & $GitPath -C $snapshotRoot config --local core.autocrlf false
+    if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion in the authority snapshot.' }
+    & $GitPath -C $snapshotRoot config --local core.longpaths true
+    if ($LASTEXITCODE -ne 0) { throw 'Could not enable long paths in the authority snapshot.' }
+    $snapshotPaths = @($AuthorityPin.files.Keys) + @('docs/standards/standard-core-validation-v2.json')
+    & $GitPath -c "core.hooksPath=$hooksRoot" -C $snapshotRoot sparse-checkout set --no-cone -- $snapshotPaths
+    if ($LASTEXITCODE -ne 0) { throw 'Could not select the pinned authority files for the run-owned snapshot.' }
+    & $GitPath -C $snapshotRoot config --local --replace-all remote.origin.url ([string]$AuthorityPin.repository)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not bind the authority snapshot origin.' }
+    & $GitPath -c "core.hooksPath=$hooksRoot" -c core.autocrlf=false -C $snapshotRoot checkout --quiet --detach ([string]$AuthorityPin.commit)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not check out the exact pinned authority commit.' }
+    return Assert-StandardCoreAuthorityCheckout -GitPath $GitPath -AuthorityRoot $snapshotRoot -AuthorityPin $AuthorityPin
+}
+
+function New-StandardCoreAdapterV2 {
+    param(
+        [Parameter(Mandatory = $true)][string] $PowerShellPath,
+        [Parameter(Mandatory = $true)][string] $TrustedToolRoot,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]] $ActiveSkillIds
+    )
+
+    $fullPowerShellPath = [IO.Path]::GetFullPath($PowerShellPath)
+    $fullTrustedToolRoot = [IO.Path]::GetFullPath($TrustedToolRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    if (-not (Test-Path -LiteralPath $fullPowerShellPath -PathType Leaf) -or
+        (-not $fullPowerShellPath.Equals($fullTrustedToolRoot, $comparison) -and
+         -not $fullPowerShellPath.StartsWith($fullTrustedToolRoot + [IO.Path]::DirectorySeparatorChar, $comparison))) {
+        throw 'Trusted PowerShell executable must be a regular file within TrustedToolRoot.'
+    }
+    if ($ActiveSkillIds.Count -eq 0) { throw 'Core adapter requires at least one active Skill.' }
+    foreach ($skillId in $ActiveSkillIds) {
+        if ($skillId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "Core adapter contains an invalid active Skill ID: '$skillId'." }
+    }
+    $powerShellSha256 = (Get-FileHash -LiteralPath $fullPowerShellPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $generalArguments = @('-NoProfile', '-NonInteractive', '-File', 'scripts/Test-SkillGeneral.ps1', '-ReadOnlySnapshot')
+    $pesterArguments = @('-NoProfile', '-NonInteractive', '-File', 'scripts/Invoke-CorePester.ps1')
+    return [ordered]@{
+        schemaVersion = 2
+        adapter = 'standard-core-adapter-v2'
+        skillsRoot = 'skills'
+        activeSkills = @($ActiveSkillIds)
+        checks = @(
+            [ordered]@{ id = 'repository-general'; kind = 'general'; executable = $fullPowerShellPath; executableSha256 = $powerShellSha256; arguments = $generalArguments },
+            [ordered]@{ id = 'repository-pester'; kind = 'pester'; executable = $fullPowerShellPath; executableSha256 = $powerShellSha256; arguments = $pesterArguments }
+        )
+    }
+}
+
+function Get-LegacyAuthorityPin {
+    param([Parameter(Mandatory = $true)] $SelectedPin)
+
+    if ([string]$SelectedPin.repository -cne $script:AuthorityRepository) {
+        throw 'Legacy validation cannot change the approved authority repository.'
+    }
+    if ([string]$SelectedPin.commit -ceq $script:AuthorityCommit) { return $SelectedPin }
+    if ([string]$SelectedPin.commit -cne $script:NextAuthorityCommit) {
+        throw 'Legacy validation requires one of the exact reviewed authority pins.'
+    }
+
+    return [pscustomobject]@{
+        repository = $script:AuthorityRepository
+        commit = $script:AuthorityCommit
+        archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:AuthorityCommit)"
+        archiveSha256 = $script:AuthorityArchiveSha256
+        files = $script:AuthorityFiles
+    }
+}
+
+function Test-LegacyRunRequested {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary] $BoundParameters)
+
+    foreach ($name in @(
+        'AuthorityArchivePath', 'ExpectedGoRuntimeVersion', 'SemanticConsent', 'SemanticProvider',
+        'SemanticPurpose', 'SemanticScope', 'SemanticEvidencePath', 'SemanticConsentRequestPath',
+        'SemanticConsentDecisionPath', 'SemanticPublicKeyPath', 'SemanticPublicKeyId', 'SemanticRunPlanPath',
+        'SemanticTriggered', 'SourceMergeExceptionReview', 'ProtectedSourceMergeCheck', 'ProtectedWorkflowRevision'
+    )) {
+        if (@($BoundParameters.Keys) -ccontains $name) { return $true }
+    }
+    return $false
+}
+
+function Get-StandardCoreRunPaths {
+    param(
+        [Parameter(Mandatory = $true)][string] $ArtifactsRoot,
+        [Parameter(Mandatory = $true)][bool] $ArtifactsRootWasExplicit,
+        [string] $OutputPath
+    )
+
+    $requestedRoot = [IO.Path]::GetFullPath($ArtifactsRoot)
+    $runId = [guid]::NewGuid().ToString('N')
+    if ($ArtifactsRootWasExplicit) {
+        $coreArtifactsRoot = $requestedRoot
+        $adapterParent = Split-Path -Parent $coreArtifactsRoot
+    }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            throw 'Core Run requires an explicit -ArtifactsRoot when -OutputPath is supplied.'
+        }
+        $coreArtifactsRoot = Join-Path $requestedRoot "core-v2-$runId"
+        $adapterParent = $requestedRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($adapterParent)) { throw 'Core Run could not resolve a sibling adapter directory.' }
+
+    $adapterRoot = Join-Path $adapterParent ".core-v2-adapter-$runId"
+    if ((Test-PathWithinOrEqual -Path $adapterRoot -Root $coreArtifactsRoot) -or
+        (Test-PathWithinOrEqual -Path $coreArtifactsRoot -Root $adapterRoot)) {
+        throw 'Core adapter and ArtifactsRoot must be separate sibling paths.'
+    }
+    $resolvedOutputPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        Join-Path $coreArtifactsRoot 'standard-core-validation-v2-report.json'
+    }
+    else {
+        Assert-PathWithinRoot -Path $OutputPath -Root $coreArtifactsRoot -Context 'OutputPath'
+    }
+    return [pscustomobject]@{
+        runId = $runId
+        artifactsRoot = [IO.Path]::GetFullPath($coreArtifactsRoot)
+        artifactsRootWasExplicit = $ArtifactsRootWasExplicit
+        adapterRoot = [IO.Path]::GetFullPath($adapterRoot)
+        adapterPath = [IO.Path]::GetFullPath((Join-Path $adapterRoot 'standard-core-adapter-v2.json'))
+        outputPath = [IO.Path]::GetFullPath($resolvedOutputPath)
     }
 }
 
@@ -810,21 +1074,100 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
-            $previousErrorActionPreference = $ErrorActionPreference
+            # The run-owned Core snapshot is unique. A stable name lets the
+            # workflow recover the last completed case after a forced timeout.
+            $progressPath = Join-Path (Get-Location) 'repository-pester-progress.log'
+            if (Test-Path -LiteralPath $progressPath) { throw 'Pester progress path already exists in the owned snapshot.' }
+            $progressTail = [Collections.Generic.Queue[string]]::new()
+            $progressLineCount = 0
+            $completedCaseCount = 0
+            $liveChars = 0
+            $liveLimit = 120000
+            function Write-PesterProgressTail {
+                param([string] $Path)
+                if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                    foreach ($line in @(Get-Content -LiteralPath $Path -Tail 24 -ErrorAction SilentlyContinue)) {
+                        $boundedLine = [string]$line
+                        if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                        if ($boundedLine.Length -gt 0) { [Console]::Error.WriteLine("Pester progress: $boundedLine") }
+                    }
+                }
+            }
             try {
-                # Tests intentionally exercise non-zero native child processes. Do not let the
-                # runner's fail-fast preference promote their captured stderr into terminating
-                # errors before Pester can evaluate the assertions.
-                $ErrorActionPreference = 'Continue'
-                # Imported candidate modules may emit benign warnings. Keep the
-                # typed JSON envelope as the only stdout record for the supervisor.
-                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 3>$null 6>$null
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    # Tests exercise non-zero native children. Keep stderr non-terminating while
+                    # Pester evaluates them; stream bounded progress without changing JSON stdout.
+                    $ErrorActionPreference = 'Continue'
+                    $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6>&1 |
+                        ForEach-Object {
+                            if ($_ -is [Management.Automation.InformationRecord]) {
+                                foreach ($rawLine in @(([string]$_.MessageData) -split '\r?\n')) {
+                                    $line = [string]$rawLine
+                                    if ($line.Length -eq 0) { continue }
+                                    if ($line.Length -gt 300) { $line = $line.Substring(0, 300) + '[truncated]' }
+                                    $progressLineCount++
+                                    if ($line -match '^\s*\[[+-]\]') { $completedCaseCount++ }
+                                    $entry = "completed=$completedCaseCount line=$progressLineCount $line"
+                                    $progressTail.Enqueue($entry)
+                                    if ($progressTail.Count -gt 24) { [void]$progressTail.Dequeue() }
+                                    [IO.File]::WriteAllLines($progressPath, $progressTail.ToArray(), [Text.UTF8Encoding]::new($false))
+                                    if ($liveChars + $entry.Length -le $liveLimit) {
+                                        [Console]::Error.WriteLine("Pester progress: $entry")
+                                        $liveChars += $entry.Length
+                                    }
+                                    elseif ($liveChars -le $liveLimit) {
+                                        [Console]::Error.WriteLine('Pester live progress cap reached; run-owned tail continues.')
+                                        $liveChars = $liveLimit + 1
+                                    }
+                                }
+                            }
+                            else { $_ }
+                        }
+                }
+                catch {
+                    [Console]::Error.WriteLine('Pester counts: result=exception')
+                    Write-PesterProgressTail -Path $progressPath
+                    throw
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+                $invalid = $null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or
+                    [int64]$result.FailedCount -ne 0 -or [int64]$result.FailedBlocksCount -ne 0 -or [int64]$result.FailedContainersCount -ne 0 -or
+                    [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount
+                if ($invalid) {
+                    if ($null -eq $result) {
+                        [Console]::Error.WriteLine('Pester counts: result=missing')
+                    }
+                    else {
+                        [Console]::Error.WriteLine("Pester counts: total=$([int64]$result.TotalCount) passed=$([int64]$result.PassedCount) skipped=$([int64]$result.SkippedCount) failed=$([int64]$result.FailedCount) failedBlocks=$([int64]$result.FailedBlocksCount) failedContainers=$([int64]$result.FailedContainersCount) notRun=$([int64]$result.NotRunCount)")
+                        foreach ($failedContainer in @($result.FailedContainers)) {
+                            [Console]::Error.WriteLine("Pester container failed: $($failedContainer.Name)")
+                            foreach ($failure in @($failedContainer.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester container error: $($failure.Exception.Message)")
+                            }
+                        }
+                        foreach ($failedBlock in @($result.FailedBlocks)) {
+                            [Console]::Error.WriteLine("Pester block failed: $($failedBlock.Name)")
+                            foreach ($failure in @($failedBlock.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester block error: $($failure.Exception.Message)")
+                            }
+                        }
+                        foreach ($failedTest in @($result.Failed)) {
+                            [Console]::Error.WriteLine("Pester test failed: $($failedTest.ExpandedPath)")
+                            foreach ($failure in @($failedTest.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester test error: $($failure.Exception.Message)")
+                            }
+                        }
+                    }
+                    Write-PesterProgressTail -Path $progressPath
+                    throw 'Pester repository regression did not complete successfully.'
+                }
             }
             finally {
-                $ErrorActionPreference = $previousErrorActionPreference
+                Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
             }
-            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
-                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
@@ -904,11 +1247,15 @@ try {
     if ($ExecutionMode -ne 'Run' -and [string]::IsNullOrWhiteSpace($SemanticRunPlanPath)) {
         throw 'SemanticRunPlanPath is required for PrepareSemantic and ResumeSemantic.'
     }
+    if ($ExecutionMode -ne 'Run' -and
+        ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
+        throw 'AuthorityRepositoryRoot and TrustedToolRoot are supported only by ordinary Core Run.'
+    }
     if ($ExecutionMode -eq 'ResumeSemantic') {
         foreach ($forbiddenName in @(
             'AuthorityArchivePath', 'ExpectedGoRuntimeVersion', 'SemanticConsent', 'SemanticProvider', 'SemanticPurpose',
             'SemanticScope', 'SemanticEvidencePath', 'SemanticConsentRequestPath', 'SemanticConsentDecisionPath',
-            'SemanticPublicKeyPath', 'SemanticPublicKeyId', 'SemanticTriggered'
+            'SemanticPublicKeyPath', 'SemanticPublicKeyId', 'SemanticTriggered', 'AuthorityRepositoryRoot', 'TrustedToolRoot'
         )) {
             if ($PSBoundParameters.ContainsKey($forbiddenName)) { throw "ResumeSemantic does not accept caller override '$forbiddenName'." }
         }
@@ -1104,6 +1451,9 @@ try {
          $ProtectedWorkflowRevision -cnotmatch '^[0-9a-f]{40}$')) {
         throw 'Protected source merge check requires the exact PR12 head and protected workflow revision.'
     }
+    if ($PSBoundParameters.ContainsKey('ProtectedWorkflowRevision') -and -not $ProtectedSourceMergeCheck) {
+        throw 'ProtectedWorkflowRevision requires -ProtectedSourceMergeCheck.'
+    }
     $dirty = @(& $gitPath -C $repoRoot status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Canonical validation requires a clean immutable candidate commit.' }
     $baseInput = if ([string]::IsNullOrWhiteSpace($BaseCommit)) { 'HEAD^' } else { $BaseCommit }
@@ -1115,9 +1465,108 @@ try {
     # Normal Run may then select only an exact approved tuple from the immutable candidate.
     $configRoot = Split-Path -Parent $PSScriptRoot
     $config = Read-JsonFile -Path (Join-Path $configRoot 'config/standard-v1.json') -Context 'config/standard-v1.json'
-    $baseAuthority = Assert-AuthorityConfig -Config $config -AllowNextAuthority:($ExecutionMode -eq 'Run')
+    $baseAuthority = Assert-AuthorityConfig -Config $config -AllowNextAuthority
+    $candidateAuthority = $baseAuthority
+    if ($ExecutionMode -eq 'Run') {
+        $candidateConfig = Read-JsonFile -Path (Join-Path $repoRoot 'config/standard-v1.json') -Context 'candidate config/standard-v1.json'
+        $candidateAuthority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority
+    }
     $activeSkillIds = Get-ActiveSkillIds -Root $repoRoot
     $eventName = Get-EventName
+    $legacyRunRequested = if ($ExecutionMode -eq 'Run') {
+        Test-LegacyRunRequested -BoundParameters $PSBoundParameters
+    }
+    else { $false }
+    $coreRunSelected = $ExecutionMode -eq 'Run' -and
+        [string]$candidateAuthority.commit -ceq $script:NextAuthorityCommit -and -not $legacyRunRequested
+    if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
+        ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
+        throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'
+    }
+    if ($coreRunSelected) {
+        if ([string]::IsNullOrWhiteSpace($AuthorityRepositoryRoot)) { throw 'Core Run requires -AuthorityRepositoryRoot for the pinned real Git authority checkout.' }
+        $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $candidateAuthority
+        $pwshPath = Get-ResolvedPowerShellPath
+        $trustedRoot = if ([string]::IsNullOrWhiteSpace($TrustedToolRoot)) { Split-Path -Parent $pwshPath } else { [IO.Path]::GetFullPath($TrustedToolRoot) }
+        if (-not (Test-Path -LiteralPath $trustedRoot -PathType Container)) { throw "Trusted PowerShell root is missing: $trustedRoot" }
+        Assert-NoReparseAncestors -Path $trustedRoot -Context 'Trusted PowerShell root'
+
+        $artifactsRootPath = [IO.Path]::GetFullPath($ArtifactsRoot)
+        Assert-OutsideRoot -Path $artifactsRootPath -Root $repoRoot -Context 'Artifacts root'
+        Assert-OutsideRoot -Path $artifactsRootPath -Root $authorityCheckout.root -Context 'Artifacts root'
+        Assert-OutsideRoot -Path $artifactsRootPath -Root $trustedRoot -Context 'Artifacts root'
+        [void](New-Item -ItemType Directory -Path $artifactsRootPath -Force)
+        Assert-NoReparseAncestors -Path $artifactsRootPath -Context 'Artifacts root'
+        Assert-OutsideRoot -Path $trustedRoot -Root $repoRoot -Context 'Trusted tool root'
+        Assert-OutsideRoot -Path $trustedRoot -Root $authorityCheckout.root -Context 'Trusted tool root'
+        $coreRunPaths = Get-StandardCoreRunPaths -ArtifactsRoot $artifactsRootPath `
+            -ArtifactsRootWasExplicit $PSBoundParameters.ContainsKey('ArtifactsRoot') -OutputPath $OutputPath
+        $coreArtifactsRoot = [string]$coreRunPaths.artifactsRoot
+        $adapterRoot = [string]$coreRunPaths.adapterRoot
+        $adapterPath = [string]$coreRunPaths.adapterPath
+        $outputFull = [string]$coreRunPaths.outputPath
+        foreach ($root in @($coreArtifactsRoot, $adapterRoot)) {
+            Assert-OutsideRoot -Path $root -Root $repoRoot -Context 'Core run-owned root'
+            Assert-OutsideRoot -Path $root -Root $authorityCheckout.root -Context 'Core run-owned root'
+            Assert-OutsideRoot -Path $root -Root $trustedRoot -Context 'Core run-owned root'
+        }
+        Assert-OutsideRoot -Path $adapterRoot -Root $coreArtifactsRoot -Context 'Core adapter root'
+        if (-not (Test-Path -LiteralPath $coreArtifactsRoot -PathType Container)) {
+            [void](New-Item -ItemType Directory -Path $coreArtifactsRoot -ErrorAction Stop)
+        }
+        elseif (-not [bool]$coreRunPaths.artifactsRootWasExplicit) {
+            throw 'Default Core ArtifactsRoot unexpectedly exists; run-owned paths are create-only.'
+        }
+        Assert-NoReparseAncestors -Path $coreArtifactsRoot -Context 'Core ArtifactsRoot'
+        Assert-PathWithinRoot -Path $outputFull -Root $coreArtifactsRoot -Context 'OutputPath' | Out-Null
+        if (Test-Path -LiteralPath $outputFull) { throw "OutputPath already exists and evidence is create-only: $outputFull" }
+
+        $adapterRootCreated = $false
+        $coreExitCode = 1
+        try {
+            if (Test-Path -LiteralPath $adapterRoot) { throw 'Core adapter sibling path unexpectedly exists.' }
+            [void](New-Item -ItemType Directory -Path $adapterRoot -ErrorAction Stop)
+            $adapterRootCreated = $true
+            Assert-NoReparseAncestors -Path $adapterRoot -Context 'Core adapter root'
+            $authoritySnapshot = New-StandardCoreAuthoritySnapshot -GitPath $gitPath -SourceRoot $authorityCheckout.root -OwnedRoot $adapterRoot -AuthorityPin $candidateAuthority
+            $centralRunnerPath = [string]$authoritySnapshot.runnerPath
+            $adapter = New-StandardCoreAdapterV2 -PowerShellPath $pwshPath -TrustedToolRoot $trustedRoot -ActiveSkillIds $activeSkillIds
+            Write-Utf8NoBomCreateNew -Path $adapterPath -Text (($adapter | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
+            $coreRunnerArgs = @(
+                '-CandidateRoot', $repoRoot,
+                '-AdapterPath', $adapterPath,
+                '-ArtifactsRoot', $coreArtifactsRoot,
+                '-OutputPath', $outputFull,
+                '-SourceRepository', $script:SourceRepository,
+                '-SourceRevision', $candidateCommit,
+                '-BaseRevision', $baseRevision,
+                '-EventName', $eventName,
+                '-AuthorityRevision', [string]$candidateAuthority.commit,
+                '-TimeoutSeconds', [string]$TimeoutSeconds,
+                '-TrustedToolRoot', $trustedRoot
+            )
+            Assert-NoReparseAncestors -Path $centralRunnerPath -Context 'Pinned Core runner before execution'
+            if (-not (Test-AuthorityWorktreeSha256 -Path $centralRunnerPath -ExpectedSha256 ([string]$candidateAuthority.files['scripts/Invoke-StandardValidation.ps1']))) {
+                throw 'Pinned Core runner worktree content changed before execution.'
+            }
+            & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @coreRunnerArgs
+            $coreExitCode = $LASTEXITCODE
+        }
+        finally {
+            if ($adapterRootCreated) {
+                if (-not (Test-PathEqual -Left $adapterRoot -Right ([IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $coreArtifactsRoot) ".core-v2-adapter-$($coreRunPaths.runId)")))) -or
+                    -not (Test-PathWithinOrEqual -Path $adapterRoot -Root (Split-Path -Parent $coreArtifactsRoot)) -or
+                    (Test-PathWithinOrEqual -Path $adapterRoot -Root $coreArtifactsRoot)) {
+                    throw 'Core adapter cleanup path escaped its unique sibling boundary.'
+                }
+                Assert-NoReparseAncestors -Path $adapterRoot -Context 'Core adapter cleanup root'
+                Remove-Item -LiteralPath $adapterRoot -Recurse -Force -ErrorAction Stop
+                if (Test-Path -LiteralPath $adapterRoot) { throw 'Core adapter cleanup did not remove its run-owned sibling.' }
+            }
+        }
+        exit $coreExitCode
+    }
+    $authority = Get-LegacyAuthorityPin -SelectedPin $candidateAuthority
     $goRuntimeVersion = Resolve-GoRuntimeVersion -Expected $ExpectedGoRuntimeVersion
 
     $artifactsRootPath = [IO.Path]::GetFullPath($ArtifactsRoot)
@@ -1187,12 +1636,6 @@ try {
     if ($candidateRoots.Count -ne 1) { throw 'Candidate archive must contain exactly one repository root.' }
     $candidateRoot = [IO.Path]::GetFullPath($candidateRoots[0].FullName)
     Assert-NoReparseAncestors -Path $candidateRoot -Context 'Candidate snapshot root'
-    $authority = $baseAuthority
-    if ($ExecutionMode -eq 'Run') {
-        $candidateConfig = Read-JsonFile -Path (Join-Path $candidateRoot 'config/standard-v1.json') -Context 'candidate config/standard-v1.json'
-        $authority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority
-    }
-
     $authorityArchive = Join-Path $runRoot 'authority.zip'
     if ([string]::IsNullOrWhiteSpace($AuthorityArchivePath)) {
         Invoke-WebRequest -Uri ([string]$authority.archiveUrl) -OutFile $authorityArchive
