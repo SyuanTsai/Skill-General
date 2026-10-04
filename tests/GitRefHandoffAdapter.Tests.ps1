@@ -1,8 +1,12 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
 
+[Console]::Error.WriteLine('Pester GitRef discovery begin')
+
 Describe 'Optional Git-ref Task Handoff adapter' {
     BeforeAll {
+        [Console]::Error.WriteLine('Pester GitRef BeforeAll begin')
+        try {
         $script:Root = Split-Path -Parent $PSScriptRoot
         Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -DisableNameChecking -ErrorAction Stop
         Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/HandoffRecordCore.psm1') -Force -ErrorAction Stop
@@ -293,6 +297,15 @@ exit 0
                 $mode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute
                 [IO.File]::SetUnixFileMode($hook, $mode)
             }
+        }
+        [Console]::Error.WriteLine('Pester GitRef BeforeAll end')
+        }
+        catch {
+            $message = ($_.Exception.Message -replace '\s+', ' ').Trim()
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            [Console]::Error.WriteLine(('Pester GitRef BeforeAll failed: {0}; {1}' -f
+                $_.Exception.GetType().Name, $message))
+            throw
         }
     }
 
