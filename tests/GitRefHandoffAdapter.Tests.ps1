@@ -644,7 +644,7 @@ exit 0
     # Scenario: The payload-free Pending envelope commits, then the isolated snapshot payload write fails.
     # Purpose: Normal pending-list authorization must still block unsafe resume without loading or requiring the payload ref.
     It 'InterT29_lists_a_pending_envelope_without_loading_a_failed_recovery_payload' {
-        $root = Join-Path $TestDrive 'payload-free-envelope'
+        $root = Join-Path $TestDrive 't29'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:envelope-only' -Fields $script:InitialCommon `
@@ -692,7 +692,7 @@ exit 0
     # Scenario: The remote rejects one member of the initial recovery bootstrap set.
     # Purpose: An atomic failure must not expose an envelope or index without its protected control record.
     It 'InterT29c_creates_envelope_control_and_pending_index_atomically' {
-        $root = Join-Path $TestDrive 'atomic-recovery-bootstrap'
+        $root = Join-Path $TestDrive 't29c'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:atomic-bootstrap' -Fields $script:InitialCommon `
@@ -2012,7 +2012,7 @@ exit /b %ERRORLEVEL%
     }
 
     It 'InterT29g_filters_denied_pending_items_and_blocks_common_archival' {
-        $root = Join-Path $TestDrive 'pending-authorization'
+        $root = Join-Path $TestDrive 't29g'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:pending-auth' -Fields $script:InitialCommon `
@@ -2112,7 +2112,7 @@ exit /b %ERRORLEVEL%
     }
 
     It 'InterT29i_requires_source_branch_authorization_before_recovery_payload_read' {
-        $root = Join-Path $TestDrive 'source-read-authorization'
+        $root = Join-Path $TestDrive 't29i'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-read-auth' -Fields $script:InitialCommon `
@@ -4091,7 +4091,7 @@ exit 0
     # Scenario: A confirmed common decision partially selects one branch in a local Git handoff.
     # Purpose: Prove decision-bound persistence, readback, idempotent retry, and stale-decision rejection.
     It 'InterT86_persists_partially_selected_with_exact_decision_binding' {
-        $root = Join-Path $TestDrive 'syp211-partially-selected'
+        $root = Join-Path $TestDrive 't86'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:syp211-partial' -Fields $script:InitialCommon `
