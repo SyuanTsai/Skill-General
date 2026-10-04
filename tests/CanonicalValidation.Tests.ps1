@@ -395,14 +395,17 @@ Describe 'Canonical Standard v1 validation adapter' {
         { & $adapterModule { param($executable, $root) New-StandardCoreAdapterV2 -PowerShellPath $executable -TrustedToolRoot $root -ActiveSkillIds @('Fixture.Skill') } $script:ValidatorPath (Split-Path -Parent $powerShellExecutable) } | Should -Throw
     }
 
-    It 'keeps Core Pester output typed and preserves real test counts' {
+    # Scenario: the ordinary Core Pester wrapper uses Detailed output for live timing while returning a typed result.
+    # Purpose: Preserve real pass/fail/skip and block/container failure counts without polluting JSON stdout.
+    It 'UnitT20_keeps_core_pester_output_typed_and_real_counts' {
         $wrapperPath = Join-Path $script:RepositoryRoot 'scripts/Invoke-CorePester.ps1'
         $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
         $tokens = $null
         $errors = $null
         [void][Management.Automation.Language.Parser]::ParseInput($wrapper, [ref]$tokens, [ref]$errors)
         @($errors).Count | Should -Be 0
-        $wrapper | Should -Match 'Invoke-Pester -Path \$testRoot -Output None -PassThru'
+        $wrapper | Should -Match '\$pesterConfig\.Output\.Verbosity = ''Detailed'''
+        $wrapper | Should -Match 'Invoke-Pester -Configuration \$pesterConfig 3>\$null 6>&1'
         $wrapper | Should -Match "report = 'standard-core-pester-result-v1'"
         $wrapper | Should -Match '\$failed = \[int\]\$result\.FailedCount'
         $wrapper | Should -Match '\$skipped = \[int\]\$result\.SkippedCount'

@@ -167,12 +167,55 @@ function Get-GitBlobSha256 {
         [Parameter(Mandatory = $true)][string] $GitPath,
         [Parameter(Mandatory = $true)][string] $RepositoryRoot,
         [Parameter(Mandatory = $true)][string] $Revision,
-        [Parameter(Mandatory = $true)][string] $RelativePath
+        [Parameter(Mandatory = $true)][string] $RelativePath,
+        [ValidateRange(1, 300)][int] $ProcessTimeoutSeconds = 30
     )
 
     $normalizedPath = $RelativePath.Replace([char]92, [char]47)
-    $treeEntry = @(& $GitPath -C $RepositoryRoot ls-tree $Revision -- $normalizedPath)
-    if ($LASTEXITCODE -ne 0 -or $treeEntry.Count -ne 1) { throw "Pinned authority path is not one tracked file: $normalizedPath" }
+    $treeInfo = [Diagnostics.ProcessStartInfo]::new()
+    $treeInfo.FileName = $GitPath
+    $treeInfo.UseShellExecute = $false
+    $treeInfo.CreateNoWindow = $true
+    $treeInfo.RedirectStandardOutput = $true
+    $treeInfo.RedirectStandardError = $true
+    foreach ($argument in @('-C', $RepositoryRoot, 'ls-tree', $Revision, '--', $normalizedPath)) {
+        [void]$treeInfo.ArgumentList.Add($argument)
+    }
+    $treeProcess = [Diagnostics.Process]::new()
+    $treeProcess.StartInfo = $treeInfo
+    $treeStarted = $false
+    $treeFailure = $null
+    $treeCleanupError = $null
+    $treeOutput = $null
+    try {
+        if (-not $treeProcess.Start()) { throw "Could not start Git tree lookup for '$normalizedPath'." }
+        $treeStarted = $true
+        $treeClock = [Diagnostics.Stopwatch]::StartNew()
+        $treeOutputTask = $treeProcess.StandardOutput.ReadToEndAsync()
+        $treeErrorTask = $treeProcess.StandardError.ReadToEndAsync()
+        while (-not ($treeProcess.HasExited -and $treeOutputTask.IsCompleted -and $treeErrorTask.IsCompleted)) {
+            if ($treeClock.Elapsed.TotalSeconds -ge $ProcessTimeoutSeconds) {
+                throw "Git tree lookup timed out after $ProcessTimeoutSeconds seconds for '$normalizedPath'."
+            }
+            [void]$treeProcess.WaitForExit(100)
+        }
+        $treeOutput = $treeOutputTask.GetAwaiter().GetResult()
+        [void]$treeErrorTask.GetAwaiter().GetResult()
+        if ($treeProcess.ExitCode -ne 0) { throw "Pinned authority path is not one tracked file: $normalizedPath" }
+    }
+    catch { $treeFailure = $_ }
+    finally {
+        if ($treeStarted -and -not $treeProcess.HasExited) {
+            try { $treeProcess.Kill($true) }
+            catch { if (-not $treeProcess.HasExited) { $treeCleanupError = $_.Exception.Message } }
+            if (-not $treeProcess.WaitForExit(5000)) { $treeCleanupError = 'Git tree lookup did not exit after owned process-tree termination.' }
+        }
+        $treeProcess.Dispose()
+    }
+    if ($null -ne $treeCleanupError) { throw "Git tree lookup cleanup failed for '$normalizedPath': $treeCleanupError" }
+    if ($null -ne $treeFailure) { throw $treeFailure }
+    $treeEntry = @($treeOutput -split '\r?\n' | Where-Object { $_.Length -gt 0 })
+    if ($treeEntry.Count -ne 1) { throw "Pinned authority path is not one tracked file: $normalizedPath" }
     $treePattern = '^(?<mode>100644|100755) blob (?<objectId>[0-9a-f]{40})\t' + [regex]::Escape($normalizedPath) + '$'
     if ([string]$treeEntry[0] -cnotmatch $treePattern) { throw "Pinned authority path is not a regular Git blob: $normalizedPath" }
     $objectId = [string]$Matches.objectId
@@ -180,6 +223,7 @@ function Get-GitBlobSha256 {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $GitPath
     $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     foreach ($argument in @('-C', $RepositoryRoot, 'cat-file', 'blob', $objectId)) {
@@ -188,18 +232,64 @@ function Get-GitBlobSha256 {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $hasher = [Security.Cryptography.SHA256]::Create()
+    $started = $false
+    $failure = $null
+    $cleanupError = $null
+    $result = $null
     try {
         if (-not $process.Start()) { throw "Could not start Git blob reader for '$normalizedPath'." }
-        $hash = $hasher.ComputeHash($process.StandardOutput.BaseStream)
-        $stderr = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
-        if ($process.ExitCode -ne 0) { throw "Git blob reader failed for '$normalizedPath': $stderr" }
-        return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+        $started = $true
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $hashTask = $hasher.ComputeHashAsync($process.StandardOutput.BaseStream)
+        $stderrTail = [Text.StringBuilder]::new()
+        $stderrLimit = 4096
+        $stderrTruncated = $false
+        $stderrBuffer = [char[]]::new(4096)
+        $stderrTask = $process.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
+        $stderrDone = $false
+        while ($true) {
+            if ($null -ne $stderrTask -and $stderrTask.IsCompleted) {
+                $readCount = $stderrTask.GetAwaiter().GetResult()
+                if ($readCount -eq 0) {
+                    $stderrDone = $true
+                    $stderrTask = $null
+                }
+                else {
+                    $take = [Math]::Min($readCount, $stderrLimit - $stderrTail.Length)
+                    if ($take -gt 0) { [void]$stderrTail.Append($stderrBuffer, 0, $take) }
+                    if ($take -lt $readCount) { $stderrTruncated = $true }
+                    $stderrTask = $process.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length)
+                }
+            }
+            if ($process.HasExited -and $hashTask.IsCompleted -and $stderrDone) { break }
+            if ($clock.Elapsed.TotalSeconds -ge $ProcessTimeoutSeconds) {
+                throw "Git blob reader timed out after $ProcessTimeoutSeconds seconds for '$normalizedPath'."
+            }
+            if ($null -ne $stderrTask) { [void]$stderrTask.Wait(100) }
+            elseif (-not $process.HasExited) { [void]$process.WaitForExit(100) }
+            else { Start-Sleep -Milliseconds 50 }
+        }
+        $hash = $hashTask.GetAwaiter().GetResult()
+        $stderr = $stderrTail.ToString()
+        if ($stderrTruncated) { $stderr += '[truncated]' }
+        if ($process.ExitCode -ne 0) {
+            throw "Git blob reader failed for '$normalizedPath' with exit $($process.ExitCode): $stderr"
+        }
+        $result = ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
     }
+    catch { $failure = $_ }
     finally {
+        if ($started -and -not $process.HasExited) {
+            try { $process.Kill($true) }
+            catch { if (-not $process.HasExited) { $cleanupError = $_.Exception.Message } }
+            if (-not $process.WaitForExit(5000)) { $cleanupError = 'Git blob reader did not exit after owned process-tree termination.' }
+        }
         $hasher.Dispose()
         $process.Dispose()
     }
+    if ($null -ne $cleanupError) { throw "Git blob reader cleanup failed for '$normalizedPath': $cleanupError" }
+    if ($null -ne $failure) { throw $failure }
+    return $result
 }
 
 function Test-AuthorityWorktreeSha256 {
