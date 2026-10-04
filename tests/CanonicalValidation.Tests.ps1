@@ -37,6 +37,36 @@ Describe 'Canonical Standard v1 validation adapter' {
             'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
             'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
         }
+$script:ExpectedNextAuthorityCommit = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+$script:ExpectedNextAuthorityArchiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
+$script:ExpectedNextAuthorityFiles = [ordered]@{
+            'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
+            'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
+            'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
+            'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
+            'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
+            'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'ac58302e0e350c1ab4ba4dad8a33cd3abce12d592537fbdb23dfb1936d064e91'
+            'docs/standards/skill-repository-review-matrix.md' = '299925aabe3cab360827baad9bdeb1f0f56fc320dad967e49fe0b6bf9cdf8f8a'
+            'docs/standards/skill-repository-standard.md' = 'bba519d01efc8d6d8508427c39a8cb3cd7e430f170febba507471bb4b8531294'
+            'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
+            'docs/standards/validation-security-gate.json' = '657122dde340f1f7f4442780cc27ffcb00b60c0d2afdcea22d63fbf7dbfdca7d'
+            'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
+            'scripts/Invoke-StandardAuthorityGate.ps1' = '8e00ee1e48ef8359ab7be3539f8f7585ccde18b41e26d810843715ebc3656a4c'
+            'scripts/Resolve-PythonWheelClosure.py' = 'd209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35'
+            'scripts/Resolve-StandardValidationTool.ps1' = '86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2'
+            'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
+            'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
+            'docs/standards/standard-validation-contract-v1.json' = '707edf8945ad9a7097df1dfb22a8f05ce47d0e0a66e2e44381036d630e854da0'
+            'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
+            'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
+            'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
+            'scripts/Invoke-StandardValidation.ps1' = '03c7d01ee4e0c659c245dcf9ce8accdd31e3de343836e4bacaafd7f549e6e4f6'
+            'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
+            'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
+            'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
+            'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
+            'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+        }
     }
 
     # Scenario: this driver selects the reviewed immutable central snapshot.
@@ -72,7 +102,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         @($errors).Count | Should -Be 0
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
         } | ForEach-Object { $_.Extent.Text })
@@ -92,6 +122,108 @@ Describe 'Canonical Standard v1 validation adapter' {
         { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $approved } | Should -Not -Throw
     }
 
+    It 'accepts the reviewed next tuple only with the internal opt-in, and keeps default modes old-only' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
+                    '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+        } | ForEach-Object { $_.Extent.Text })
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $next = [pscustomobject]@{
+            schemaVersion = 1; standardVersion = 'v1'
+            authority = [pscustomobject]@{
+                repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+                commit = $script:ExpectedNextAuthorityCommit
+                archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedNextAuthorityCommit)"
+                archiveSha256 = $script:ExpectedNextAuthorityArchiveSha256
+                files = @(foreach ($entry in $script:ExpectedNextAuthorityFiles.GetEnumerator()) {
+                    [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+                })
+            }
+        }
+        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $next
+        $pin.commit | Should -Be $script:ExpectedNextAuthorityCommit
+        $pin.archiveSha256 | Should -Be $script:ExpectedNextAuthorityArchiveSha256
+        @($pin.files.Keys) | Should -Be @($script:ExpectedNextAuthorityFiles.Keys)
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $next } | Should -Throw
+
+        foreach ($change in @(
+            { param($c) $c.authority.archiveSha256 = $script:ExpectedAuthorityArchiveSha256 },
+            { param($c) $c.authority.files[0].sha256 = '0' * 64 },
+            { param($c) [array]::Reverse($c.authority.files) },
+            { param($c) $c.authority.commit = '7c65254d96bd21083ae827e54b9e51afee8ce304' }
+        )) {
+            $forged = $next | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+            & $change $forged
+            { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
+        }
+        @('Run', 'run') | ForEach-Object { ($_ -eq 'Run') | Should -BeTrue }
+        @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
+    }
+
+    It 'gates the base and immutable candidate tuples by ordinary Run mode' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $calls = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -ceq 'Assert-AuthorityConfig'
+        }, $true))
+        $calls.Count | Should -Be 2
+        $baseCall = @($calls | Where-Object { $_.Extent.Text -match '\$config\b' })
+        $candidateCall = @($calls | Where-Object { $_.Extent.Text -match '\$candidateConfig\b' })
+        $baseCall.Count | Should -Be 1
+        $candidateCall.Count | Should -Be 1
+        $baseCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$config\s+-AllowNextAuthority:\(\$ExecutionMode\s+-eq\s+''Run''\)'
+        $candidateCall[0].Extent.Text | Should -Match 'Assert-AuthorityConfig\s+-Config\s+\$candidateConfig\s+-AllowNextAuthority'
+        $ancestor = $candidateCall[0].Parent
+        while ($null -ne $ancestor -and $ancestor -isnot [Management.Automation.Language.IfStatementAst]) { $ancestor = $ancestor.Parent }
+        $ancestor | Should -Not -BeNullOrEmpty
+        $ancestor.Extent.Text | Should -Match '^\s*if\s*\(\$ExecutionMode\s+-eq\s+''Run''\)'
+
+        $candidateRead = $script:Validator.IndexOf('Read-JsonFile -Path (Join-Path $candidateRoot ''config/standard-v1.json'')')
+        $candidateSelect = $script:Validator.IndexOf('$authority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority')
+        $authorityDownload = $script:Validator.IndexOf('Invoke-WebRequest -Uri ([string]$authority.archiveUrl)')
+        $candidateRead | Should -BeGreaterThan -1
+        $candidateSelect | Should -BeGreaterThan $candidateRead
+        $authorityDownload | Should -BeGreaterThan $candidateSelect
+        @('Run', 'run') | ForEach-Object { ($_ -eq 'Run') | Should -BeTrue }
+        @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
+    }
+    It 'uses the candidate-selected pin for normal-run download, archive and protected runner identity' {
+        $selectorIndex = $script:Validator.IndexOf('$authority = Assert-AuthorityConfig -Config $candidateConfig')
+        $archiveStart = $script:Validator.IndexOf('$authorityArchive = Join-Path $runRoot ''authority.zip''', $selectorIndex)
+        $resolverStart = $script:Validator.IndexOf('$resolverPath = Join-Path $authorityRoot', $archiveStart)
+        $selectorIndex | Should -BeGreaterThan -1
+        $archiveStart | Should -BeGreaterThan $selectorIndex
+        $resolverStart | Should -BeGreaterThan $archiveStart
+        $runAuthorityBlock = $script:Validator.Substring($archiveStart, $resolverStart - $archiveStart)
+        $runAuthorityBlock | Should -Match '\$authority\.archiveUrl'
+        $runAuthorityBlock | Should -Match '\$authority\.archiveSha256'
+        $runAuthorityBlock | Should -Match '\$authority\.files'
+        $runAuthorityBlock | Should -Not -Match '\$script:Authority(ArchiveSha256|Files)|\$baseAuthority'
+        $runnerStart = $script:Validator.IndexOf('$centralRunnerArgs = @(', $resolverStart)
+        $runnerInvoke = $script:Validator.IndexOf('& $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @centralRunnerArgs', $runnerStart)
+        $runnerBlock = $script:Validator.Substring($runnerStart, $runnerInvoke - $runnerStart)
+        $runnerBlock | Should -Match '''-ProtectedCentralRevision'', \$authority\.commit'
+        $runnerBlock | Should -Match '''-ProtectedAuthorityArchiveSha256'', \$authority\.archiveSha256'
+    }
+    It 'keeps ResumeSemantic tied to the baseline tuple before the normal Run selector' {
+        $resumeIndex = $script:Validator.IndexOf('if ($ExecutionMode -eq ''ResumeSemantic'')')
+        $selectorIndex = $script:Validator.IndexOf('$baseAuthority = Assert-AuthorityConfig')
+        $resumeBlock = $script:Validator.Substring($resumeIndex, $selectorIndex - $resumeIndex)
+        $resumeBlock | Should -Match '\$script:AuthorityCommit'
+        $resumeBlock | Should -Match '\$script:AuthorityArchiveSha256'
+        $resumeBlock | Should -Not -Match 'AllowNextAuthority|\$baseAuthority'
+    }
+
     # Scenario: the config contains an obsolete revision or a forged helper/runner digest.
     # Purpose: reject every required dependency identity mismatch before tool execution.
     It 'UnitT17_rejects_obsolete_revision_and_forged_dependency_hashes_in_the_actual_driver_verifier' {
@@ -100,7 +232,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
         } | ForEach-Object { $_.Extent.Text })
