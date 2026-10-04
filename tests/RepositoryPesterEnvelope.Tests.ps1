@@ -20,7 +20,7 @@ Describe 'Repository Pester result envelope' {
 function Invoke-Pester {
     param($Path, $Output, [switch] $PassThru)
     $result = [ordered]@{
-        TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0
+        TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0; NotRunCount = 0
         FailedBlocksCount = 0; FailedContainersCount = 0
         Failed = @(); FailedBlocks = @(); FailedContainers = @()
     }
@@ -48,6 +48,12 @@ function Invoke-Pester {
                 Name = 'broken before all'
                 ErrorRecord = @([pscustomobject]@{ Exception = [Exception]::new('synthetic block failure') })
             })
+        }
+        'incomplete' {
+            $result.TotalCount = 3; $result.PassedCount = 2; $result.NotRunCount = 1
+            if ($Output -eq 'Detailed') {
+                Write-Information '  [+] fixture.last_completed 12ms' -InformationAction Continue
+            }
         }
         default { throw 'Unknown fake Pester scenario.' }
     }
@@ -148,5 +154,19 @@ Export-ModuleMember -Function Invoke-Pester
         $output.Count | Should -Be 0
         (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester block failed: broken before all'
         (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester block error: synthetic block failure'
+    }
+
+    # Scenario: Pester exits with one discovered test not run and no failed test, block, or container.
+    # Purpose: retain fail-closed evidence while locating the last completed case and the exact count gap.
+    It 'InterT70_ reports counts and bounded last-case progress for an incomplete suite' {
+        $env:TEST_PESTER_SCENARIO = 'incomplete'
+        $diagnostics = Join-Path $script:fixtureRoot 'incomplete.err'
+        $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2> $diagnostics)
+        $LASTEXITCODE | Should -Not -Be 0
+        $output.Count | Should -Be 0
+        $stderr = Get-Content -LiteralPath $diagnostics -Raw
+        $stderr | Should -Match 'Pester counts: total=3 passed=2 skipped=0 failed=0 failedBlocks=0 failedContainers=0 notRun=1'
+        $stderr | Should -Match 'Pester progress:.*fixture\.last_completed'
+        $stderr | Should -Match 'Pester repository regression did not complete successfully'
     }
 }

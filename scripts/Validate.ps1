@@ -1074,45 +1074,68 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
-            $previousErrorActionPreference = $ErrorActionPreference
+            $progressPath = Join-Path (Get-Location) ('repository-pester-' + [guid]::NewGuid().ToString('N') + '.log')
+            function Write-PesterProgressTail {
+                param([string] $Path)
+                if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                    foreach ($line in @(Get-Content -LiteralPath $Path -Tail 24 -ErrorAction SilentlyContinue)) {
+                        $boundedLine = [string]$line
+                        if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                        if ($boundedLine.Length -gt 0) { [Console]::Error.WriteLine("Pester progress: $boundedLine") }
+                    }
+                }
+            }
             try {
-                # Tests intentionally exercise non-zero native child processes. Do not let the
-                # runner's fail-fast preference promote their captured stderr into terminating
-                # errors before Pester can evaluate the assertions.
-                $ErrorActionPreference = 'Continue'
-                # Imported candidate modules may emit benign warnings. Keep the
-                # typed JSON envelope as the only stdout record for the supervisor.
-                $result = Invoke-Pester -Path $testRoot -Output None -PassThru 3>$null 6>$null
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    # Tests exercise non-zero native children. Keep stderr non-terminating while
+                    # Pester evaluates them, and send detailed case output to an owned file.
+                    $ErrorActionPreference = 'Continue'
+                    $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6> $progressPath
+                }
+                catch {
+                    [Console]::Error.WriteLine('Pester counts: result=exception')
+                    Write-PesterProgressTail -Path $progressPath
+                    throw
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+                $invalid = $null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or
+                    [int64]$result.FailedCount -ne 0 -or [int64]$result.FailedBlocksCount -ne 0 -or [int64]$result.FailedContainersCount -ne 0 -or
+                    [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount
+                if ($invalid) {
+                    if ($null -eq $result) {
+                        [Console]::Error.WriteLine('Pester counts: result=missing')
+                    }
+                    else {
+                        [Console]::Error.WriteLine("Pester counts: total=$([int64]$result.TotalCount) passed=$([int64]$result.PassedCount) skipped=$([int64]$result.SkippedCount) failed=$([int64]$result.FailedCount) failedBlocks=$([int64]$result.FailedBlocksCount) failedContainers=$([int64]$result.FailedContainersCount) notRun=$([int64]$result.NotRunCount)")
+                        foreach ($failedContainer in @($result.FailedContainers)) {
+                            [Console]::Error.WriteLine("Pester container failed: $($failedContainer.Name)")
+                            foreach ($failure in @($failedContainer.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester container error: $($failure.Exception.Message)")
+                            }
+                        }
+                        foreach ($failedBlock in @($result.FailedBlocks)) {
+                            [Console]::Error.WriteLine("Pester block failed: $($failedBlock.Name)")
+                            foreach ($failure in @($failedBlock.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester block error: $($failure.Exception.Message)")
+                            }
+                        }
+                        foreach ($failedTest in @($result.Failed)) {
+                            [Console]::Error.WriteLine("Pester test failed: $($failedTest.ExpandedPath)")
+                            foreach ($failure in @($failedTest.ErrorRecord)) {
+                                [Console]::Error.WriteLine("Pester test error: $($failure.Exception.Message)")
+                            }
+                        }
+                    }
+                    Write-PesterProgressTail -Path $progressPath
+                    throw 'Pester repository regression did not complete successfully.'
+                }
             }
             finally {
-                $ErrorActionPreference = $previousErrorActionPreference
+                Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
             }
-            # The child emits one typed JSON record on stdout. Preserve that
-            # contract while making a failed container or case visible in CI.
-            if ($null -ne $result -and ([int64]$result.FailedCount -gt 0 -or
-                [int64]$result.FailedBlocksCount -gt 0 -or [int64]$result.FailedContainersCount -gt 0)) {
-                foreach ($failedContainer in @($result.FailedContainers)) {
-                    [Console]::Error.WriteLine("Pester container failed: $($failedContainer.Name)")
-                    foreach ($failure in @($failedContainer.ErrorRecord)) {
-                        [Console]::Error.WriteLine("Pester container error: $($failure.Exception.Message)")
-                    }
-                }
-                foreach ($failedBlock in @($result.FailedBlocks)) {
-                    [Console]::Error.WriteLine("Pester block failed: $($failedBlock.Name)")
-                    foreach ($failure in @($failedBlock.ErrorRecord)) {
-                        [Console]::Error.WriteLine("Pester block error: $($failure.Exception.Message)")
-                    }
-                }
-                foreach ($failedTest in @($result.Failed)) {
-                    [Console]::Error.WriteLine("Pester test failed: $($failedTest.ExpandedPath)")
-                    foreach ($failure in @($failedTest.ErrorRecord)) {
-                        [Console]::Error.WriteLine("Pester test error: $($failure.Exception.Message)")
-                    }
-                }
-            }
-            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or
-                [int64]$result.FailedCount -ne 0 -or [int64]$result.FailedBlocksCount -ne 0 -or [int64]$result.FailedContainersCount -ne 0 -or
-                [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |
                     ForEach-Object { [IO.Path]::GetRelativePath($candidateRoot, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/') }
