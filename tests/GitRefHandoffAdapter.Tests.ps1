@@ -6,6 +6,10 @@
 Describe 'Optional Git-ref Task Handoff adapter' {
     BeforeAll {
         [Console]::Error.WriteLine('Pester GitRef BeforeAll begin')
+        $script:DiagnosticCaseNumber = 0
+        $script:DiagnosticCaseCompleted = 0
+        $script:DiagnosticCaseStarted = [long]0
+        $script:DiagnosticCaseName = ''
         try {
         $script:Root = Split-Path -Parent $PSScriptRoot
         Import-Module (Join-Path $script:Root 'skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force -DisableNameChecking -ErrorAction Stop
@@ -298,7 +302,9 @@ exit 0
                 [IO.File]::SetUnixFileMode($hook, $mode)
             }
         }
-        [Console]::Error.WriteLine('Pester GitRef BeforeAll end')
+        [Console]::Error.WriteLine(('Pester GitRef BeforeAll end: stageMatch={0}; toolMatch={1}' -f
+            ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests'),
+            ($env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester')))
         }
         catch {
             $message = ($_.Exception.Message -replace '\s+', ' ').Trim()
@@ -338,6 +344,10 @@ exit 0
     }
 
     AfterAll {
+        [Console]::Error.WriteLine(('Pester GitRef AfterAll reached: started={0}; completed={1}; stageMatch={2}; toolMatch={3}' -f
+            [int]$script:DiagnosticCaseNumber, [int]$script:DiagnosticCaseCompleted,
+            ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests'),
+            ($env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester')))
         if ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests' -and
             $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
             $failedTests = @($____Pester.CurrentBlock.Tests | Where-Object { [string]$_.Result -ceq 'Failed' })
