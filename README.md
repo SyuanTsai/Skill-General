@@ -54,47 +54,27 @@ tests/
 
 ## Canonical validation
 
-Run the single local/CI entry point against a clean immutable candidate commit:
+Run the single local/CI entry point against a clean immutable candidate commit with PowerShell 7, Pester 6, and a clean checkout of the authority commit pinned in `config/standard-v1.json`:
 
 ```powershell
-pwsh -NoProfile -File ./scripts/Validate.ps1 -BaseCommit HEAD^
+pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -BaseCommit HEAD^
 ```
 
-`scripts/Validate.ps1` binds the exact P02 authority archive and frozen tool receipts, creates a declarative development-harness adapter, and invokes the central validation runner from that authority snapshot. Local, pre-push, and CI execution use this same entry point and the same pass/block semantics. It:
+Ordinary `Run` binds the exact authority Git commit and verified files, inventories only tracked regular files from the candidate commit, and invokes the central Core v2 runner. Its adapter declares two repository checks: the read-only source diagnostic and the complete Pester suite. The JSON report records candidate and authority revisions, check results, test counts, and cleanup status. A Core `PASS` is source validation evidence with `releaseEligible: false`.
 
-1. performs Controlled Acquisition and binds one clean immutable candidate;
-2. performs Integrity Verification for the candidate, authority archive, and pinned authority files;
-3. performs the optional upstream package-adapter check, then runs both approved package tools for every active source-inventory Skill before any static security scan;
-4. runs the static security scan once against every active Skill in the same read-only candidate snapshot;
-5. runs Repository Tests, the repository component diagnostic, Pester, conformance, and domain regressions only after Static passes;
-6. deterministically triggers a fail-closed semantic security scan for security-relevant Skill changes or static findings;
-7. records the required AI Review and Human Approval boundaries before Publish / Install;
-8. records Post-install Verification as required evidence after an approved install;
-9. emits the central machine-readable authority, candidate, tool, inventory, security disposition, stage, and review-boundary evidence in a temporary artifacts directory. A development-harness PASS is validation evidence only; it is not release eligibility or Human Release Approval.
+The Windows CI workflow obtains Microsoft's latest stable PowerShell ZIP, verifies its published SHA-256 and executable version, installs Pester 6.2.0, and validates the exact PR head or main commit. The three required status contexts project the one canonical report result. The repository component diagnostic is used internally by the canonical validator.
 
-The canonical security disposition is also central: scanner failure, incomplete analysis, unparsable results, unknown severity, Critical, and High block; Medium requires Human Review and blocks release/install until disposition; Low and Informational findings are recorded and tracked.
-
-The repository component diagnostic is used internally by the canonical validator. It is not a standalone release gate.
+Explicit advanced semantic and legacy development-harness requests remain available through `scripts/Validate.ps1`. They use their separately reviewed legacy authority pin and retain their existing consent and evidence requirements.
 
 ## Development and release flow
 
-The repository follows the Standard v1 ordering defined by the central runner:
+For an ordinary source change:
 
-```text
-Controlled Acquisition
-→ Integrity Verification
-→ Package Adapter
-→ approved package validator + approved package quality tool for every active Skill
-→ static security scan
-→ Repository Tests
-→ Conditional semantic security scan
-→ AI Review
-→ Human Approval
-→ Publish / Install
-→ Post-install Verification
-```
+1. Commit the candidate and run `scripts/Validate.ps1` locally with the pinned authority checkout.
+2. Inspect the Core report and obtain the required Windows CI contexts for the exact commit.
+3. Follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
 
-AI review cannot replace Human Release Approval. Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence.
+Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence. Core `PASS` does not grant Human Release Approval.
 
 ## Adding or changing a Skill
 

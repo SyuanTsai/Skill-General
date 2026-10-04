@@ -162,9 +162,9 @@ function Invoke-SyntheticResume {
 
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
         $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Validate.ps1'
-        $authorityConfig = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        $script:ExpectedAuthorityRevision = [string]$authorityConfig.authority.commit
-        $script:ExpectedAuthorityArchiveSha256 = [string]$authorityConfig.authority.archiveSha256
+        # Synthetic Resume plans exercise the retained explicit legacy path.
+        $script:ExpectedAuthorityRevision = '51399617ddebe21656fe4265a8d9ad116a943583'
+        $script:ExpectedAuthorityArchiveSha256 = 'b115762de7d4da6f0f95143e1853bd3822fe224d2e673539ace3f480df6ef50d'
     }
 
     It 'preserves helper inputs across the dot-sourced central runner parameter scope' {
@@ -327,6 +327,10 @@ function Get-StandardValidationTextSha256 {
     }
 
     It 'prepares, signs, resumes, verifies, and rejects replay through the exact Validate.ps1 entrypoint' -Tag 'SemanticBridgeV2ConsumerE2E' {
+        if ($env:STANDARD_VALIDATION_CORE_CHECK_ID -ceq 'repository-pester') {
+            Set-ItResult -Skipped -Because 'Ordinary Core v2 validates source and does not request the optional Semantic signing E2E.'
+            return
+        }
         if ($env:STANDARD_VALIDATION_STAGE_ID -cin @('repository-tests', 'supplemental-repository-tests') -and
             $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
             Set-ItResult -Skipped -Because 'Avoid recursive consumer E2E execution inside repository-pester.'

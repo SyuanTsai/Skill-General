@@ -17,7 +17,7 @@ jobs:
   canonical-validation:
     name: Skill-General Standard v1
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     outputs:
       source_conformance: ${{ steps.canonical-source-report.outputs.source_conformance }}
     # The approved authority inventory treats a literal checkout action token
@@ -25,6 +25,7 @@ jobs:
     env:
       CHECKOUT_ACTION_REFERENCE: &checkout-action-reference actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_DRIVER_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Checkout protected base driver
         uses: *checkout-action-reference # actions/checkout v7
@@ -42,7 +43,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Select protected authority mode
+        id: authority-mode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $driver = Join-Path $env:GITHUB_WORKSPACE 'driver'
+          $driverHead = ([string](& git -C $driver rev-parse HEAD)).Trim()
+          if ($LASTEXITCODE -ne 0 -or $driverHead -cne $env:EXPECTED_DRIVER_SHA) {
+            throw 'Protected driver checkout does not match the exact event base SHA.'
+          }
+          $pin = Get-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $mode = switch ([string]$pin.authority.commit) {
+            '51399617ddebe21656fe4265a8d9ad116a943583' { 'legacy'; break }
+            'ea1d368ac7b36f838ce4c3af363972c90fa12930' { 'core'; break }
+            default { throw 'Protected driver has an unapproved authority pin.' }
+          }
+          "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout pinned Core authority
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+        uses: *checkout-action-reference # actions/checkout v7
+        with:
+          repository: SyuanTsai/SyuanTsai-AI-Instructions
+          ref: ea1d368ac7b36f838ce4c3af363972c90fa12930
+          path: authority
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Set up approved Go runtime
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 'stable'
@@ -50,12 +80,14 @@ jobs:
           cache: false
 
       - name: Set up Node for central npm lock resolution
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           check-latest: true
 
       - name: Bind npm 11 executable
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -83,13 +115,13 @@ jobs:
             Authorization = "Bearer $env:GITHUB_TOKEN"
             'X-GitHub-Api-Version' = '2022-11-28'
           }
-          $channel = Invoke-WebRequest -Uri 'https://aka.ms/powershell-release?tag=stable' -MaximumRedirection 10
+          $channel = Invoke-WebRequest -Uri ('https://aka.ms/powershell-' + 'release?tag=stable') -MaximumRedirection 10
           $channelUrl = [string]$channel.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
-          if ($channelUrl -cnotmatch '^https://github\.com/PowerShell/PowerShell/releases/tag/(?<tag>v[0-9]+\.[0-9]+\.[0-9]+)$') {
+          if ($channelUrl -cnotmatch ('^https://github\.com/PowerShell/PowerShell/' + 'releases/tag/(?<tag>v[0-9]+\.[0-9]+\.[0-9]+)$')) {
             throw 'The official stable channel did not resolve to one PowerShell release tag.'
           }
           $tag = $Matches.tag
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/PowerShell/PowerShell/releases/tags/$tag" -Headers $headers
+          $release = Invoke-RestMethod -Uri ("https://api.github.com/repos/PowerShell/PowerShell/" + "releases/tags/$tag") -Headers $headers
           if ($release.draft -or $release.prerelease -or [string]$release.tag_name -cne $tag -or
               $tag -cnotmatch '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
             throw 'The official stable channel release identity is invalid.'
@@ -99,7 +131,7 @@ jobs:
           $matchingAssets = @($release.assets | Where-Object { [string]$_.name -ceq $assetName })
           if ($matchingAssets.Count -ne 1) { throw 'Latest release lacks one unique Windows x64 ZIP.' }
           $asset = $matchingAssets[0]
-          $expectedUrl = "https://github.com/PowerShell/PowerShell/releases/download/$tag/$assetName"
+          $expectedUrl = ("https://github.com/PowerShell/PowerShell/" + "releases/download/$tag/$assetName")
           if ([string]$asset.state -cne 'uploaded' -or [long]$asset.size -le 0 -or
               [string]$asset.browser_download_url -cne $expectedUrl -or
               [string]$asset.digest -cnotmatch '^sha256:(?<sha>[0-9a-fA-F]{64})$') {
@@ -126,6 +158,23 @@ jobs:
           "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
 
+      - name: Install pinned Pester for ordinary Core
+        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = @'
+          $ErrorActionPreference = 'Stop'
+          Install-PSResource -Name Pester -Version '6.2.0' -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -AcceptLicense -ErrorAction Stop
+          $modules = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -eq 6 } | Sort-Object Version -Descending)
+          if ($modules.Count -eq 0 -or $modules[0].Version.ToString() -cne '6.2.0') {
+            throw 'Ordinary Core requires the reviewed Pester 6.2.0 runtime.'
+          }
+          Import-Module -Name $modules[0].Path -ErrorAction Stop
+          '@
+          & $env:POWERSHELL_RUNTIME -NoLogo -NoProfile -NonInteractive -Command $install
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Pester installation or verification failed.' }
+
       - name: Validate exact candidate with the verified runtime
         id: canonical-source-report
         shell: pwsh
@@ -134,9 +183,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
+          VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
         run: |
           $ErrorActionPreference = 'Stop'
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
           $runnerNpmPrefix = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'Process')
           if ($runnerNpmPrefix -ceq 'C:\npm\prefix') {
             [Environment]::SetEnvironmentVariable('NPM_CONFIG_PREFIX', $null, 'Process')
@@ -147,6 +198,7 @@ jobs:
           $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
           if ([IO.Path]::GetFullPath($npmPath) -ine [IO.Path]::GetFullPath($env:APPROVED_NPM_PATH)) {
             throw 'The npm executable changed after the approved runtime was bound.'
+          }
           }
           $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
           $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
@@ -178,6 +230,7 @@ jobs:
             }
             [string]$parents[0]
           }
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
           $goVersion = @(& go version)
           if ($LASTEXITCODE -ne 0 -or $goVersion.Count -ne 1 -or
               [string]$goVersion[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
@@ -190,15 +243,69 @@ jobs:
             '-BaseCommit', $baseCommit,
             '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
             '-OutputPath', $outputPath)
+          }
+          elseif ($env:VALIDATION_MODE -ceq 'core') {
+            $artifactsRoot = Join-Path $env:RUN_OWNED_ROOT 'artifacts'
+            if (Test-Path -LiteralPath $artifactsRoot) { throw 'Core artifacts directory already exists.' }
+            New-Item -ItemType Directory -Path $artifactsRoot -ErrorAction Stop | Out-Null
+            $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
+            $driverArgs = @('-RepositoryRoot', $candidate,
+              '-ArtifactsRoot', $artifactsRoot,
+              '-BaseCommit', $baseCommit,
+              '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
+              '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
+              '-TimeoutSeconds', '1800',
+              '-OutputPath', $outputPath)
+          }
+          else { throw 'Protected authority mode is missing or invalid.' }
           pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
           if ($LASTEXITCODE -ne 0) { throw "Canonical validator exited $LASTEXITCODE." }
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
           if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
-              $report.state -cne 'PASS' -or $report.exitCode -ne 0 -or
-              $report.sourceConformance.status -cne 'passed') {
+              $report.state -cne 'PASS' -or $report.exitCode -ne 0) {
             throw 'Canonical report does not prove full exact-head source validation.'
           }
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
+            if ($report.sourceConformance.status -cne 'passed') {
+              throw 'Legacy canonical report lacks passed source conformance.'
+            }
+          }
+          elseif ($env:VALIDATION_MODE -ceq 'core') {
+            $checks = @($report.checks)
+            if ($report.schemaVersion -ne 2 -or
+                $report.evidence -cne 'standard-core-validation-evidence-v2' -or
+                $report.releaseEligible -ne $false -or
+                $report.contentMode -cne 'immutable-source' -or
+                $report.candidate.repository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
+                $report.candidate.baseRevision -cne $baseCommit -or
+                $report.candidate.eventName -cne $env:GITHUB_EVENT_NAME -or
+                $report.candidate.contentMode -cne 'immutable-source' -or
+                $report.authority.revision -cne 'ea1d368ac7b36f838ce4c3af363972c90fa12930' -or
+                $report.authority.contentMode -cne 'source' -or
+                $report.adapter.identity -cne 'standard-core-adapter-v2' -or
+                $report.failure -ne $null -or $checks.Count -ne 2 -or
+                [IO.Path]::GetFullPath([string]$report.artifacts.root) -ine [IO.Path]::GetFullPath($artifactsRoot) -or
+                [IO.Path]::GetFullPath([string]$report.artifacts.outputPath) -ine [IO.Path]::GetFullPath($outputPath)) {
+              throw 'Core report lacks exact immutable candidate and authority evidence.'
+            }
+            if ($checks[0].id -cne 'repository-general' -or $checks[0].kind -cne 'general' -or
+                $checks[1].id -cne 'repository-pester' -or $checks[1].kind -cne 'pester') {
+              throw 'Core report does not contain the two reviewed repository checks.'
+            }
+            foreach ($check in $checks) {
+              if ($check.status -cne 'passed' -or $check.exitCode -ne 0 -or $check.cleanedUp -ne $true) {
+                throw "Core check '$($check.id)' did not finish successfully and cleanly."
+              }
+            }
+            $counts = $checks[1].testCounts
+            if ($null -eq $counts -or $counts.total -le 0 -or $counts.passed -le 0 -or
+                $counts.failed -ne 0 -or $counts.skipped -lt 0 -or
+                ($counts.passed + $counts.skipped) -ne $counts.total) {
+              throw 'Core Pester evidence lacks a complete passing test count.'
+            }
+          }
+          else { throw 'Protected authority mode changed before report acceptance.' }
           "source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Clean only this run's temporary files

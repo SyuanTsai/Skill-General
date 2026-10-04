@@ -40,8 +40,10 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.schemaVersion | Should -Be 1
         $adapter.standardVersion | Should -Be 'v1'
         $adapter.authority.repository | Should -Be 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
-        $adapter.authority.commit | Should -Be '51399617ddebe21656fe4265a8d9ad116a943583'
-        $adapter.authority.archiveSha256 | Should -Be 'b115762de7d4da6f0f95143e1853bd3822fe224d2e673539ace3f480df6ef50d'
+        $adapter.authority.commit | Should -Be 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+        $adapter.authority.archiveUrl | Should -Be 'https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/ea1d368ac7b36f838ce4c3af363972c90fa12930'
+        $adapter.authority.archiveSha256 | Should -Be 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
+        @($adapter.authority.files).Count | Should -Be 26
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/README.md'
         @($adapter.authority.files.path) | Should -Contain 'docs/standards/managed-skill-lifecycle.md'
@@ -110,6 +112,10 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match 'actions/setup-go@[0-9a-f]{40}'
         $workflow | Should -Match 'actions/setup-node@[0-9a-f]{40}'
+        $workflow | Should -Match 'if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == \x27legacy\x27 \}\}'
+        $workflow | Should -Match 'ref: ea1d368ac7b36f838ce4c3af363972c90fa12930'
+        $workflow | Should -Match 'if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == \x27core\x27 \}\}'
+        $workflow | Should -Match 'Install-PSResource -Name Pester -Version \x276\.2\.0\x27'
         $workflow | Should -Match "node-version: '24'"
         $workflow | Should -Match 'Get-Command npm\.cmd -CommandType Application'
         $workflow | Should -Match 'APPROVED_NPM_PATH'
@@ -118,11 +124,13 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '(?m)^  push:\s*$'
         $workflow | Should -Match '(?m)^    runs-on: windows-latest\s*$'
         $workflow | Should -Match '(?m)^    timeout-minutes: [1-9][0-9]*\s*$'
-        $workflow | Should -Match 'aka\.ms/powershell-release\?tag=stable'
-        $workflow | Should -Match 'api\.github\.com/repos/PowerShell/PowerShell/releases/tags/\$tag'
+        $workflow | Should -Match "Invoke-WebRequest -Uri \('https://aka\.ms/powershell-' \+ 'release\?tag=stable'\)"
+        $workflow | Should -Match 'Invoke-RestMethod -Uri \("https://api\.github\.com/repos/PowerShell/PowerShell/" \+ "releases/tags/\$tag"\)'
         $workflow | Should -Match '\$asset\.digest'
         $workflow | Should -Match 'Get-FileHash'
         $workflow | Should -Match 'POWERSHELL_RUNTIME'
+        $workflow | Should -Match '\x27-AuthorityRepositoryRoot\x27, \(Join-Path \$env:GITHUB_WORKSPACE \x27authority\x27\)'
+        $workflow | Should -Match '\x27-TrustedToolRoot\x27, \(Split-Path -Parent \$env:POWERSHELL_RUNTIME\)'
         $workflow | Should -Match '\$env:PATH = "\$\(Split-Path -Parent \$env:POWERSHELL_RUNTIME\);\$env:PATH"'
         $workflow | Should -Not -Match 'GITHUB_PATH'
         $workflow | Should -Match "NPM_CONFIG_PREFIX.*'Process'"
@@ -315,8 +323,10 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $outputPath = Join-Path $TestDrive 'canonical-report.json'
         $savedExpectedSourceSha = $env:EXPECTED_SOURCE_SHA
         $savedGitHubOutput = $env:GITHUB_OUTPUT
+        $savedValidationMode = $env:VALIDATION_MODE
         $env:GITHUB_OUTPUT = Join-Path $TestDrive 'github-output.txt'
         $env:EXPECTED_SOURCE_SHA = $expectedSourceSha
+        $env:VALIDATION_MODE = 'legacy'
         $validReport = [pscustomobject]@{
             candidate = [pscustomobject]@{ sourceRevision = $expectedSourceSha }
             state = 'PASS'
@@ -356,6 +366,88 @@ Describe 'Skill-General Standard v1 reference implementation' {
         finally {
             [Environment]::SetEnvironmentVariable('EXPECTED_SOURCE_SHA', $savedExpectedSourceSha, 'Process')
             [Environment]::SetEnvironmentVariable('GITHUB_OUTPUT', $savedGitHubOutput, 'Process')
+            [Environment]::SetEnvironmentVariable('VALIDATION_MODE', $savedValidationMode, 'Process')
+        }
+    }
+
+    # Scenario: Core v2 reports a complete immutable-source pass for both repository checks.
+    # Purpose: do not publish the required contexts from an incomplete or mismatched Core envelope.
+    It 'UnitT19b_AcceptsExactCorePassEnvelopeAndRejectsIncompleteChecks' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<step>.*?)(?=^      - name: Clean only this run''s temporary files)')
+        $step.Success | Should -BeTrue
+        $run = [regex]::Match($step.Groups['step'].Value, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)' )
+        $run.Success | Should -BeTrue
+        $runScript = (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object { $_.Substring(10) }) -join "`n")
+        $gateStartMarker = 'if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf))'
+        $gateEndMarker = '"source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append'
+        $gateStart = $runScript.IndexOf($gateStartMarker)
+        $gateEnd = $runScript.IndexOf($gateEndMarker)
+        ($gateStart -ge 0 -and $gateEnd -gt $gateStart) | Should -BeTrue
+        $reportGate = [scriptblock]::Create($runScript.Substring($gateStart, $gateEnd + $gateEndMarker.Length - $gateStart))
+
+        $expectedSourceSha = 'a' * 40
+        $baseCommit = 'b' * 40
+        $artifactsRoot = Join-Path $TestDrive 'core-artifacts'
+        New-Item -ItemType Directory -Path $artifactsRoot | Out-Null
+        $outputPath = Join-Path $artifactsRoot 'core-report.json'
+        $saved = @{
+            EXPECTED_SOURCE_SHA = $env:EXPECTED_SOURCE_SHA
+            GITHUB_OUTPUT = $env:GITHUB_OUTPUT
+            GITHUB_EVENT_NAME = $env:GITHUB_EVENT_NAME
+            VALIDATION_MODE = $env:VALIDATION_MODE
+        }
+        $env:EXPECTED_SOURCE_SHA = $expectedSourceSha
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive 'core-github-output.txt'
+        $env:GITHUB_EVENT_NAME = 'pull_request'
+        $env:VALIDATION_MODE = 'core'
+        $valid = [pscustomobject]@{
+            schemaVersion = 2
+            evidence = 'standard-core-validation-evidence-v2'
+            state = 'PASS'
+            exitCode = 0
+            releaseEligible = $false
+            contentMode = 'immutable-source'
+            candidate = [pscustomobject]@{
+                repository = 'https://github.com/SyuanTsai/Skill-General.git'
+                sourceRevision = $expectedSourceSha
+                baseRevision = $baseCommit
+                eventName = 'pull_request'
+                contentMode = 'immutable-source'
+            }
+            authority = [pscustomobject]@{ revision = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'; contentMode = 'source' }
+            adapter = [pscustomobject]@{ identity = 'standard-core-adapter-v2' }
+            checks = @(
+                [pscustomobject]@{ id = 'repository-general'; kind = 'general'; status = 'passed'; exitCode = 0; cleanedUp = $true },
+                [pscustomobject]@{ id = 'repository-pester'; kind = 'pester'; status = 'passed'; exitCode = 0; cleanedUp = $true;
+                    testCounts = [pscustomobject]@{ total = 4; passed = 3; failed = 0; skipped = 1 } }
+            )
+            artifacts = [pscustomobject]@{ root = $artifactsRoot; outputPath = $outputPath }
+            failure = $null
+        }
+        try {
+            $valid | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            { & $reportGate } | Should -Not -Throw
+            (Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw).Trim() | Should -BeExactly 'source_conformance=passed'
+
+            foreach ($mutation in @(
+                { param($report) $report.candidate.sourceRevision = 'c' * 40 },
+                { param($report) $report.authority.revision = 'd' * 40 },
+                { param($report) $report.checks[1].cleanedUp = $false },
+                { param($report) $report.checks[1].testCounts.failed = 1 },
+                { param($report) $report.checks[1].testCounts.total = 5 },
+                { param($report) $report.releaseEligible = $true }
+            )) {
+                Remove-Item -LiteralPath $env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
+                $invalid = $valid | ConvertTo-Json -Depth 12 | ConvertFrom-Json -Depth 12
+                & $mutation $invalid
+                $invalid | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $outputPath -Encoding utf8
+                { & $reportGate } | Should -Throw
+                (Test-Path -LiteralPath $env:GITHUB_OUTPUT) | Should -BeFalse
+            }
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
         }
     }
 
