@@ -2112,7 +2112,7 @@ exit /b %ERRORLEVEL%
     }
 
     It 'InterT29i_requires_source_branch_authorization_before_recovery_payload_read' {
-        $root = Join-Path $TestDrive 't29i'
+        $root = Join-Path $TestDrive 't29m'
         [void](New-Item -ItemType Directory -Path $root)
         $a = New-WriterFixture -Root $root -WriterId 'a'
         New-GitHandoffCommon -Adapter $a -TaskKey 'demo:source-read-auth' -Fields $script:InitialCommon `
