@@ -19,13 +19,27 @@ Describe 'Repository Pester result envelope' {
         $moduleBody = @'
 function Invoke-Pester {
     param($Path, $Output, [switch] $PassThru)
-    switch ($env:TEST_PESTER_SCENARIO) {
-        'partial-skip' { return [pscustomobject]@{ TotalCount = 3; PassedCount = 2; SkippedCount = 1; FailedCount = 0 } }
-        'zero-selected' { return [pscustomobject]@{ TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0 } }
-        'all-skipped' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 0; SkippedCount = 2; FailedCount = 0 } }
-        'failed' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 1; SkippedCount = 0; FailedCount = 1 } }
+    $result = [ordered]@{
+        TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0
+        FailedBlocksCount = 0; FailedContainersCount = 0
+        Failed = @(); FailedBlocks = @(); FailedContainers = @()
     }
-    throw 'Unknown fake Pester scenario.'
+    switch ($env:TEST_PESTER_SCENARIO) {
+        'partial-skip' { $result.TotalCount = 3; $result.PassedCount = 2; $result.SkippedCount = 1 }
+        'zero-selected' { }
+        'all-skipped' { $result.TotalCount = 2; $result.SkippedCount = 2 }
+        'failed' { $result.TotalCount = 2; $result.PassedCount = 1; $result.FailedCount = 1 }
+        'container-failed' {
+            $result.TotalCount = 1; $result.PassedCount = 1; $result.FailedContainersCount = 1
+            $result.FailedContainers = @([pscustomobject]@{ Name = 'Broken.Tests.ps1'; ErrorRecord = @() })
+        }
+        'block-failed' {
+            $result.TotalCount = 1; $result.PassedCount = 1; $result.FailedBlocksCount = 1
+            $result.FailedBlocks = @([pscustomobject]@{ Name = 'broken before all'; ErrorRecord = @() })
+        }
+        default { throw 'Unknown fake Pester scenario.' }
+    }
+    return [pscustomobject]$result
 }
 Export-ModuleMember -Function Invoke-Pester
 '@
@@ -98,5 +112,24 @@ Export-ModuleMember -Function Invoke-Pester
         $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2>$null)
         $LASTEXITCODE | Should -Not -Be 0
         $output.Count | Should -Be 0
+    }
+
+    # A discovery failure can coexist with one passing test and zero failed test cases.
+    It 'InterT50_ rejects a failed container and reports its name on stderr' {
+        $env:TEST_PESTER_SCENARIO = 'container-failed'
+        $diagnostics = Join-Path $script:fixtureRoot 'container-failed.err'
+        $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2> $diagnostics)
+        $LASTEXITCODE | Should -Not -Be 0
+        $output.Count | Should -Be 0
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container failed: Broken\.Tests\.ps1'
+    }
+
+    It 'InterT60_ rejects a failed block despite a passing test count' {
+        $env:TEST_PESTER_SCENARIO = 'block-failed'
+        $diagnostics = Join-Path $script:fixtureRoot 'block-failed.err'
+        $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2> $diagnostics)
+        $LASTEXITCODE | Should -Not -Be 0
+        $output.Count | Should -Be 0
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester block failed: broken before all'
     }
 }

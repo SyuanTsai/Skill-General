@@ -28,7 +28,27 @@ if ($null -eq $result) { throw 'Pester did not return a result object.' }
 $total = [int]$result.TotalCount
 $passed = [int]$result.PassedCount
 $failed = [int]$result.FailedCount
+$failedBlocks = [int]$result.FailedBlocksCount
+$failedContainers = [int]$result.FailedContainersCount
 $skipped = [int]$result.SkippedCount
+foreach ($failedContainer in @($result.FailedContainers)) {
+    [Console]::Error.WriteLine("Pester container failed: $($failedContainer.Name)")
+    foreach ($failure in @($failedContainer.ErrorRecord)) {
+        [Console]::Error.WriteLine("Pester container error: $($failure.Exception.Message)")
+    }
+}
+foreach ($failedBlock in @($result.FailedBlocks)) {
+    [Console]::Error.WriteLine("Pester block failed: $($failedBlock.Name)")
+    foreach ($failure in @($failedBlock.ErrorRecord)) {
+        [Console]::Error.WriteLine("Pester block error: $($failure.Exception.Message)")
+    }
+}
+foreach ($failedTest in @($result.Failed)) {
+    [Console]::Error.WriteLine("Pester test failed: $($failedTest.ExpandedPath)")
+    foreach ($failure in @($failedTest.ErrorRecord)) {
+        [Console]::Error.WriteLine("Pester test error: $($failure.Exception.Message)")
+    }
+}
 $summary = [ordered]@{
     schemaVersion = 1
     report = 'standard-core-pester-result-v1'
@@ -38,7 +58,8 @@ $summary = [ordered]@{
     skipped = $skipped
 }
 $summary | ConvertTo-Json -Compress
-if ($total -le 0 -or $passed -le 0 -or $failed -ne 0 -or ($passed + $skipped) -ne $total) {
+if ($total -le 0 -or $passed -le 0 -or $failed -ne 0 -or $failedBlocks -ne 0 -or
+    $failedContainers -ne 0 -or ($passed + $skipped) -ne $total) {
     exit 1
 }
 exit 0

@@ -1087,7 +1087,31 @@ try {
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or [int64]$result.FailedCount -ne 0 -or
+            # The child emits one typed JSON record on stdout. Preserve that
+            # contract while making a failed container or case visible in CI.
+            if ($null -ne $result -and ([int64]$result.FailedCount -gt 0 -or
+                [int64]$result.FailedBlocksCount -gt 0 -or [int64]$result.FailedContainersCount -gt 0)) {
+                foreach ($failedContainer in @($result.FailedContainers)) {
+                    [Console]::Error.WriteLine("Pester container failed: $($failedContainer.Name)")
+                    foreach ($failure in @($failedContainer.ErrorRecord)) {
+                        [Console]::Error.WriteLine("Pester container error: $($failure.Exception.Message)")
+                    }
+                }
+                foreach ($failedBlock in @($result.FailedBlocks)) {
+                    [Console]::Error.WriteLine("Pester block failed: $($failedBlock.Name)")
+                    foreach ($failure in @($failedBlock.ErrorRecord)) {
+                        [Console]::Error.WriteLine("Pester block error: $($failure.Exception.Message)")
+                    }
+                }
+                foreach ($failedTest in @($result.Failed)) {
+                    [Console]::Error.WriteLine("Pester test failed: $($failedTest.ExpandedPath)")
+                    foreach ($failure in @($failedTest.ErrorRecord)) {
+                        [Console]::Error.WriteLine("Pester test error: $($failure.Exception.Message)")
+                    }
+                }
+            }
+            if ($null -eq $result -or [int64]$result.TotalCount -le 0 -or [int64]$result.PassedCount -le 0 -or
+                [int64]$result.FailedCount -ne 0 -or [int64]$result.FailedBlocksCount -ne 0 -or [int64]$result.FailedContainersCount -ne 0 -or
                 [int64]$result.PassedCount + [int64]$result.SkippedCount -ne [int64]$result.TotalCount) { throw 'Pester repository regression did not complete successfully.' }
             $testInventory = @(
                 Get-ChildItem -LiteralPath $testRoot -Recurse -File -Force |

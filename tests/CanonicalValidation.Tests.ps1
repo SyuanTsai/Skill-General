@@ -294,8 +294,40 @@ Describe 'Canonical Standard v1 validation adapter' {
         $wrapper | Should -Match "report = 'standard-core-pester-result-v1'"
         $wrapper | Should -Match '\$failed = \[int\]\$result\.FailedCount'
         $wrapper | Should -Match '\$skipped = \[int\]\$result\.SkippedCount'
+        $wrapper | Should -Match '\$failedBlocks = \[int\]\$result\.FailedBlocksCount'
+        $wrapper | Should -Match '\$failedContainers = \[int\]\$result\.FailedContainersCount'
         $wrapper | Should -Match '\$ErrorActionPreference = ''Continue'''
         $wrapper | Should -Match '\(\$passed \+ \$skipped\) -ne \$total'
+    }
+
+    It 'rejects a Pester discovery failure even when its other test passes' {
+        $fixtureRoot = Join-Path $TestDrive 'core-pester-discovery-failure'
+        $fixtureTests = Join-Path $fixtureRoot 'tests'
+        [void](New-Item -ItemType Directory -Path $fixtureTests -Force)
+        [IO.File]::WriteAllText((Join-Path $fixtureTests 'Broken.Tests.ps1'), "throw 'synthetic discovery failure'`n")
+        [IO.File]::WriteAllText((Join-Path $fixtureTests 'Healthy.Tests.ps1'), "Describe 'healthy' { It 'passes' { 1 | Should -Be 1 } }`n")
+        $wrapperPath = Join-Path $script:RepositoryRoot 'scripts/Invoke-CorePester.ps1'
+        $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+        $oldPath = $env:PSModulePath
+        $pesterModule = Get-Module Pester | Select-Object -First 1
+        $env:PSModulePath = (Split-Path -Parent (Split-Path -Parent $pesterModule.ModuleBase)) + [IO.Path]::PathSeparator + $oldPath
+        $diagnostics = Join-Path $fixtureRoot 'diagnostics.err'
+        Push-Location $fixtureRoot
+        try {
+            $output = @(& $pwsh -NoProfile -NonInteractive -File $wrapperPath 2> $diagnostics)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+            $env:PSModulePath = $oldPath
+        }
+        $exitCode | Should -Be 1
+        $output.Count | Should -Be 1
+        $counts = $output[0] | ConvertFrom-Json
+        $counts.total | Should -Be 1
+        $counts.passed | Should -Be 1
+        $counts.failed | Should -Be 0
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container failed:.*Broken\.Tests\.ps1'
     }
 
     It 'accepts only the exact reviewed Core authority tuple' {
@@ -535,6 +567,10 @@ Describe 'Canonical Standard v1 validation adapter' {
 
     It 'keeps repository Pester child output JSON-only' {
         $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output None -PassThru 3>\$null 6>\$null'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester container failed:'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester block failed:'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester test failed:'
+        $script:Validator | Should -Match '\[int64\]\$result\.FailedContainersCount -ne 0 -or'
     }
 
     It 'uses the P02 central runner as the only stage and severity orchestrator' {
