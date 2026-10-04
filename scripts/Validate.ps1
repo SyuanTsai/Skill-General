@@ -202,6 +202,35 @@ function Get-GitBlobSha256 {
     }
 }
 
+function Test-AuthorityWorktreeSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $ExpectedSha256
+    )
+
+    # Git may check out text with CRLF on Windows. Compare actual bytes first,
+    # then permit only that line-ending conversion from the pinned Git blob.
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $actual = ([BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+        if ($actual -ceq $ExpectedSha256) { return $true }
+        $normalized = [IO.MemoryStream]::new($bytes.Length)
+        try {
+            for ($index = 0; $index -lt $bytes.Length; $index++) {
+                if ($bytes[$index] -eq 13 -and $index + 1 -lt $bytes.Length -and $bytes[$index + 1] -eq 10) {
+                    continue
+                }
+                $normalized.WriteByte($bytes[$index])
+            }
+            $actual = ([BitConverter]::ToString($hasher.ComputeHash($normalized.ToArray())) -replace '-', '').ToLowerInvariant()
+            return $actual -ceq $ExpectedSha256
+        }
+        finally { $normalized.Dispose() }
+    }
+    finally { $hasher.Dispose() }
+}
+
 function Assert-Sha256 {
     param([Parameter(Mandatory = $true)][string] $Value, [Parameter(Mandatory = $true)][string] $Context)
     if ($Value -cnotmatch '^[0-9a-f]{64}$') { throw "$Context must be a lowercase SHA-256 value." }
@@ -432,20 +461,56 @@ function Assert-StandardCoreAuthorityCheckout {
         $filePath = Assert-PathWithinRoot -Path (Join-Path $fullRoot ($entry.Key -replace '/', [IO.Path]::DirectorySeparatorChar)) -Root $fullRoot -Context 'Pinned authority file'
         Assert-NoReparseAncestors -Path $filePath -Context 'Pinned authority file'
         if (-not (Test-Path -LiteralPath $filePath -PathType Leaf) -or
-            (Get-GitBlobSha256 -GitPath $GitPath -RepositoryRoot $fullRoot -Revision $head -RelativePath $entry.Key) -cne [string]$entry.Value) {
+            (Get-GitBlobSha256 -GitPath $GitPath -RepositoryRoot $fullRoot -Revision $head -RelativePath $entry.Key) -cne [string]$entry.Value -or
+            -not (Test-AuthorityWorktreeSha256 -Path $filePath -ExpectedSha256 ([string]$entry.Value))) {
             throw "Pinned authority file identity mismatch: $($entry.Key)"
         }
     }
     $coreContract = Join-Path $fullRoot 'docs/standards/standard-core-validation-v2.json'
-    & $GitPath -C $fullRoot cat-file -e "$head`:docs/standards/standard-core-validation-v2.json" 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $coreContract -PathType Leaf)) {
+    Assert-NoReparseAncestors -Path $coreContract -Context 'Pinned Core v2 contract'
+    if (-not (Test-Path -LiteralPath $coreContract -PathType Leaf)) {
         throw 'Pinned authority checkout is missing the tracked Core v2 contract.'
+    }
+    $coreContractSha256 = Get-GitBlobSha256 -GitPath $GitPath -RepositoryRoot $fullRoot -Revision $head -RelativePath 'docs/standards/standard-core-validation-v2.json'
+    if (-not (Test-AuthorityWorktreeSha256 -Path $coreContract -ExpectedSha256 $coreContractSha256)) {
+        throw 'Pinned Core v2 contract worktree content differs from the immutable authority commit.'
     }
     return [pscustomobject]@{
         root = $fullRoot
         runnerPath = (Join-Path $fullRoot 'scripts/Invoke-StandardValidation.ps1')
         revision = $head
     }
+}
+
+function New-StandardCoreAuthoritySnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string] $GitPath,
+        [Parameter(Mandatory = $true)][string] $SourceRoot,
+        [Parameter(Mandatory = $true)][string] $OwnedRoot,
+        [Parameter(Mandatory = $true)] $AuthorityPin
+    )
+
+    $snapshotRoot = Assert-PathWithinRoot -Path (Join-Path $OwnedRoot 'authority') -Root $OwnedRoot -Context 'Core authority snapshot'
+    if (Test-Path -LiteralPath $snapshotRoot) { throw 'Core authority snapshot path already exists.' }
+    $hooksRoot = Join-Path $OwnedRoot '.empty-git-hooks'
+    [void](New-Item -ItemType Directory -Path $hooksRoot -ErrorAction Stop)
+    Assert-NoReparseAncestors -Path $hooksRoot -Context 'Core authority snapshot hooks'
+    # A local no-hardlink clone copies available Git objects, including partial
+    # clone packs, without sharing the caller's mutable worktree or object files.
+    & $GitPath -c "core.hooksPath=$hooksRoot" -c core.autocrlf=false -c core.longpaths=true clone --quiet --local --no-hardlinks --no-checkout -- $SourceRoot $snapshotRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the pinned authority Git objects in the run-owned snapshot.' }
+    & $GitPath -C $snapshotRoot config --local core.autocrlf false
+    if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion in the authority snapshot.' }
+    & $GitPath -C $snapshotRoot config --local core.longpaths true
+    if ($LASTEXITCODE -ne 0) { throw 'Could not enable long paths in the authority snapshot.' }
+    $snapshotPaths = @($AuthorityPin.files.Keys) + @('docs/standards/standard-core-validation-v2.json')
+    & $GitPath -c "core.hooksPath=$hooksRoot" -C $snapshotRoot sparse-checkout set --no-cone -- $snapshotPaths
+    if ($LASTEXITCODE -ne 0) { throw 'Could not select the pinned authority files for the run-owned snapshot.' }
+    & $GitPath -C $snapshotRoot config --local --replace-all remote.origin.url ([string]$AuthorityPin.repository)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not bind the authority snapshot origin.' }
+    & $GitPath -c "core.hooksPath=$hooksRoot" -c core.autocrlf=false -C $snapshotRoot checkout --quiet --detach ([string]$AuthorityPin.commit)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not check out the exact pinned authority commit.' }
+    return Assert-StandardCoreAuthorityCheckout -GitPath $GitPath -AuthorityRoot $snapshotRoot -AuthorityPin $AuthorityPin
 }
 
 function New-StandardCoreAdapterV2 {
@@ -1342,7 +1407,6 @@ try {
     if ($coreRunSelected) {
         if ([string]::IsNullOrWhiteSpace($AuthorityRepositoryRoot)) { throw 'Core Run requires -AuthorityRepositoryRoot for the pinned real Git authority checkout.' }
         $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $candidateAuthority
-        $centralRunnerPath = [string]$authorityCheckout.runnerPath
         $pwshPath = Get-ResolvedPowerShellPath
         $trustedRoot = if ([string]::IsNullOrWhiteSpace($TrustedToolRoot)) { Split-Path -Parent $pwshPath } else { [IO.Path]::GetFullPath($TrustedToolRoot) }
         if (-not (Test-Path -LiteralPath $trustedRoot -PathType Container)) { throw "Trusted PowerShell root is missing: $trustedRoot" }
@@ -1385,6 +1449,8 @@ try {
             [void](New-Item -ItemType Directory -Path $adapterRoot -ErrorAction Stop)
             $adapterRootCreated = $true
             Assert-NoReparseAncestors -Path $adapterRoot -Context 'Core adapter root'
+            $authoritySnapshot = New-StandardCoreAuthoritySnapshot -GitPath $gitPath -SourceRoot $authorityCheckout.root -OwnedRoot $adapterRoot -AuthorityPin $candidateAuthority
+            $centralRunnerPath = [string]$authoritySnapshot.runnerPath
             $adapter = New-StandardCoreAdapterV2 -PowerShellPath $pwshPath -TrustedToolRoot $trustedRoot -ActiveSkillIds $activeSkillIds
             Write-Utf8NoBomCreateNew -Path $adapterPath -Text (($adapter | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
             $coreRunnerArgs = @(
@@ -1400,6 +1466,10 @@ try {
                 '-TimeoutSeconds', [string]$TimeoutSeconds,
                 '-TrustedToolRoot', $trustedRoot
             )
+            Assert-NoReparseAncestors -Path $centralRunnerPath -Context 'Pinned Core runner before execution'
+            if (-not (Test-AuthorityWorktreeSha256 -Path $centralRunnerPath -ExpectedSha256 ([string]$candidateAuthority.files['scripts/Invoke-StandardValidation.ps1']))) {
+                throw 'Pinned Core runner worktree content changed before execution.'
+            }
             & $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @coreRunnerArgs
             $coreExitCode = $LASTEXITCODE
         }

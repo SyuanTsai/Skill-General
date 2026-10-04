@@ -17,7 +17,7 @@ jobs:
   canonical-validation:
     name: Skill-General Standard v1
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     outputs:
       source_conformance: ${{ steps.canonical-source-report.outputs.source_conformance }}
     # The approved authority inventory treats a literal checkout action token
@@ -264,6 +264,7 @@ jobs:
             '-ArtifactsRoot', $env:RUN_OWNED_ROOT,
             '-BaseCommit', $baseCommit,
             '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
+            '-TimeoutSeconds', '4200',
             '-OutputPath', $outputPath)
           }
           elseif ($env:VALIDATION_MODE -ceq 'core') {
@@ -276,7 +277,7 @@ jobs:
               '-BaseCommit', $baseCommit,
               '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
               '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
-              '-TimeoutSeconds', '1800',
+              '-TimeoutSeconds', '4200',
               '-OutputPath', $outputPath)
           }
           else { throw 'Protected authority mode is missing or invalid.' }

@@ -451,6 +451,77 @@ Describe 'Canonical Standard v1 validation adapter' {
         $centralIndex | Should -BeGreaterThan $resolverIndex
     }
 
+    It 'rejects hidden authority worktree edits while accepting Windows CRLF checkout text' {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $names = @('Test-PathWithinOrEqual', 'Test-PathEqual', 'Assert-PathWithinRoot',
+            'Assert-NoReparseAncestors', 'Resolve-GitRevision', 'Get-GitBlobSha256',
+            'Test-AuthorityWorktreeSha256', 'Assert-StandardCoreAuthorityCheckout',
+            'New-StandardCoreAuthoritySnapshot')
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in $names
+        } | ForEach-Object { $_.Extent.Text })
+        $parts.Count | Should -Be $names.Count
+        $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+        $authorityRoot = Join-Path $TestDrive 'authority-worktree'
+        $runnerPath = Join-Path $authorityRoot 'scripts/Invoke-StandardValidation.ps1'
+        $contractPath = Join-Path $authorityRoot 'docs/standards/standard-core-validation-v2.json'
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $runnerPath) -Force)
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $contractPath) -Force)
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'trusted'`n", $utf8)
+        [IO.File]::WriteAllText($contractPath, "{}`n", $utf8)
+        & $gitPath -C $authorityRoot init -q | Out-Null
+        & $gitPath -C $authorityRoot config core.autocrlf false
+        & $gitPath -C $authorityRoot config user.name 'Example Reviewer'
+        & $gitPath -C $authorityRoot config user.email 'reviewer@example.com'
+        & $gitPath -C $authorityRoot remote add origin 'https://example.com/authority.git'
+        & $gitPath -C $authorityRoot add -- scripts/Invoke-StandardValidation.ps1 docs/standards/standard-core-validation-v2.json
+        & $gitPath -C $authorityRoot commit -qm 'Test authority snapshot'
+        $head = ([string](& $gitPath -C $authorityRoot rev-parse HEAD)).Trim()
+        $runnerSha = (Get-FileHash -LiteralPath $runnerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $pin = [pscustomobject]@{
+            commit = $head
+            repository = 'https://example.com/authority.git'
+            files = [ordered]@{'scripts/Invoke-StandardValidation.ps1' = $runnerSha}
+        }
+        $approved = & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin
+        $approved.revision | Should -Be $head
+        $ownedRoot = Join-Path $TestDrive 'snapshot-owner'
+        [void](New-Item -ItemType Directory -Path $ownedRoot)
+        $snapshot = & $verifier { param($g, $root, $owned, $p) New-StandardCoreAuthoritySnapshot -GitPath $g -SourceRoot $root -OwnedRoot $owned -AuthorityPin $p } $gitPath $authorityRoot $ownedRoot $pin
+        $snapshot.revision | Should -Be $head
+
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'untrusted'`n", $utf8)
+        & $gitPath -C $authorityRoot update-index --assume-unchanged -- scripts/Invoke-StandardValidation.ps1
+        @(& $gitPath -C $authorityRoot status --porcelain=v1 --untracked-files=all).Count | Should -Be 0
+        [IO.File]::ReadAllText($snapshot.runnerPath, $utf8) | Should -Be "Write-Output 'trusted'`n"
+        (& $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $snapshot.root $pin).revision |
+            Should -Be $head
+        { & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin } |
+            Should -Throw '*Pinned authority file identity mismatch*'
+
+        & $gitPath -C $authorityRoot update-index --no-assume-unchanged -- scripts/Invoke-StandardValidation.ps1
+        [IO.File]::WriteAllText($runnerPath, "Write-Output 'trusted'`n", $utf8)
+        [IO.File]::WriteAllText($contractPath, "{`"changed`":true}`n", $utf8)
+        & $gitPath -C $authorityRoot update-index --assume-unchanged -- docs/standards/standard-core-validation-v2.json
+        @(& $gitPath -C $authorityRoot status --porcelain=v1 --untracked-files=all).Count | Should -Be 0
+        { & $verifier { param($g, $root, $p) Assert-StandardCoreAuthorityCheckout -GitPath $g -AuthorityRoot $root -AuthorityPin $p } $gitPath $authorityRoot $pin } |
+            Should -Throw '*Pinned Core v2 contract worktree content differs*'
+
+        $crlfPath = Join-Path $TestDrive 'crlf-checkout.ps1'
+        [IO.File]::WriteAllText($crlfPath, "Write-Output 'a'`r`nWrite-Output 'b'`r`n", $utf8)
+        $lfBytes = $utf8.GetBytes("Write-Output 'a'`nWrite-Output 'b'`n")
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { $lfSha = ([BitConverter]::ToString($hasher.ComputeHash($lfBytes)) -replace '-', '').ToLowerInvariant() }
+        finally { $hasher.Dispose() }
+        (& $verifier { param($path, $sha) Test-AuthorityWorktreeSha256 -Path $path -ExpectedSha256 $sha } $crlfPath $lfSha) |
+            Should -BeTrue
+    }
+
     It 'passes resolver named arguments through the trusted PowerShell host' {
         $script:Validator | Should -Match '& \$PowerShellPath -NoProfile -NonInteractive -File \$ResolverPath @Arguments'
         $script:Validator | Should -Match 'Invoke-Resolver -PowerShellPath \$pwshPath'
