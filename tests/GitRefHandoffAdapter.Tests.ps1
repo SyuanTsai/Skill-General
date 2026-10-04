@@ -10,6 +10,8 @@ Describe 'Optional Git-ref Task Handoff adapter' {
         $script:PriorBranchCreationActorDefault = $PSDefaultParameterValues['New-GitHandoffBranch:Actor']
         $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = 'synthetic-test-writer'
         $PSDefaultParameterValues['New-GitHandoffBranch:Actor'] = 'synthetic-test-writer'
+        $script:ArchiveCandidateSeed = $null
+        $script:ArchiveCandidateSeedRoot = $null
 
         function New-WriterFixture {
             param([string] $Root, [string] $WriterId, [string] $AuthorityScope='synthetic-scope')
@@ -143,7 +145,7 @@ exit 0
             'Work State' = 'Running'
         }
 
-        function New-InactivityArchiveCandidateFixture {
+        function New-InactivityArchiveCandidateSeed {
             param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$TaskKey)
             [void](New-Item -ItemType Directory -Path $Root -Force)
             $adapter = New-WriterFixture -Root $Root -WriterId 'archive-cursor-writer' -AuthorityScope 'synthetic-archive-cursor'
@@ -216,6 +218,58 @@ exit 0
             }
         }
 
+        function New-InactivityArchiveCandidateFixture {
+            param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$ScenarioId)
+            # The eight cursor scenarios start from identical persisted refs. Build that
+            # state once, then give each scenario a separate real bare remote and writer.
+            if ($null -eq $script:ArchiveCandidateSeed) {
+                $script:ArchiveCandidateSeedRoot = Join-Path ([IO.Path]::GetTempPath()) `
+                    ('s2s-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+                $script:ArchiveCandidateSeed = New-InactivityArchiveCandidateSeed `
+                    -Root $script:ArchiveCandidateSeedRoot -TaskKey 'demo:b2-archive-seed'
+            }
+            [void](New-Item -ItemType Directory -Path $Root -ErrorAction Stop)
+            $remote = Join-Path $Root 'remote.git'
+            & git clone --bare --quiet (Join-Path $script:ArchiveCandidateSeedRoot 'remote.git') $remote 2>$null
+            if ($LASTEXITCODE -ne 0) { throw "Could not clone isolated archive fixture for $ScenarioId." }
+            $taskKey = $script:ArchiveCandidateSeed.TaskKey
+            $branchId = $script:ArchiveCandidateSeed.BranchId
+            $adapter = New-WriterFixture -Root $Root -WriterId 'archive-cursor-writer' `
+                -AuthorityScope 'synthetic-archive-cursor'
+            $common = Get-GitHandoffCommon -Adapter $adapter -TaskKey $taskKey
+            $branch = Get-GitHandoffBranch -Adapter $adapter -TaskKey $taskKey -BranchId $branchId
+            $proof = Get-GitHandoffDecisionBranchFinalizationProof -Adapter $adapter -TaskKey $taskKey `
+                -BranchId $branchId -DecisionCommonRevision $script:ArchiveCandidateSeed.DecisionCommonRevision `
+                -ExpectedCommonRevision $common.Revision -ExpectedBranchRevision $branch.Revision -ExpectedOutcome Selected
+            $now = [DateTimeOffset]::UtcNow.AddDays(8)
+            $commonRecord = [ordered]@{
+                'Authority Scope'=$common.AuthorityScope; 'Task Key'=$common.TaskKey
+                Revision=$common.Revision
+                'Last Activity At'=$common.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+            }
+            foreach ($name in $common.Fields.Keys) { $commonRecord[$name] = $common.Fields[$name] }
+            $commonRecord['Active Branches'] = @($common.ActiveBranches)
+            $branchRecord = [ordered]@{
+                'Authority Scope'=$branch.AuthorityScope; 'Task Key'=$branch.TaskKey
+                'Branch ID'=$branch.BranchId; 'Fork Point'=$branch.ForkPoint
+                'Continuation Generation'=$branch.ContinuationGeneration
+                Revision=$branch.Revision
+                'Last Activity At'=$branch.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+            }
+            foreach ($name in $branch.Fields.Keys) { $branchRecord[$name] = $branch.Fields[$name] }
+            $selection = Get-HandoffArchiveSelection -CommonRecords @($commonRecord) `
+                -BranchRecords @($branchRecord) -Clock { $now }.GetNewClosure() -InventoryComplete $true `
+                -VerifiedFinalizationProofs @($proof)
+            $candidate = @($selection.Selected | Where-Object { $_.Kind -ceq 'Branch' -and $_.BranchId -ceq $branchId })
+            if ($selection.Durable -or $candidate.Count -ne 1) {
+                throw "The cloned true-Git archive fixture did not produce one non-durable candidate for $ScenarioId."
+            }
+            return [pscustomobject]@{
+                Adapter=$adapter;TaskKey=$taskKey;BranchId=$branchId;Candidate=$candidate[0]
+                Common=$common;Branch=$branch;DecisionCommonRevision=$script:ArchiveCandidateSeed.DecisionCommonRevision;Proof=$proof
+            }
+        }
+
         function Add-SelectiveArchiveIndexRejectHook {
             param([Parameter(Mandatory)][string]$RemoteRoot)
             $hook = Join-Path $RemoteRoot 'hooks/pre-receive'
@@ -243,6 +297,15 @@ exit 0
     }
 
     AfterAll {
+        if (-not [string]::IsNullOrWhiteSpace($script:ArchiveCandidateSeedRoot)) {
+            $ownedSeedRoot = [IO.Path]::GetFullPath($script:ArchiveCandidateSeedRoot)
+            $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            if ([IO.Path]::GetDirectoryName($ownedSeedRoot) -cne $tempRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) -or
+                [IO.Path]::GetFileName($ownedSeedRoot) -cnotmatch '^s2s-[0-9a-f]{8}$') {
+                throw 'Archive fixture seed root is outside the run-owned temporary namespace.'
+            }
+            if (Test-Path -LiteralPath $ownedSeedRoot) { Remove-Item -LiteralPath $ownedSeedRoot -Recurse -Force }
+        }
         if ($null -eq $script:PriorCommonCreationActorDefault) { $PSDefaultParameterValues.Remove('New-GitHandoffCommon:Actor') }
         else { $PSDefaultParameterValues['New-GitHandoffCommon:Actor'] = $script:PriorCommonCreationActorDefault }
         if ($null -eq $script:PriorBranchCreationActorDefault) { $PSDefaultParameterValues.Remove('New-GitHandoffBranch:Actor') }
@@ -4214,7 +4277,7 @@ exit 0
     It 'InterT21_rejects_an_inactivity_archive_after_selected_branch_activity_changes' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-branch-cursor'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'branch-cursor'
             $candidate = $fixture.Candidate
             $before = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
             Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind branch -TaskKey $fixture.TaskKey `
@@ -4246,7 +4309,7 @@ exit 0
     It 'InterT22_rejects_an_inactivity_archive_after_explicit_continuation_changes_generation' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-generation-cursor'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'generation-cursor'
             $candidate = $fixture.Candidate
             $continued = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
                 -BranchId $fixture.BranchId -Lifecycle Active -ExplicitContinuation `
@@ -4275,7 +4338,7 @@ exit 0
     It 'InterT23_rejects_an_inactivity_archive_after_the_selected_common_cursor_or_guard_changes' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-common-cursor'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'common-cursor'
             $candidate = $fixture.Candidate
             $common = Get-GitHandoffCommon -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey
             Set-GitHandoffFields -Adapter $fixture.Adapter -RecordKind common -TaskKey $fixture.TaskKey `
@@ -4303,7 +4366,7 @@ exit 0
     It 'InterT24_archives_a_matching_inactivity_candidate_and_reads_back_lifecycle_generation_and_index' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-matching-cursor'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'matching-cursor'
             $candidate = $fixture.Candidate
             $before = Get-GitHandoffBranch -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey -BranchId $fixture.BranchId
             $beforeActivity = $before.LastActivityAt.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
@@ -4340,7 +4403,7 @@ exit 0
     It 'InterT25_reconciles_a_failed_selected_branch_index_write_with_the_same_archive_cursor_and_operation_id' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-index-retry'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'index-retry'
             $candidate = $fixture.Candidate
             $remote = Join-Path $root 'remote.git'
             Add-SelectiveArchiveIndexRejectHook -RemoteRoot $remote
@@ -4387,7 +4450,7 @@ exit 0
     It 'InterT26_rejects_index_retry_after_archived_branch_revision_advances' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-stale-index-retry'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'stale-index-retry'
             $candidate = $fixture.Candidate
             $remote = Join-Path $root 'remote.git'
             Add-SelectiveArchiveIndexRejectHook -RemoteRoot $remote
@@ -4437,7 +4500,7 @@ exit 0
     It 'InterT27_repairs_archive_event_before_rejecting_a_stale_index_retry' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-event-before-stale-index'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'event-before-stale-index'
             $candidate = $fixture.Candidate
             $remote = Join-Path $root 'remote.git'
             Add-SelectiveRejectHook -RemoteRoot $remote
@@ -4495,7 +4558,7 @@ exit 0
     It 'InterT27b_allows_an_exact_archive_retry_when_the_newer_index_is_already_correct' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('s217b2-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
         try {
-            $fixture = New-InactivityArchiveCandidateFixture -Root $root -TaskKey 'demo:b2-newer-correct-index'
+            $fixture = New-InactivityArchiveCandidateFixture -Root $root -ScenarioId 'newer-correct-index'
             $candidate = $fixture.Candidate
             $archived = Set-GitHandoffBranchLifecycle -Adapter $fixture.Adapter -TaskKey $fixture.TaskKey `
                 -BranchId $fixture.BranchId -Lifecycle Archived -OperationId 'b2-newer-correct-archive' `
