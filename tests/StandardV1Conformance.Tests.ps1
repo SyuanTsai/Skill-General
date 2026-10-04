@@ -107,6 +107,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflowPath = Join-Path $script:RepositoryRoot '.github/workflows/validate.yml'
         $workflow = Get-Content -LiteralPath $workflowPath -Raw
         $workflow | Should -Match 'scripts/Validate\.ps1'
+        $scriptPathPattern = '(?i)(?<![A-Za-z0-9_.-])(?:\.[/\\]|[A-Za-z0-9_.-]+[/\\])+[A-Za-z0-9_.-]+\.(?:ps1|psm1|py|js|sh|cmd|bat|exe)(?![A-Za-z0-9_.-])'
+        @([regex]::Matches($workflow, $scriptPathPattern) | Where-Object { $_.Value -notmatch '(?i)(?:^|[/\\])Validate\.ps1$' }).Count | Should -Be 0
         $workflow | Should -Match 'persist-credentials:\s*false'
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
@@ -115,7 +117,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == \x27legacy\x27 \}\}'
         $workflow | Should -Match 'ref: ea1d368ac7b36f838ce4c3af363972c90fa12930'
         $workflow | Should -Match 'if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == \x27core\x27 \}\}'
-        $workflow | Should -Match 'Install-PSResource -Name Pester -Version \x276\.2\.0\x27'
+        $workflow | Should -Match 'Install-PSResource -Name Pester -Version \x27{1,2}6\.2\.0\x27{1,2}'
         $workflow | Should -Match "node-version: '24'"
         $workflow | Should -Match 'Get-Command npm\.cmd -CommandType Application'
         $workflow | Should -Match 'APPROVED_NPM_PATH'

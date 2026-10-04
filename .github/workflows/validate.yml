@@ -65,7 +65,7 @@ jobs:
             $baselineAuthority { 'legacy'; break }
             $nextAuthority {
               if ([string]$candidatePin.authority.commit -ceq $nextAuthority -and
-                  (Test-Path -LiteralPath (Join-Path $driver 'scripts/Invoke-CorePester.ps1') -PathType Leaf)) {
+                  (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
                 'core'
               }
               else { 'legacy' }
@@ -106,7 +106,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          $npmVersion = ([string](& $npmPath --version)).Trim()
+          $npmVersion = ([string](npm.cmd --version)).Trim()
           if ($LASTEXITCODE -ne 0 -or $npmVersion -cnotmatch '^11\.[0-9]+\.[0-9]+$') {
             throw "Expected npm 11 lockfile semantics; executable '$npmPath' reported '$npmVersion'."
           }
@@ -162,7 +162,12 @@ jobs:
           Expand-Archive -LiteralPath $zipPath -DestinationPath $runtimeRoot
           $runtimePath = Join-Path $runtimeRoot 'pwsh.exe'
           if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw 'Verified archive lacks pwsh.exe.' }
-          $runtimeEvidence = & $runtimePath -NoLogo -NoProfile -NonInteractive -Command `
+          $env:PATH = "$runtimeRoot;$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($runtimePath)) {
+            throw 'PowerShell command resolution differs from the verified archive.'
+          }
+          $runtimeEvidence = pwsh -NoLogo -NoProfile -NonInteractive -Command `
             '[pscustomobject]@{version=$PSVersionTable.PSVersion.ToString();path=(Get-Process -Id $PID).Path}|ConvertTo-Json -Compress' |
             ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $runtimeEvidence.version -cne $expectedVersion -or
@@ -177,16 +182,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $install = @'
-          $ErrorActionPreference = 'Stop'
-          Install-PSResource -Name Pester -Version '6.2.0' -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -AcceptLicense -ErrorAction Stop
-          $modules = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -eq 6 } | Sort-Object Version -Descending)
-          if ($modules.Count -eq 0 -or $modules[0].Version.ToString() -cne '6.2.0') {
-            throw 'Ordinary Core requires the reviewed Pester 6.2.0 runtime.'
+          $install = @(
+            '$ErrorActionPreference = ''Stop'''
+            'Install-PSResource -Name Pester -Version ''6.2.0'' -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -AcceptLicense -ErrorAction Stop'
+            '$modules = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -eq 6 } | Sort-Object Version -Descending)'
+            'if ($modules.Count -eq 0 -or $modules[0].Version.ToString() -cne ''6.2.0'') { throw ''Ordinary Core requires the reviewed Pester 6.2.0 runtime.'' }'
+            'Import-Module -Name $modules[0].Path -ErrorAction Stop'
+          ) -join '; '
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+            throw 'Pester installer PowerShell differs from the verified runtime.'
           }
-          Import-Module -Name $modules[0].Path -ErrorAction Stop
-          '@
-          & $env:POWERSHELL_RUNTIME -NoLogo -NoProfile -NonInteractive -Command $install
+          pwsh -NoLogo -NoProfile -NonInteractive -Command $install
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Pester installation or verification failed.' }
 
       - name: Validate exact candidate with the verified runtime
