@@ -1074,7 +1074,15 @@ try {
             $loaded = Get-Module Pester | Select-Object -First 1
             if ($null -eq $loaded -or [string]$loaded.Version -cne [string]$toolchain.pesterVersion) { throw 'The resolved Pester module identity was not loaded.' }
             $testRoot = Join-Path $candidateRoot 'tests'
-            $progressPath = Join-Path (Get-Location) ('repository-pester-' + [guid]::NewGuid().ToString('N') + '.log')
+            # The run-owned Core snapshot is unique. A stable name lets the
+            # workflow recover the last completed case after a forced timeout.
+            $progressPath = Join-Path (Get-Location) 'repository-pester-progress.log'
+            if (Test-Path -LiteralPath $progressPath) { throw 'Pester progress path already exists in the owned snapshot.' }
+            $progressTail = [Collections.Generic.Queue[string]]::new()
+            $progressLineCount = 0
+            $completedCaseCount = 0
+            $liveChars = 0
+            $liveLimit = 120000
             function Write-PesterProgressTail {
                 param([string] $Path)
                 if (Test-Path -LiteralPath $Path -PathType Leaf) {
@@ -1089,9 +1097,33 @@ try {
                 $previousErrorActionPreference = $ErrorActionPreference
                 try {
                     # Tests exercise non-zero native children. Keep stderr non-terminating while
-                    # Pester evaluates them, and send detailed case output to an owned file.
+                    # Pester evaluates them; stream bounded progress without changing JSON stdout.
                     $ErrorActionPreference = 'Continue'
-                    $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6> $progressPath
+                    $result = Invoke-Pester -Path $testRoot -Output Detailed -PassThru 3>$null 6>&1 |
+                        ForEach-Object {
+                            if ($_ -is [Management.Automation.InformationRecord]) {
+                                foreach ($rawLine in @(([string]$_.MessageData) -split '\r?\n')) {
+                                    $line = [string]$rawLine
+                                    if ($line.Length -eq 0) { continue }
+                                    if ($line.Length -gt 300) { $line = $line.Substring(0, 300) + '[truncated]' }
+                                    $progressLineCount++
+                                    if ($line -match '^\s*\[[+-]\]') { $completedCaseCount++ }
+                                    $entry = "completed=$completedCaseCount line=$progressLineCount $line"
+                                    $progressTail.Enqueue($entry)
+                                    if ($progressTail.Count -gt 24) { [void]$progressTail.Dequeue() }
+                                    [IO.File]::WriteAllLines($progressPath, $progressTail.ToArray(), [Text.UTF8Encoding]::new($false))
+                                    if ($liveChars + $entry.Length -le $liveLimit) {
+                                        [Console]::Error.WriteLine("Pester progress: $entry")
+                                        $liveChars += $entry.Length
+                                    }
+                                    elseif ($liveChars -le $liveLimit) {
+                                        [Console]::Error.WriteLine('Pester live progress cap reached; run-owned tail continues.')
+                                        $liveChars = $liveLimit + 1
+                                    }
+                                }
+                            }
+                            else { $_ }
+                        }
                 }
                 catch {
                     [Console]::Error.WriteLine('Pester counts: result=exception')

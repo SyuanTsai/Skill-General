@@ -511,7 +511,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
             $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
             $seen = @(& $diagnosticGate 6>&1)
             ($seen -join "`n") | Should -Match 'Pester diagnostic: Pester test failed: example'
-            ($seen -join "`n") | Should -Match '\[truncated\]'
+            ($seen -join "`n") | Should -Match '\[middle truncated\]'
             ($seen -join "`n").Length | Should -BeLessThan 12200
             { & $failureGate 6>$null } | Should -Throw 'Canonical validator exited 1.'
 
@@ -527,6 +527,99 @@ Describe 'Skill-General Standard v1 reference implementation' {
             $seen = @(& $diagnosticGate 6>&1)
             ($seen -join "`n") | Should -Not -Match 'Pester diagnostic:'
             { & $failureGate 6>$null } | Should -Throw 'Canonical validator exited 1.'
+
+            $report.stages[0].events[0].outputPath = $eventPath
+            $report.stages[0].events[0] | Add-Member -NotePropertyName status -NotePropertyValue 'timeout'
+            $childWorkingRoot = Join-Path $ownedRoot ('child-work\' + [guid]::NewGuid().ToString('N'))
+            $childEventRoot = Join-Path $childWorkingRoot ($eventId.Replace('-', ''))
+            New-Item -ItemType Directory -Path $childEventRoot -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $childEventRoot 'repository-pester-progress.log'),
+                'completed=71 line=74 last-known-case 41ms', (New-Object Text.UTF8Encoding($false)))
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            (@(& $diagnosticGate 6>&1) -join "`n") | Should -Match 'Pester progress:.*last-known-case'
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+        }
+    }
+
+    # Scenario: the canonical Core runner fails after recording the Pester check and its captured stderr.
+    # Purpose: surface bounded exact-head Core diagnostics without reading an external or altered stream.
+    It 'UnitT19d_ReportsOnlyRunOwnedExactHeadCorePesterFailureDiagnostics' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<step>.*?)(?=^      - name: Clean only this run''s temporary files)')
+        $step.Success | Should -BeTrue
+        $run = [regex]::Match($step.Groups['step'].Value, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)')
+        $run.Success | Should -BeTrue
+        $runScript = (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object { $_.Substring(10) }) -join "`n")
+        $gateStart = $runScript.IndexOf('$validatorExitCode = [int]$LASTEXITCODE')
+        $gateEnd = $runScript.IndexOf('if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf))', $gateStart)
+        ($gateStart -ge 0 -and $gateEnd -gt $gateStart) | Should -BeTrue
+        $failureGateText = $runScript.Substring($gateStart, $gateEnd - $gateStart)
+        $throwAt = $failureGateText.IndexOf('throw "Canonical validator exited $validatorExitCode."')
+        ($throwAt -gt 0) | Should -BeTrue
+        $diagnosticGate = [scriptblock]::Create($failureGateText.Substring(0, $throwAt) + "}`n")
+
+        $ownedRoot = Join-Path $TestDrive 'core-owned'
+        $artifactsRoot = Join-Path $ownedRoot 'artifacts'
+        $runRoot = Join-Path $artifactsRoot 'runs\test-run'
+        $rawRoot = Join-Path $runRoot 'raw'
+        $snapshotRoot = Join-Path $runRoot 'candidate'
+        New-Item -ItemType Directory -Path $rawRoot -Force | Out-Null
+        $stderrPath = Join-Path $rawRoot '002-repository-pester.stderr.txt'
+        $stderrText = 'Pester counts: total=264 passed=263 skipped=0 failed=1' + "`n" + ('x' * 12500)
+        [IO.File]::WriteAllText($stderrPath, $stderrText, (New-Object Text.UTF8Encoding($false)))
+        $stderrHash = (Get-FileHash -LiteralPath $stderrPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
+        $expectedSource = 'a' * 40
+        $report = [pscustomobject]@{
+            schemaVersion = 2
+            evidence = 'standard-core-validation-evidence-v2'
+            candidate = [pscustomobject]@{ sourceRevision = $expectedSource }
+            artifacts = [pscustomobject]@{ root = $artifactsRoot; outputPath = $outputPath; runRoot = $runRoot; snapshotRoot = $snapshotRoot }
+            checks = @(
+                [pscustomobject]@{ id = 'repository-general'; kind = 'general' },
+                [pscustomobject]@{ id = 'repository-pester'; kind = 'pester'; stderrPath = $stderrPath; stderrSha256 = $stderrHash }
+            )
+        }
+        $saved = @{
+            RUN_OWNED_ROOT = $env:RUN_OWNED_ROOT
+            EXPECTED_SOURCE_SHA = $env:EXPECTED_SOURCE_SHA
+            VALIDATION_MODE = $env:VALIDATION_MODE
+        }
+        $env:RUN_OWNED_ROOT = $ownedRoot
+        $env:EXPECTED_SOURCE_SHA = $expectedSource
+        $env:VALIDATION_MODE = 'core'
+        try {
+            $LASTEXITCODE = 1
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            $seen = @(& $diagnosticGate 6>&1)
+            ($seen -join "`n") | Should -Match 'Pester diagnostic: Pester counts: total=264'
+            ($seen -join "`n") | Should -Match '\[middle truncated\]'
+            ($seen -join "`n").Length | Should -BeLessThan 12200
+
+            $report.candidate.sourceRevision = 'b' * 40
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            (@(& $diagnosticGate 6>&1) -join "`n") | Should -Not -Match 'Pester diagnostic:'
+            $report.candidate.sourceRevision = $expectedSource
+
+            $report.checks[1].stderrSha256 = '0' * 64
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            (@(& $diagnosticGate 6>&1) -join "`n") | Should -Not -Match 'Pester diagnostic:'
+            $report.checks[1].stderrSha256 = $stderrHash
+
+            $report.checks[1].stderrPath = Join-Path $TestDrive 'outside.txt'
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            (@(& $diagnosticGate 6>&1) -join "`n") | Should -Not -Match 'Pester diagnostic:'
+
+            $report.checks[1].stderrPath = $stderrPath
+            $report.checks[1] | Add-Member -NotePropertyName status -NotePropertyValue 'timeout'
+            New-Item -ItemType Directory -Path $snapshotRoot -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $snapshotRoot 'repository-pester-progress.log'),
+                'Running tests from fixture.Tests.ps1' + "`n" + '  [+] last-completed-case 35ms',
+                (New-Object Text.UTF8Encoding($false)))
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            (@(& $diagnosticGate 6>&1) -join "`n") | Should -Match 'Pester progress:.*last-completed-case'
         }
         finally {
             foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }

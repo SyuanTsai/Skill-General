@@ -567,7 +567,10 @@ Describe 'Canonical Standard v1 validation adapter' {
     }
 
     It 'keeps repository Pester child output JSON-only' {
-        $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output Detailed -PassThru 3>\$null 6> \$progressPath'
+        $script:Validator | Should -Match '\$result = Invoke-Pester -Path \$testRoot -Output Detailed -PassThru 3>\$null 6>&1 \|'
+        $script:Validator | Should -Match 'if \(\$_ -is \[Management\.Automation\.InformationRecord\]\)'
+        $script:Validator | Should -Match '\[IO\.File\]::WriteAllLines\(\$progressPath, \$progressTail\.ToArray\(\)'
+        $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester progress: \$entry"\)'
         $script:Validator | Should -Match 'Pester counts: total='
         $script:Validator | Should -Match 'Pester progress:'
         $script:Validator | Should -Match '\[Console\]::Error\.WriteLine\("Pester container failed:'

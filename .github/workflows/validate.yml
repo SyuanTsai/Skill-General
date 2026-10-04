@@ -314,14 +314,114 @@ jobs:
                         [string]$rawEvent.stageId -cne 'repository-tests' -or
                         [string]$rawEvent.toolId -cne 'repository-test-pester') { continue }
                     $diagnostic = [string]$rawEvent.stderr
-                    if ($diagnostic.Length -gt 12000) { $diagnostic = $diagnostic.Substring(0, 12000) + '[truncated]' }
+                    if ($diagnostic.Length -gt 12000) {
+                      $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
+                    }
                     foreach ($line in @($diagnostic -split '\r?\n')) {
                       if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                    }
+                    $eventIdCompact = ([string]$event.eventId).Replace('-', '')
+                    if ($event.status -ceq 'timeout' -and $eventIdCompact -cmatch '^[0-9a-f]{32}$') {
+                      $childWorkRoot = Join-Path $ownedRoot 'child-work'
+                      if (Test-Path -LiteralPath $childWorkRoot -PathType Container) {
+                        $childRoots = @(Get-ChildItem -LiteralPath $childWorkRoot -Directory -Force -ErrorAction Stop)
+                        if ($childRoots.Count -eq 1 -and $childRoots[0].Name -cmatch '^[0-9a-f]{32}$') {
+                          $progressPath = Join-Path (Join-Path $childRoots[0].FullName $eventIdCompact) 'repository-pester-progress.log'
+                          if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
+                            $cursor = $progressPath
+                            $safePath = $true
+                            while ($cursor.Length -ge $ownedRoot.Length) {
+                              if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                                $safePath = $false
+                                break
+                              }
+                              if ($cursor -ieq $ownedRoot) { break }
+                              $cursor = Split-Path -Parent $cursor
+                            }
+                            if ($safePath -and $cursor -ieq $ownedRoot) {
+                              foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
+                                $boundedLine = [string]$line
+                                if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                                if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
               }
               catch { Write-Output 'Run-owned Pester diagnostic could not be read.' }
+            }
+            elseif ($env:VALIDATION_MODE -ceq 'core' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+              try {
+                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $coreRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $runRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.runRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                $checks = @($failedReport.checks)
+                if ($failedReport.schemaVersion -eq 2 -and
+                    [string]$failedReport.evidence -ceq 'standard-core-validation-evidence-v2' -and
+                    [string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
+                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.root) -ieq $coreRoot -and
+                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.outputPath) -ieq [IO.Path]::GetFullPath($outputPath) -and
+                    $runRoot.StartsWith($coreRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+                    $checks.Count -eq 2 -and $checks[1].id -ceq 'repository-pester' -and $checks[1].kind -ceq 'pester') {
+                  $stderrPath = [IO.Path]::GetFullPath([string]$checks[1].stderrPath)
+                  $expectedRawRoot = Join-Path $runRoot 'raw'
+                  if ([IO.Path]::GetDirectoryName($stderrPath) -ieq $expectedRawRoot -and
+                      [IO.Path]::GetFileName($stderrPath) -ceq '002-repository-pester.stderr.txt' -and
+                      (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
+                    $cursor = $stderrPath
+                    $safePath = $true
+                    while ($cursor.Length -ge $ownedRoot.Length) {
+                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        $safePath = $false
+                        break
+                      }
+                      if ($cursor -ieq $ownedRoot) { break }
+                      $cursor = Split-Path -Parent $cursor
+                    }
+                    if ($safePath -and $cursor -ieq $ownedRoot -and
+                        (Get-FileHash -LiteralPath $stderrPath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq [string]$checks[1].stderrSha256) {
+                      $diagnostic = Get-Content -LiteralPath $stderrPath -Raw -Encoding utf8
+                      if ($diagnostic.Length -gt 12000) {
+                        $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
+                      }
+                      foreach ($line in @($diagnostic -split '\r?\n')) {
+                        if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                      }
+                    }
+                  }
+                  if ($checks[1].status -ceq 'timeout') {
+                    $snapshotRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.snapshotRoot)
+                    if ($snapshotRoot -ieq (Join-Path $runRoot 'candidate')) {
+                      $progressPath = Join-Path $snapshotRoot 'repository-pester-progress.log'
+                      if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
+                        $cursor = $progressPath
+                        $safePath = $true
+                        while ($cursor.Length -ge $ownedRoot.Length) {
+                          if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                            $safePath = $false
+                            break
+                          }
+                          if ($cursor -ieq $ownedRoot) { break }
+                          $cursor = Split-Path -Parent $cursor
+                        }
+                        if ($safePath -and $cursor -ieq $ownedRoot) {
+                          foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
+                            $boundedLine = [string]$line
+                            if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                            if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              catch { Write-Output 'Run-owned Core Pester diagnostic could not be read.' }
             }
             throw "Canonical validator exited $validatorExitCode."
           }

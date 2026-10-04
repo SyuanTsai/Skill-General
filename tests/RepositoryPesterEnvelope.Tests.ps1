@@ -55,6 +55,11 @@ function Invoke-Pester {
                 Write-Information '  [+] fixture.last_completed 12ms' -InformationAction Continue
             }
         }
+        'slow-pass' {
+            Write-Information 'Running tests from fixture.Tests.ps1' -InformationAction Continue
+            Start-Sleep -Seconds 4
+            $result.TotalCount = 1; $result.PassedCount = 1
+        }
         default { throw 'Unknown fake Pester scenario.' }
     }
     return [pscustomobject]$result
@@ -103,6 +108,44 @@ Export-ModuleMember -Function Invoke-Pester
         $json.testResult.passed | Should -Be 2
         $json.testResult.skipped | Should -Be 1
         $json.testResult.failed | Should -Be 0
+    }
+
+    # Scenario: Pester reports a file start and continues running for several seconds.
+    # Purpose: prove progress reaches stderr before completion while stdout remains one typed JSON record.
+    It 'InterT15_ streams bounded progress before Pester completes' {
+        $env:TEST_PESTER_SCENARIO = 'slow-pass'
+        $stdoutPath = Join-Path $script:fixtureRoot 'slow-pass.out'
+        $stderrPath = Join-Path $script:fixtureRoot 'slow-pass.err'
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $script:runnerPath,
+            '-Mode', 'repository-pester', '-ToolchainPath', $script:toolchainPath,
+            '-ToolchainSha256', $script:toolchainSha256)
+        $process = Start-Process -FilePath $script:pwsh -ArgumentList $arguments -PassThru `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
+        try {
+            $deadline = (Get-Date).AddSeconds(10)
+            $seenBeforeExit = $false
+            while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
+                if ((Test-Path -LiteralPath $stderrPath -PathType Leaf) -and
+                    (Get-Content -LiteralPath $stderrPath -Raw) -match 'Pester progress:.*Running tests from fixture\.Tests\.ps1') {
+                    $seenBeforeExit = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+            $seenBeforeExit | Should -BeTrue
+            $process.WaitForExit(10000) | Should -BeTrue
+            $process.ExitCode | Should -Be 0
+            $output = @(Get-Content -LiteralPath $stdoutPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $output.Count | Should -Be 1
+            ($output[0] | ConvertFrom-Json).testResult.status | Should -BeExactly 'passed'
+        }
+        finally {
+            if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force
+                [void]$process.WaitForExit(5000)
+            }
+            $process.Dispose()
+        }
     }
 
     # Scenario: Pester selects no tests; the child runner must reject the result.

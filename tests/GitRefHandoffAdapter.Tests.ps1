@@ -296,7 +296,50 @@ exit 0
         }
     }
 
+    # The protected legacy driver runs the candidate tests with Pester -Output None.
+    # Emit bounded timing markers through native stderr so a failed child event can
+    # identify the last completed case without changing Pester's JSON stdout contract.
+    BeforeEach {
+        if ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests' -and
+            $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
+            $script:DiagnosticCaseStarted = [Diagnostics.Stopwatch]::GetTimestamp()
+            $script:DiagnosticCaseName = [string]$____Pester.CurrentTest.Name
+            if ($script:DiagnosticCaseName.Length -gt 120) {
+                $script:DiagnosticCaseName = $script:DiagnosticCaseName.Substring(0, 120)
+            }
+            $script:DiagnosticCaseNumber = [int]$script:DiagnosticCaseNumber + 1
+            [Console]::Error.WriteLine(('Pester case start {0}: {1}' -f
+                $script:DiagnosticCaseNumber, $script:DiagnosticCaseName))
+        }
+    }
+
+    AfterEach {
+        if ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests' -and
+            $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
+            $elapsed = [Diagnostics.Stopwatch]::GetElapsedTime($script:DiagnosticCaseStarted)
+            $script:DiagnosticCaseCompleted = [int]$script:DiagnosticCaseCompleted + 1
+            [Console]::Error.WriteLine(('Pester case end {0}: {1}; elapsedSeconds={2:F3}; completed={3}' -f
+                $script:DiagnosticCaseNumber, $script:DiagnosticCaseName,
+                $elapsed.TotalSeconds, $script:DiagnosticCaseCompleted))
+        }
+    }
+
     AfterAll {
+        if ($env:STANDARD_VALIDATION_STAGE_ID -ceq 'repository-tests' -and
+            $env:STANDARD_VALIDATION_TOOL_ID -ceq 'repository-test-pester') {
+            $failedTests = @($____Pester.CurrentBlock.Tests | Where-Object { [string]$_.Result -ceq 'Failed' })
+            [Console]::Error.WriteLine(('Pester GitRef file end: started={0}; completed={1}; failed={2}' -f
+                [int]$script:DiagnosticCaseNumber, [int]$script:DiagnosticCaseCompleted, $failedTests.Count))
+            foreach ($failedTest in @($failedTests | Select-Object -First 8)) {
+                $failedName = [string]$failedTest.Name
+                if ($failedName.Length -gt 120) { $failedName = $failedName.Substring(0, 120) }
+                $firstError = @($failedTest.ErrorRecord | Select-Object -First 1)[0]
+                $failure = [string]$firstError
+                $failure = ($failure -replace '[\r\n]+', ' ').Trim()
+                if ($failure.Length -gt 200) { $failure = $failure.Substring(0, 200) }
+                [Console]::Error.WriteLine(('Pester GitRef failed case: {0}; error={1}' -f $failedName, $failure))
+            }
+        }
         if (-not [string]::IsNullOrWhiteSpace($script:ArchiveCandidateSeedRoot)) {
             $ownedSeedRoot = [IO.Path]::GetFullPath($script:ArchiveCandidateSeedRoot)
             $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
