@@ -282,7 +282,49 @@ jobs:
           }
           else { throw 'Protected authority mode is missing or invalid.' }
           pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
-          if ($LASTEXITCODE -ne 0) { throw "Canonical validator exited $LASTEXITCODE." }
+          $validatorExitCode = [int]$LASTEXITCODE
+          if ($validatorExitCode -ne 0) {
+            if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+              try {
+                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                if ([string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA) {
+                  $pesterEvents = @($failedReport.stages |
+                    Where-Object { $_.id -ceq 'repository-tests' } |
+                    ForEach-Object { $_.events } |
+                    Where-Object { $_.stageId -ceq 'repository-tests' -and $_.toolId -ceq 'repository-test-pester' })
+                  foreach ($event in $pesterEvents) {
+                    $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
+                    $eventPath = [IO.Path]::GetFullPath([string]$event.outputPath)
+                    if (-not $eventPath.StartsWith($ownedRoot + [IO.Path]::DirectorySeparatorChar,
+                        [StringComparison]::OrdinalIgnoreCase) -or
+                        [IO.Path]::GetFileName($eventPath) -cne "event-$($event.eventId).json") { continue }
+                    $cursor = Split-Path -Parent $eventPath
+                    $safePath = $true
+                    while ($cursor.Length -ge $ownedRoot.Length) {
+                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        $safePath = $false
+                        break
+                      }
+                      if ($cursor -ieq $ownedRoot) { break }
+                      $cursor = Split-Path -Parent $cursor
+                    }
+                    if (-not $safePath -or -not (Test-Path -LiteralPath $eventPath -PathType Leaf)) { continue }
+                    $rawEvent = Get-Content -LiteralPath $eventPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+                    if ([string]$rawEvent.eventId -cne [string]$event.eventId -or
+                        [string]$rawEvent.stageId -cne 'repository-tests' -or
+                        [string]$rawEvent.toolId -cne 'repository-test-pester') { continue }
+                    $diagnostic = [string]$rawEvent.stderr
+                    if ($diagnostic.Length -gt 12000) { $diagnostic = $diagnostic.Substring(0, 12000) + '[truncated]' }
+                    foreach ($line in @($diagnostic -split '\r?\n')) {
+                      if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                    }
+                  }
+                }
+              }
+              catch { Write-Output 'Run-owned Pester diagnostic could not be read.' }
+            }
+            throw "Canonical validator exited $validatorExitCode."
+          }
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
           if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or

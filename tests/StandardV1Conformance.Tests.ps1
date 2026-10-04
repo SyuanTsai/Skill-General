@@ -453,6 +453,86 @@ Describe 'Skill-General Standard v1 reference implementation' {
         }
     }
 
+    # Scenario: the canonical validator fails after the trusted runner recorded a Pester event.
+    # Purpose: expose bounded, exact-head, run-owned diagnostics while keeping every required context failed.
+    It 'UnitT19c_ReportsOnlyRunOwnedExactHeadPesterFailureDiagnostics' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/validate.yml') -Raw
+        $step = [regex]::Match($workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<step>.*?)(?=^      - name: Clean only this run''s temporary files)')
+        $step.Success | Should -BeTrue
+        $run = [regex]::Match($step.Groups['step'].Value, '(?m)^        run:\s*\|\r?\n(?<body>(?:^          [^\r\n]*(?:\r?\n|$))+)')
+        $run.Success | Should -BeTrue
+        $runScript = (($run.Groups['body'].Value -split '\r?\n' | Where-Object { $_ -ne '' } | ForEach-Object { $_.Substring(10) }) -join "`n")
+        $gateStart = $runScript.IndexOf('$validatorExitCode = [int]$LASTEXITCODE')
+        $gateEnd = $runScript.IndexOf('if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf))', $gateStart)
+        ($gateStart -ge 0 -and $gateEnd -gt $gateStart) | Should -BeTrue
+        $failureGateText = $runScript.Substring($gateStart, $gateEnd - $gateStart)
+        $failureGate = [scriptblock]::Create($failureGateText)
+        $throwMarker = 'throw "Canonical validator exited $validatorExitCode."'
+        $throwAt = $failureGateText.IndexOf($throwMarker)
+        ($throwAt -gt 0) | Should -BeTrue
+        $diagnosticGate = [scriptblock]::Create($failureGateText.Substring(0, $throwAt) + "}`n")
+
+        $ownedRoot = Join-Path $TestDrive 'owned'
+        $eventId = [guid]::NewGuid().ToString()
+        $eventDirectory = Join-Path $ownedRoot 'runs\example\repository-tests'
+        New-Item -ItemType Directory -Path $eventDirectory -Force | Out-Null
+        $eventPath = Join-Path $eventDirectory "event-$eventId.json"
+        $rawEvent = [pscustomobject]@{
+            eventId = $eventId
+            stageId = 'repository-tests'
+            toolId = 'repository-test-pester'
+            stderr = ('Pester test failed: example' + "`n" + ('x' * 12500))
+        }
+        $rawEvent | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $eventPath -Encoding utf8
+        $outputPath = Join-Path $ownedRoot 'report.json'
+        $expectedSource = 'a' * 40
+        $report = [pscustomobject]@{
+            candidate = [pscustomobject]@{ sourceRevision = $expectedSource }
+            stages = @([pscustomobject]@{
+                id = 'repository-tests'
+                events = @([pscustomobject]@{
+                    eventId = $eventId
+                    stageId = 'repository-tests'
+                    toolId = 'repository-test-pester'
+                    outputPath = $eventPath
+                })
+            })
+        }
+        $saved = @{
+            RUN_OWNED_ROOT = $env:RUN_OWNED_ROOT
+            EXPECTED_SOURCE_SHA = $env:EXPECTED_SOURCE_SHA
+            VALIDATION_MODE = $env:VALIDATION_MODE
+        }
+        $env:RUN_OWNED_ROOT = $ownedRoot
+        $env:EXPECTED_SOURCE_SHA = $expectedSource
+        $env:VALIDATION_MODE = 'legacy'
+        try {
+            $LASTEXITCODE = 1
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            $seen = @(& $diagnosticGate 6>&1)
+            ($seen -join "`n") | Should -Match 'Pester diagnostic: Pester test failed: example'
+            ($seen -join "`n") | Should -Match '\[truncated\]'
+            ($seen -join "`n").Length | Should -BeLessThan 12200
+            { & $failureGate 6>$null } | Should -Throw 'Canonical validator exited 1.'
+
+            $report.candidate.sourceRevision = 'b' * 40
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            $seen = @(& $diagnosticGate 6>&1)
+            ($seen -join "`n") | Should -Not -Match 'Pester diagnostic:'
+            { & $failureGate 6>$null } | Should -Throw 'Canonical validator exited 1.'
+
+            $report.candidate.sourceRevision = $expectedSource
+            $report.stages[0].events[0].outputPath = Join-Path $TestDrive 'outside.json'
+            $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputPath -Encoding utf8
+            $seen = @(& $diagnosticGate 6>&1)
+            ($seen -join "`n") | Should -Not -Match 'Pester diagnostic:'
+            { & $failureGate 6>$null } | Should -Throw 'Canonical validator exited 1.'
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+        }
+    }
+
     # Scenario: the trusted base driver evaluates an immutable PR candidate once on the canonical Windows job.
     # Purpose: retain exact source binding while the required checks consume only the canonical job result.
     It 'InterT20_BindsBaseDriverAndExactPrHeadForTheSingleCanonicalValidator' {
