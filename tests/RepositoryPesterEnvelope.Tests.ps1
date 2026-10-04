@@ -20,10 +20,10 @@ Describe 'Repository Pester result envelope' {
 function Invoke-Pester {
     param($Path, $Output, [switch] $PassThru)
     switch ($env:TEST_PESTER_SCENARIO) {
-        'partial-skip' { return [pscustomobject]@{ TotalCount = 3; PassedCount = 2; SkippedCount = 1; FailedCount = 0 } }
-        'zero-selected' { return [pscustomobject]@{ TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0 } }
-        'all-skipped' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 0; SkippedCount = 2; FailedCount = 0 } }
-        'failed' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 1; SkippedCount = 0; FailedCount = 1 } }
+        'partial-skip' { return [pscustomobject]@{ TotalCount = 3; PassedCount = 2; SkippedCount = 1; FailedCount = 0; FailedBlocksCount = 0; FailedContainersCount = 0 } }
+        'zero-selected' { return [pscustomobject]@{ TotalCount = 0; PassedCount = 0; SkippedCount = 0; FailedCount = 0; FailedBlocksCount = 0; FailedContainersCount = 0 } }
+        'all-skipped' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 0; SkippedCount = 2; FailedCount = 0; FailedBlocksCount = 0; FailedContainersCount = 0 } }
+        'failed' { return [pscustomobject]@{ TotalCount = 2; PassedCount = 1; SkippedCount = 0; FailedCount = 1; FailedBlocksCount = 0; FailedContainersCount = 0 } }
     }
     throw 'Unknown fake Pester scenario.'
 }

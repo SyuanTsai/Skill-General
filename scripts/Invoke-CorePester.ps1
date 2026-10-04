@@ -19,7 +19,7 @@ $previousErrorActionPreference = $ErrorActionPreference
 $progressCharacters = 0
 $progressLimit = 300000
 $completedCases = 0
-$activeCaseNames = [Collections.Generic.List[string]]::new()
+$activeCaseStarts = 0
 $progressCapped = $false
 $pesterConfig = New-PesterConfiguration
 $pesterConfig.Run.Path = $testRoot
@@ -37,21 +37,16 @@ try {
                     $line = ([string]$rawLine) -replace '\x1b\[[0-9;]*m', ''
                     if ($line -notmatch '^\s*(Running tests from|Describing|Context|\[[+!|\-]\]|Tests completed)') { continue }
                     $phase = 'status'
-                    if ($line -match '^\s*\[\|\]\s+(?<caseName>.+)$') {
-                        $caseName = [string]$Matches.caseName
-                        if ($caseName.EndsWith('...', [StringComparison]::Ordinal)) {
-                            $caseName = $caseName.Substring(0, $caseName.Length - 3)
-                        }
-                        $activeCaseNames.Add($caseName)
+                    if ($line -match '^\s*\[\|\]\s+.+$') {
+                        $activeCaseStarts++
                         $phase = 'case-start'
                     }
-                    elseif ($line -match '^\s*\[[+!\-]\]\s+(?<caseName>.+)$' -and $activeCaseNames.Count -gt 0) {
-                        $last = $activeCaseNames.Count - 1
-                        if ($activeCaseNames[$last] -ceq [string]$Matches.caseName) {
-                            $activeCaseNames.RemoveAt($last)
-                            $completedCases++
-                            $phase = 'case-end'
-                        }
+                    elseif ($line -match '^\s*\[[+!\-]\]\s+.+$' -and $activeCaseStarts -gt 0) {
+                        # Pester prints a template (for example <Value>) at start and the
+                        # expanded name at completion. Its detailed stream pairs them in order.
+                        $activeCaseStarts--
+                        $completedCases++
+                        $phase = 'case-end'
                     }
                     elseif ($line -match '^\s*Running tests from') { $phase = 'file-start' }
                     if ($line.Length -gt 300) { $line = $line.Substring(0, 300) + '[truncated]' }
