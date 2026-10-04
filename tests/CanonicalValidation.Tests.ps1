@@ -328,6 +328,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         $counts.passed | Should -Be 1
         $counts.failed | Should -Be 0
         (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container failed:.*Broken\.Tests\.ps1'
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container error: synthetic discovery failure'
     }
 
     It 'accepts only the exact reviewed Core authority tuple' {

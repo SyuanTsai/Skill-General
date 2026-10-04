@@ -28,14 +28,26 @@ function Invoke-Pester {
         'partial-skip' { $result.TotalCount = 3; $result.PassedCount = 2; $result.SkippedCount = 1 }
         'zero-selected' { }
         'all-skipped' { $result.TotalCount = 2; $result.SkippedCount = 2 }
-        'failed' { $result.TotalCount = 2; $result.PassedCount = 1; $result.FailedCount = 1 }
+        'failed' {
+            $result.TotalCount = 2; $result.PassedCount = 1; $result.FailedCount = 1
+            $result.Failed = @([pscustomobject]@{
+                ExpandedPath = 'fixture.fails'
+                ErrorRecord = @([pscustomobject]@{ Exception = [Exception]::new('synthetic test failure') })
+            })
+        }
         'container-failed' {
             $result.TotalCount = 1; $result.PassedCount = 1; $result.FailedContainersCount = 1
-            $result.FailedContainers = @([pscustomobject]@{ Name = 'Broken.Tests.ps1'; ErrorRecord = @() })
+            $result.FailedContainers = @([pscustomobject]@{
+                Name = 'Broken.Tests.ps1'
+                ErrorRecord = @([pscustomobject]@{ Exception = [Exception]::new('synthetic container failure') })
+            })
         }
         'block-failed' {
             $result.TotalCount = 1; $result.PassedCount = 1; $result.FailedBlocksCount = 1
-            $result.FailedBlocks = @([pscustomobject]@{ Name = 'broken before all'; ErrorRecord = @() })
+            $result.FailedBlocks = @([pscustomobject]@{
+                Name = 'broken before all'
+                ErrorRecord = @([pscustomobject]@{ Exception = [Exception]::new('synthetic block failure') })
+            })
         }
         default { throw 'Unknown fake Pester scenario.' }
     }
@@ -109,9 +121,12 @@ Export-ModuleMember -Function Invoke-Pester
     # Purpose: Preserve fail-closed repository regression evidence.
     It 'InterT40_ rejects a failed suite' {
         $env:TEST_PESTER_SCENARIO = 'failed'
-        $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2>$null)
+        $diagnostics = Join-Path $script:fixtureRoot 'test-failed.err'
+        $output = @(& $script:pwsh -NoProfile -NonInteractive -File $script:runnerPath -Mode repository-pester -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainSha256 2> $diagnostics)
         $LASTEXITCODE | Should -Not -Be 0
         $output.Count | Should -Be 0
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester test failed: fixture\.fails'
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester test error: synthetic test failure'
     }
 
     # A discovery failure can coexist with one passing test and zero failed test cases.
@@ -122,6 +137,7 @@ Export-ModuleMember -Function Invoke-Pester
         $LASTEXITCODE | Should -Not -Be 0
         $output.Count | Should -Be 0
         (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container failed: Broken\.Tests\.ps1'
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester container error: synthetic container failure'
     }
 
     It 'InterT60_ rejects a failed block despite a passing test count' {
@@ -131,5 +147,6 @@ Export-ModuleMember -Function Invoke-Pester
         $LASTEXITCODE | Should -Not -Be 0
         $output.Count | Should -Be 0
         (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester block failed: broken before all'
+        (Get-Content -LiteralPath $diagnostics -Raw) | Should -Match 'Pester block error: synthetic block failure'
     }
 }
