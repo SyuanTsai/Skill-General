@@ -99,6 +99,36 @@ $script:NextAuthorityFiles = [ordered]@{
     'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
     'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
 }
+$script:MergedAuthorityCommit = 'e46de30e2365ad090f101e140485ca0eba7a9a55'
+$script:MergedAuthorityArchiveSha256 = '963ebad13cfadc297647e7bbf6452da8bd5db5a3d465103c0ca70ec136e15be2'
+$script:MergedAuthorityFiles = [ordered]@{
+    'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
+    'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
+    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
+    'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
+    'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
+    'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'ac58302e0e350c1ab4ba4dad8a33cd3abce12d592537fbdb23dfb1936d064e91'
+    'docs/standards/skill-repository-review-matrix.md' = '299925aabe3cab360827baad9bdeb1f0f56fc320dad967e49fe0b6bf9cdf8f8a'
+    'docs/standards/skill-repository-standard.md' = 'bba519d01efc8d6d8508427c39a8cb3cd7e430f170febba507471bb4b8531294'
+    'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
+    'docs/standards/validation-security-gate.json' = '657122dde340f1f7f4442780cc27ffcb00b60c0d2afdcea22d63fbf7dbfdca7d'
+    'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
+    'scripts/Invoke-StandardAuthorityGate.ps1' = '8e00ee1e48ef8359ab7be3539f8f7585ccde18b41e26d810843715ebc3656a4c'
+    'scripts/Resolve-PythonWheelClosure.py' = 'd209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35'
+    'scripts/Resolve-StandardValidationTool.ps1' = '86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2'
+    'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
+    'docs/standards/standard-validation-contract-v1.json' = '707edf8945ad9a7097df1dfb22a8f05ce47d0e0a66e2e44381036d630e854da0'
+    'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
+    'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
+    'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
+    'scripts/Invoke-StandardValidation.ps1' = 'fd60e3f7552d5b4b1fc5837a195fb8f8abff8444e8c1a9ff621ea14cb575b525'
+    'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
+    'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
+    'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
+    'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
+    'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+}
 
 function Assert-ExactPropertySet {
     param(
@@ -644,7 +674,7 @@ function Get-LegacyAuthorityPin {
         throw 'Legacy validation cannot change the approved authority repository.'
     }
     if ([string]$SelectedPin.commit -ceq $script:AuthorityCommit) { return $SelectedPin }
-    if ([string]$SelectedPin.commit -cne $script:NextAuthorityCommit) {
+    if ([string]$SelectedPin.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)) {
         throw 'Legacy validation requires one of the exact reviewed authority pins.'
     }
 
@@ -753,6 +783,13 @@ function Assert-AuthorityConfig {
             archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:NextAuthorityCommit)"
             archiveSha256 = $script:NextAuthorityArchiveSha256
             files = $script:NextAuthorityFiles
+        }
+        $approvedPins += [pscustomobject]@{
+            repository = $script:AuthorityRepository
+            commit = $script:MergedAuthorityCommit
+            archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:MergedAuthorityCommit)"
+            archiveSha256 = $script:MergedAuthorityArchiveSha256
+            files = $script:MergedAuthorityFiles
         }
     }
     foreach ($approved in $approvedPins) {
@@ -1568,7 +1605,7 @@ try {
     }
     else { $false }
     $coreRunSelected = $ExecutionMode -eq 'Run' -and
-        [string]$candidateAuthority.commit -ceq $script:NextAuthorityCommit -and -not $legacyRunRequested
+        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit) -and -not $legacyRunRequested
     if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
         ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
         throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'

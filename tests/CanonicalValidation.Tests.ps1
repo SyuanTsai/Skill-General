@@ -69,6 +69,36 @@ Describe 'Canonical Standard v1 validation adapter' {
             'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
             'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
         }
+        $script:ExpectedMergedAuthorityCommit = 'e46de30e2365ad090f101e140485ca0eba7a9a55'
+        $script:ExpectedMergedAuthorityArchiveSha256 = '963ebad13cfadc297647e7bbf6452da8bd5db5a3d465103c0ca70ec136e15be2'
+        $script:ExpectedMergedAuthorityFiles = [ordered]@{
+            'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
+            'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
+            'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
+            'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
+            'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
+            'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'ac58302e0e350c1ab4ba4dad8a33cd3abce12d592537fbdb23dfb1936d064e91'
+            'docs/standards/skill-repository-review-matrix.md' = '299925aabe3cab360827baad9bdeb1f0f56fc320dad967e49fe0b6bf9cdf8f8a'
+            'docs/standards/skill-repository-standard.md' = 'bba519d01efc8d6d8508427c39a8cb3cd7e430f170febba507471bb4b8531294'
+            'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
+            'docs/standards/validation-security-gate.json' = '657122dde340f1f7f4442780cc27ffcb00b60c0d2afdcea22d63fbf7dbfdca7d'
+            'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
+            'scripts/Invoke-StandardAuthorityGate.ps1' = '8e00ee1e48ef8359ab7be3539f8f7585ccde18b41e26d810843715ebc3656a4c'
+            'scripts/Resolve-PythonWheelClosure.py' = 'd209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35'
+            'scripts/Resolve-StandardValidationTool.ps1' = '86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2'
+            'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
+            'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
+            'docs/standards/standard-validation-contract-v1.json' = '707edf8945ad9a7097df1dfb22a8f05ce47d0e0a66e2e44381036d630e854da0'
+            'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
+            'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
+            'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
+            'scripts/Invoke-StandardValidation.ps1' = 'fd60e3f7552d5b4b1fc5837a195fb8f8abff8444e8c1a9ff621ea14cb575b525'
+            'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
+            'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
+            'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
+            'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
+            'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+        }
 
         $selectorStepPattern = '(?ms)^      - name: Select protected authority mode\r?\n(?<body>.*?)(?=^      - name: |\z)'
         $selectorStep = [regex]::Match($script:Workflow, $selectorStepPattern)
@@ -89,7 +119,8 @@ Describe 'Canonical Standard v1 validation adapter' {
                 [Parameter(Mandatory)][string] $CandidateAuthority,
                 [Parameter(Mandatory)][string] $ExpectedDriverSha,
                 [Parameter(Mandatory)][string] $ActualDriverSha,
-                [bool] $IncludeCoreWrapper = $true
+                [bool] $IncludeCoreWrapper = $true,
+                [switch] $ReturnSelection
             )
             $workspace = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             $driver = Join-Path $workspace 'driver'
@@ -119,9 +150,17 @@ Describe 'Canonical Standard v1 validation adapter' {
                     throw "Unexpected selector Git invocation: $($args -join ' ')"
                 }
                 & ([scriptblock]::Create($script:SelectorScript))
-                $output = [IO.File]::ReadAllText($env:GITHUB_OUTPUT).Trim()
-                if ($output -notmatch '^validation_mode=(legacy|core)$') { throw "Unexpected selector output: $output" }
-                return $Matches[1]
+                $outputLines = @([IO.File]::ReadAllLines($env:GITHUB_OUTPUT))
+                $modeLines = @($outputLines | Where-Object { $_ -match '^validation_mode=(legacy|core)$' })
+                $revisionLines = @($outputLines | Where-Object { $_ -match '^authority_revision=[0-9a-f]{40}$' })
+                if ($modeLines.Count -ne 1) { throw "Unexpected selector output: $($outputLines -join "`n")" }
+                $mode = $modeLines[0].Substring('validation_mode='.Length)
+                if ($revisionLines.Count -gt 1) { throw 'Protected selector emitted multiple authority revisions.' }
+                $authorityRevision = if ($revisionLines.Count -eq 1) { $revisionLines[0].Substring('authority_revision='.Length) } else { $null }
+                if ($ReturnSelection) {
+                    return [pscustomobject]@{ mode = $mode; authorityRevision = $authorityRevision }
+                }
+                return $mode
             }
             finally {
                 Remove-Item Function:\git -ErrorAction SilentlyContinue
@@ -133,6 +172,73 @@ Describe 'Canonical Standard v1 validation adapter' {
                     Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue
                 }
             }
+        }
+
+        function New-MergedAuthorityConfig {
+            [pscustomobject]@{
+                schemaVersion = 1
+                standardVersion = 'v1'
+                authority = [pscustomobject]@{
+                    repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+                    commit = $script:ExpectedMergedAuthorityCommit
+                    archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedMergedAuthorityCommit)"
+                    archiveSha256 = $script:ExpectedMergedAuthorityArchiveSha256
+                    files = @(foreach ($entry in $script:ExpectedMergedAuthorityFiles.GetEnumerator()) {
+                        [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+                    })
+                }
+            }
+        }
+
+        function New-AuthorityVerifierModule {
+            $tokens = $null
+            $errors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+            if (@($errors).Count -ne 0) { throw 'Validate.ps1 does not parse as PowerShell.' }
+            $parts = @($ast.EndBlock.Statements | Where-Object {
+                ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                    $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
+                        '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles',
+                        '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles')) -or
+                ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                    $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+            } | ForEach-Object { $_.Extent.Text })
+            return New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
+        }
+
+        function New-CoreRunSelectorModule {
+            $tokens = $null
+            $errors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+            if (@($errors).Count -ne 0) { throw 'Validate.ps1 does not parse as PowerShell.' }
+            $constantNames = @(
+                '$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
+                '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles',
+                '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles'
+            )
+            $constants = @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -cin $constantNames
+            }, $true) | ForEach-Object { $_.Extent.Text })
+            $legacyFunction = @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-LegacyAuthorityPin'
+            }, $true))
+            $selectorAssignment = @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$coreRunSelected'
+            }, $true))
+            if ($legacyFunction.Count -ne 1 -or $selectorAssignment.Count -ne 1) {
+                throw 'Validate.ps1 must have one legacy pin mapper and one Core Run selector.'
+            }
+            $selectorFunction = @'
+function Test-CoreRunSelected {
+    param([string] $ExecutionMode, $candidateAuthority, [bool] $legacyRunRequested)
+    return ($SELECTOR_EXPRESSION)
+}
+'@.Replace('$SELECTOR_EXPRESSION', $selectorAssignment[0].Right.Extent.Text)
+            $parts = $constants + @($legacyFunction[0].Extent.Text, $selectorFunction)
+            return New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         }
 
         function Invoke-WorkflowCredentialFixture {
@@ -192,6 +298,11 @@ Describe 'Canonical Standard v1 validation adapter' {
             $expectedCommit = $script:ExpectedNextAuthorityCommit
             $expectedArchiveSha256 = $script:ExpectedNextAuthorityArchiveSha256
             $expectedFiles = $script:ExpectedNextAuthorityFiles
+        }
+        elseif ($script:Adapter.authority.commit -ceq $script:ExpectedMergedAuthorityCommit) {
+            $expectedCommit = $script:ExpectedMergedAuthorityCommit
+            $expectedArchiveSha256 = $script:ExpectedMergedAuthorityArchiveSha256
+            $expectedFiles = $script:ExpectedMergedAuthorityFiles
         }
         $script:Adapter.authority.commit | Should -Be $expectedCommit
         $script:Adapter.authority.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$expectedCommit"
@@ -317,7 +428,7 @@ Describe 'Canonical Standard v1 validation adapter' {
         @('PrepareSemantic', 'ResumeSemantic') | ForEach-Object { ($_ -eq 'Run') | Should -BeFalse }
     }
     It 'runs the next candidate pin through Core and maps explicit legacy work to the baseline tuple' {
-        $script:Validator | Should -Match '\$candidateAuthority\.commit -ceq \$script:NextAuthorityCommit -and -not \$legacyRunRequested'
+        $script:Validator | Should -Match '\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit\) -and -not \$legacyRunRequested'
         $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$candidateAuthority'
         $script:Validator | Should -Match '''-AuthorityRevision'', \[string\]\$candidateAuthority\.commit'
         $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
@@ -792,11 +903,15 @@ Describe 'Canonical Standard v1 validation adapter' {
         $result.sentinel | Should -BeExactly 'preserve-me'
     }
 
-    # Scenario: the ordinary-base migration PR is evaluated by its existing baseline-pinned protected driver.
-    # Purpose: preserve the legacy bootstrap route until the exact ea1 migration candidate becomes protected main.
-    It 'UnitT23_keeps_baseline_protected_driver_on_legacy_for_the_ea1_migration_candidate' {
-        $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40)
-        $mode | Should -BeExactly 'legacy'
+    # Scenario: a baseline-pinned protected driver evaluates a candidate using either approved Core authority tuple.
+    # Purpose: preserve the legacy route until a Core-compatible protected driver is active, without binding a Core checkout revision.
+    It 'UnitT23_keeps_baseline_protected_driver_on_legacy_for_approved_Core_candidates' {
+        foreach ($candidateCommit in @($script:ExpectedNextAuthorityCommit, $script:ExpectedMergedAuthorityCommit)) {
+            $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedAuthorityCommit -CandidateAuthority $candidateCommit `
+                -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40) -ReturnSelection
+            $selection.mode | Should -BeExactly 'legacy'
+            $selection.authorityRevision | Should -BeNullOrEmpty
+        }
     }
 
     # Scenario: the protected base has already adopted the exact ea1 Core authority.
@@ -858,5 +973,136 @@ Describe 'Canonical Standard v1 validation adapter' {
             if ($hadPrior) { Set-Variable -Name LASTEXITCODE -Value $priorValue -Scope Global }
             else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
         }
+    }
+
+    # Scenario: the candidate supplies the independently reviewed e46 merged tuple.
+    # Purpose: accept only its complete repository, commit, archive digest, and ordered 26-file inventory in Core mode.
+    It 'UnitT30_accepts_the_exact_merged_e46_tuple_in_core_mode' {
+        $verifier = New-AuthorityVerifierModule
+        $candidate = New-MergedAuthorityConfig
+        $pin = & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $candidate
+        $pin.repository | Should -BeExactly 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+        $pin.commit | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+        $pin.archiveUrl | Should -BeExactly "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedMergedAuthorityCommit)"
+        $pin.archiveSha256 | Should -BeExactly $script:ExpectedMergedAuthorityArchiveSha256
+        @($pin.files.Keys) | Should -Be @($script:ExpectedMergedAuthorityFiles.Keys)
+        @($pin.files.Keys).Count | Should -Be 26
+        foreach ($path in $script:ExpectedMergedAuthorityFiles.Keys) {
+            $pin.files[$path] | Should -BeExactly $script:ExpectedMergedAuthorityFiles[$path]
+        }
+    }
+
+    # Scenario: a valid e46 tuple is copied and one authority field is changed at a time.
+    # Purpose: prevent mixed pins, altered hashes, reordered or incomplete inventories, and unknown revisions from entering Core.
+    It 'UnitT31_rejects_each_forged_or_incomplete_e46_tuple_after_a_valid_control' {
+        $verifier = New-AuthorityVerifierModule
+        $valid = New-MergedAuthorityConfig
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $valid } | Should -Not -Throw
+
+        $mutations = @(
+            { param($config) $config.authority.archiveSha256 = '0' * 64 },
+            { param($config) $config.authority.files[0].sha256 = '0' * 64 },
+            { param($config) [array]::Reverse($config.authority.files) },
+            { param($config) $config.authority.files = @($config.authority.files | Select-Object -SkipLast 1) },
+            { param($config) $config.authority.commit = '0000000000000000000000000000000000000000'; $config.authority.archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($config.authority.commit)" }
+        )
+        foreach ($mutation in $mutations) {
+            $forged = $valid | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+            & $mutation $forged
+            { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
+        }
+    }
+
+    # Scenario: a caller tries to use the reviewed e46 revision outside the approved Core selector.
+    # Purpose: retain legacy-only defaults and require explicit Core opt-in for every non-legacy authority.
+    It 'UnitT32_keeps_the_merged_e46_tuple_outside_default_legacy_validation' {
+        $verifier = New-AuthorityVerifierModule
+        $candidate = New-MergedAuthorityConfig
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $candidate } | Should -Not -Throw
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $candidate } | Should -Throw
+    }
+
+    # Scenario: an ea1 or e46 protected driver validates a candidate pinned to the merged e46 authority.
+    # Purpose: select Core and carry the candidate's exact approved revision through the protected selector output.
+    It 'UnitT33_selects_e46_for_either_supported_protected_core_driver' {
+        foreach ($driverCommit in @($script:ExpectedNextAuthorityCommit, $script:ExpectedMergedAuthorityCommit)) {
+            $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $driverCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+                -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40) -ReturnSelection
+            $selection.mode | Should -BeExactly 'core'
+            $selection.authorityRevision | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+        }
+    }
+
+    # Scenario: the e46 driver receives a downgrade, an unapproved candidate, or an unknown driver revision.
+    # Purpose: fail closed without widening the workflow into a candidate-controlled or generic revision allowlist.
+    It 'UnitT34_rejects_downgrade_and_unknown_authority_revisions' {
+        { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority $script:ExpectedAuthorityCommit `
+            -ExpectedDriverSha ('b' * 40) -ActualDriverSha ('b' * 40) } | Should -Throw
+        { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority ('9' * 40) `
+            -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) } | Should -Throw
+        { Invoke-WorkflowSelectorFixture -DriverAuthority ('8' * 40) -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+            -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40) } | Should -Throw
+    }
+
+    # Scenario: the protected selector chooses e46 for an immutable candidate.
+    # Purpose: bind the authority checkout and report verifier to the exact same selector output.
+    It 'UnitT35_binds_dynamic_core_checkout_and_report_to_one_selected_revision' {
+        $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+            -ExpectedDriverSha ('e' * 40) -ActualDriverSha ('e' * 40) -ReturnSelection
+        $selection.authorityRevision | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+
+        $checkout = [regex]::Match($script:Workflow, '(?ms)^      - name: Checkout pinned Core authority\r?\n(?<body>.*?)(?=^      - name: |\z)')
+        $checkout.Success | Should -BeTrue
+        $checkout.Groups['body'].Value | Should -Match '(?m)^          ref: \$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}\r?$'
+
+        $validateStep = [regex]::Match($script:Workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
+        $validateStep.Success | Should -BeTrue
+        $validateStep.Groups['body'].Value | Should -Match '(?m)^          APPROVED_AUTHORITY_REVISION: \$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}\r?$'
+        $validateStep.Groups['body'].Value | Should -Match '\$report\.authority\.revision\s+-cne\s+\$env:APPROVED_AUTHORITY_REVISION'
+        $validateStep.Groups['body'].Value | Should -Not -Match '\$report\.authority\.revision\s+-cne\s+''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
+    }
+
+    # Scenario: Git checks out a different protected base than the event's declared base SHA.
+    # Purpose: refuse the authority selection before trusting driver configuration or candidate pins.
+    It 'UnitT36_rejects_a_driver_checkout_that_differs_from_the_exact_event_base' {
+        { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+            -ExpectedDriverSha ('f' * 40) -ActualDriverSha ('0' * 40) -ReturnSelection } |
+            Should -Throw -ExpectedMessage '*exact event base SHA*'
+    }
+
+    # Scenario: ordinary Run receives either exact approved Core tuple; a caller may also choose the explicit legacy route.
+    # Purpose: prove the real CLI selector enters Core only for ea1/e46 and preserves baseline legacy, Resume, and unknown-pin behavior.
+    It 'UnitT37_selects_both_approved_Core_pins_in_the_actual_CLI_dispatcher_and_maps_legacy_to_baseline' {
+        $selector = New-CoreRunSelectorModule
+        $baseline = [pscustomobject]@{
+            repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+            commit = $script:ExpectedAuthorityCommit
+        }
+        $ea1 = [pscustomobject]@{
+            repository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
+            commit = $script:ExpectedNextAuthorityCommit
+        }
+        $e46 = (New-MergedAuthorityConfig).authority
+
+        foreach ($pin in @($ea1, $e46)) {
+            (& $selector { param($mode, $selectedPin, $legacy) Test-CoreRunSelected -ExecutionMode $mode -candidateAuthority $selectedPin -legacyRunRequested $legacy } 'Run' $pin $false) |
+                Should -BeTrue
+            (& $selector { param($mode, $selectedPin, $legacy) Test-CoreRunSelected -ExecutionMode $mode -candidateAuthority $selectedPin -legacyRunRequested $legacy } 'Run' $pin $true) |
+                Should -BeFalse
+            foreach ($mode in @('PrepareSemantic', 'ResumeSemantic')) {
+                (& $selector { param($executionMode, $selectedPin) Test-CoreRunSelected -ExecutionMode $executionMode -candidateAuthority $selectedPin -legacyRunRequested $false } $mode $pin) |
+                    Should -BeFalse
+            }
+            $legacyPin = & $selector { param($selectedPin) Get-LegacyAuthorityPin -SelectedPin $selectedPin } $pin
+            $legacyPin.commit | Should -BeExactly $script:ExpectedAuthorityCommit
+            $legacyPin.archiveSha256 | Should -BeExactly $script:ExpectedAuthorityArchiveSha256
+            @($legacyPin.files.Keys) | Should -Be @($script:ExpectedAuthorityFiles.Keys)
+        }
+        (& $selector { param($selectedPin) Test-CoreRunSelected -ExecutionMode 'Run' -candidateAuthority $selectedPin -legacyRunRequested $false } $baseline) |
+            Should -BeFalse
+        $baselineLegacyPin = & $selector { param($selectedPin) Get-LegacyAuthorityPin -SelectedPin $selectedPin } $baseline
+        $baselineLegacyPin.commit | Should -BeExactly $script:ExpectedAuthorityCommit
+        { & $selector { param($selectedPin) Get-LegacyAuthorityPin -SelectedPin $selectedPin } ([pscustomobject]@{ repository = $baseline.repository; commit = '8' * 40 }) } |
+            Should -Throw
     }
 }

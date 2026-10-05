@@ -58,23 +58,28 @@ jobs:
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
+          $mergedAuthority = 'e46de30e2365ad090f101e140485ca0eba7a9a55'
           $baselineAuthority = '51399617ddebe21656fe4265a8d9ad116a943583'
-          if ([string]$candidatePin.authority.commit -cnotin @($baselineAuthority, $nextAuthority)) {
+          $coreAuthorities = @($nextAuthority, $mergedAuthority)
+          if ([string]$candidatePin.authority.commit -cnotin (@($baselineAuthority) + $coreAuthorities)) {
             throw 'Candidate has an unapproved authority pin.'
           }
-          $mode = switch ([string]$pin.authority.commit) {
-            $baselineAuthority { 'legacy'; break }
-            $nextAuthority {
-              if ([string]$candidatePin.authority.commit -cne $nextAuthority) {
-                throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
-              }
-              if (-not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
-                throw 'Protected Core driver is missing the trusted Pester wrapper.'
-              }
-              'core'
-              break
+          $driverAuthority = [string]$pin.authority.commit
+          if ($driverAuthority -ceq $baselineAuthority) {
+            $mode = 'legacy'
+          }
+          elseif ($driverAuthority -cin $coreAuthorities) {
+            if ([string]$candidatePin.authority.commit -cnotin $coreAuthorities) {
+              throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
             }
-            default { throw 'Protected driver has an unapproved authority pin.' }
+            if (-not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
+              throw 'Protected Core driver is missing the trusted Pester wrapper.'
+            }
+            $mode = 'core'
+            "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+          else {
+            throw 'Protected driver has an unapproved authority pin.'
           }
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -83,7 +88,7 @@ jobs:
         uses: *checkout-action-reference # actions/checkout v7
         with:
           repository: SyuanTsai/SyuanTsai-AI-Instructions
-          ref: ea1d368ac7b36f838ce4c3af363972c90fa12930
+          ref: ${{ steps.authority-mode.outputs.authority_revision }}
           path: authority
           fetch-depth: 0
           persist-credentials: false
@@ -209,6 +214,7 @@ jobs:
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
+          APPROVED_AUTHORITY_REVISION: ${{ steps.authority-mode.outputs.authority_revision }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:VALIDATION_MODE -ceq 'core') {
@@ -453,7 +459,7 @@ jobs:
                 $report.candidate.baseRevision -cne $baseCommit -or
                 $report.candidate.eventName -cne $env:GITHUB_EVENT_NAME -or
                 $report.candidate.contentMode -cne 'immutable-source' -or
-                $report.authority.revision -cne 'ea1d368ac7b36f838ce4c3af363972c90fa12930' -or
+                $report.authority.revision -cne $env:APPROVED_AUTHORITY_REVISION -or
                 $report.authority.contentMode -cne 'source' -or
                 $report.adapter.identity -cne 'standard-core-adapter-v2' -or
                 $report.failure -ne $null -or $checks.Count -ne 2 -or
