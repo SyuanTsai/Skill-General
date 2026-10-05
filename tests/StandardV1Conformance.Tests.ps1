@@ -12,9 +12,9 @@ Describe 'Skill-General Standard v1 reference implementation' {
                 archiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
                 filesSha256 = '617fad5eebb05fb27a8fa121aaada1950906cb6ddd45892dfa52102038622f1a'
             }
-            'e46de30e2365ad090f101e140485ca0eba7a9a55' = @{
-                archiveSha256 = '963ebad13cfadc297647e7bbf6452da8bd5db5a3d465103c0ca70ec136e15be2'
-                filesSha256 = '6d8849bef6130715e85158868ebd47b6b2e341cba90c0a2a8101c8f492ec0fe3'
+            '053b80143b5ef48b06a8c448d5ac1abaf9a49df8' = @{
+                archiveSha256 = 'cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9'
+                filesSha256 = '818098039a3a4612afef519cb72626da3a5b6176dfebf5ce2a56ec70c76a8b24'
             }
         }
         $script:GetAuthorityInventorySha256 = {
@@ -54,7 +54,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         )
     }
 
-    # Scenario: the consumer config selects the active reviewed ea1 or merged e46 authority tuple.
+    # Scenario: the consumer config selects the active reviewed ea1 or merged 053 authority tuple.
     # Purpose: bind the archive identity and every ordered path/hash pair to a fixed approved snapshot.
     It 'UnitT10_pins_one_exact_approved_authority_tuple_and_required_file_inventory' {
         Test-Path -LiteralPath $script:AdapterPath -PathType Leaf | Should -BeTrue
@@ -103,11 +103,27 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $coreWrapper | Should -Match "Keep the machine report on stdout and bounded live test progress on stderr\."
         $coreWrapper | Should -Match '\$pesterConfig\.Run\.Path = \$testRoot'
         $coreWrapper | Should -Match '\$pesterConfig\.Run\.PassThru = \$true'
+        $coreWrapper | Should -Match '\$pesterConfig\.TestRegistry\.Enabled = \$false'
+        $coreWrapper | Should -Match "\.Version -eq \[version\]'6\.2\.0'"
+        $coreWrapper | Should -Match '\$verifiedAuthoritySnapshotRoot = Get-VerifiedCoreAuthoritySnapshotPath -OuterAdapterRunId \$CandidateAuthorityAdapterRunId'
+        $coreWrapper | Should -Match '\[Environment\]::SetEnvironmentVariable\(''SYP154_CANDIDATE_AUTHORITY_ROOT'', \$verifiedAuthoritySnapshotRoot, ''Process''\)'
+        $coreWrapper | Should -Match 'Core Pester module candidate check failed'
+        $coreWrapper | Should -Match 'Get-CorePesterRuntimeModuleRoot'
+        $coreWrapper | Should -Match 'Test-CorePesterClosure'
         $coreWrapper | Should -Match '\$entry = "Pester progress utc='
         $coreWrapper | Should -Match '\[Console\]::Error\.WriteLine\(\$entry\)'
         $coreWrapper | Should -Match '\$summary \| ConvertTo-Json -Compress'
         $coreWrapper | Should -Match '\$failedBlocks = \[int\]\$result\.FailedBlocksCount'
         $coreWrapper | Should -Match '\$failedContainers = \[int\]\$result\.FailedContainersCount'
+        $commonToolSource = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'tests/CommonToolReportIntegration.Tests.ps1') -Raw
+        $commonToolSupport = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'tests/CommonToolAuthoritySupport.ps1') -Raw
+        $commonToolSupport | Should -Match '\$coreContextPresent = -not \[string\]::IsNullOrWhiteSpace\(\$CoreRunId\) -or'
+        $commonToolSupport | Should -Match 'Core run has no scoped verified authority snapshot'
+        $commonToolSupport | Should -Match 'syp154-authority-'' \+ \[string\]\$AuthorityPin\.commit'
+        $commonToolSupport | Should -Match 'never downloads or creates runtime authority'
+        $transportSource = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'tests/CommonToolAuthorityTransport.Tests.ps1') -Raw
+        $transportSource | Should -Match 'InterT30_runs_the_real_CommonTool_suite_in_a_sanitized_Pester6_child'
+        $transportSource | Should -Match 'one actual preinstalled Pester 6\.2\.0 module'
         $coreWrapper | Should -Match '\$failed -ne 0 -or \$failedBlocks -ne 0 -or'
     }
 
@@ -143,6 +159,27 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'actions/checkout@[0-9a-f]{40}'
         $workflow | Should -Match 'uses:\s*\*checkout-action-reference'
         $workflow | Should -Match '(?m)^\s*id:\s*authority-mode\s*$'
+        $authorityTransportStep = [regex]::Match($workflow, '(?ms)- name: Verify and bind candidate-pinned authority for integration tests(?<body>.*?)(?=^      - name:|\z)')
+        $authorityTransportStep.Success | Should -BeTrue
+        $authorityTransportStep.Groups['body'].Value | Should -Match '(?m)^\s+VALIDATION_MODE: \$\{\{ steps\.authority-mode\.outputs\.validation_mode \}\}\r?$'
+        $authorityTransportStep.Groups['body'].Value | Should -Match '\$env:VALIDATION_MODE -ceq ''legacy'''
+        $authorityTransportStep.Groups['body'].Value | Should -Match '\$tempRoot = \[IO\.Path\]::GetFullPath\(\[IO\.Path\]::GetTempPath\(\)\)'
+        $authorityTransportStep.Groups['body'].Value | Should -Match '\$snapshotRoot = \[IO\.Path\]::GetFullPath\(\(Join-Path \$tempRoot \(''syp154-authority-'' \+ \[string\]\$pin\.commit\)\)\)'
+        $authorityTransportStep.Groups['body'].Value | Should -Match 'if \(-not \(Test-Path -LiteralPath \$snapshotRoot\)\)'
+        $authorityTransportStep.Groups['body'].Value | Should -Match '--local --no-hardlinks \$authorityRoot \$snapshotRoot'
+        $authorityTransportStep.Groups['body'].Value | Should -Match 'Legacy authority snapshot must be clean; existing cache was not modified\.'
+        $authorityTransportStep.Groups['body'].Value | Should -Not -Match 'GITHUB_ENV.*SYP154_CANDIDATE_AUTHORITY_ROOT'
+        $authorityTransportBody = $authorityTransportStep.Groups['body'].Value
+        $tempRootIndex = $authorityTransportBody.IndexOf('$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())', [StringComparison]::Ordinal)
+        $tempPreflightIndex = $authorityTransportBody.IndexOf('$cursor = $tempRoot', [StringComparison]::Ordinal)
+        $reparsePreflightIndex = $authorityTransportBody.IndexOf('Legacy TEMP transport parent contains a reparse ancestor.', [StringComparison]::Ordinal)
+        $snapshotIndex = $authorityTransportBody.IndexOf('$snapshotRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot', [StringComparison]::Ordinal)
+        $containmentIndex = $authorityTransportBody.IndexOf('Legacy authority snapshot escaped the runner TEMP root.', [StringComparison]::Ordinal)
+        $cloneIndex = $authorityTransportBody.IndexOf('--config core.autocrlf=false --local --no-hardlinks', [StringComparison]::Ordinal)
+        ($tempRootIndex -ge 0 -and $tempPreflightIndex -gt $tempRootIndex -and
+            $reparsePreflightIndex -gt $tempPreflightIndex -and $snapshotIndex -gt $reparsePreflightIndex -and
+            $containmentIndex -gt $snapshotIndex -and $cloneIndex -gt $containmentIndex) | Should -BeTrue
+        $authorityTransportStep.Groups['body'].Value | Should -Match '\$fileCursor = \$filePath'
         $workflow | Should -Match '(?m)^\s*id:\s*canonical-source-report\s*$'
         $workflow | Should -Match '(?m)^\s*uses:\s*actions/setup-go@[0-9a-f]{40}(?:\s+#.*)?$'
         $workflow | Should -Match '(?ms)- name: Set up approved Go runtime\s+if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == ''legacy'' \}\}'
@@ -156,7 +193,19 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$asset\.digest -cnotmatch ''\^sha256:'
         $workflow | Should -Match 'Get-FileHash -LiteralPath \$zipPath -Algorithm SHA256'
         $workflow | Should -Match 'Child PowerShell resolution differs from the verified runtime\.'
-        $workflow | Should -Match 'Install-PSResource -Name Pester -Version ''''6\.2\.0'''''
+        $workflow | Should -Match '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core and legacy-driver regressions\s+shell: pwsh'
+        $pesterInstallStepMatch = [regex]::Match($workflow, '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core and legacy-driver regressions(?<body>.*?)(?=^      - name:|\z)')
+        $pesterInstallStepMatch.Success | Should -BeTrue
+        $pesterInstallStepMatch.Groups['body'].Value | Should -Not -Match '(?m)^\s+if:'
+        $workflow | Should -Match 'scripts/Prepare-PesterRuntime\.ps1'
+        $workflow | Should -Match 'setup-receipt\.json'
+        $workflow | Should -Not -Match 'Install-PSResource|Install-Module|CurrentUser'
+        $setupIndex = $workflow.IndexOf('Acquire and bind exact Pester 6.2.0', [StringComparison]::Ordinal)
+        $validateIndex = $workflow.IndexOf('Validate exact candidate with the verified runtime', [StringComparison]::Ordinal)
+        ($setupIndex -ge 0 -and $validateIndex -gt $setupIndex) | Should -BeTrue
+        $setupScript = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'scripts/Prepare-PesterRuntime.ps1') -Raw
+        $setupScript | Should -Match 'https://www\.powershellgallery\.com/api/v2/package/Pester/6\.2\.0'
+        $setupScript | Should -Match 'Test-CorePesterPackageArchive'
         $workflow | Should -Match 'source_conformance: \$\{\{ steps\.canonical-source-report\.outputs\.source_conformance \}\}'
         $workflow | Should -Not -Match '(?m)^\s*id:\s*source-conformance\s*$'
         $workflow | Should -Not -Match 'steps\.source-conformance\.outputs\.status'
@@ -172,6 +221,41 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$checks\[1\]\.id -cne ''repository-pester'''
         $workflow | Should -Match 'source_conformance=passed'
         $workflow | Should -Match 'if: \$\{\{ always\(\) \}\}'
+        $inventoryStep = [regex]::Match($workflow, '(?ms)- name: Preserve complete Core Pester case inventory(?<body>.*?)(?=^      - name:|\z)')
+        $inventoryStep.Success | Should -BeTrue
+        $inventoryBody = $inventoryStep.Groups['body'].Value
+        $inventoryBody | Should -Match 'if: \$\{\{ always\(\) && steps\.authority-mode\.outputs\.validation_mode == ''core'' \}\}'
+        $inventoryBody | Should -Match 'Expected exactly one Core case inventory sidecar'
+        $inventoryBody | Should -Match '524288'
+        $inventoryBody | Should -Match 'SHA256\]::HashData\(\$sidecarBytes\)'
+        $inventoryBody | Should -Match '\[Convert\]::ToBase64String\(\$sidecarBytes\)'
+        $inventoryBody | Should -Match 'CORE_PESTER_INVENTORY_CHUNK index='
+        $inventoryBody | Should -Match 'CORE_PESTER_INVENTORY_BEGIN'
+        $inventoryBody | Should -Match 'CORE_PESTER_INVENTORY_END'
+        $inventoryBody | Should -Match '\$summaryLines\.Add\(\$chunkLine\)'
+        $inventoryBody | Should -Match '\$summaryLines -join "`n"'
+        $inventoryBody | Should -Match 'Add-VerifiedInventoryStatusToSummary -Text \$summary'
+        $inventoryBody | Should -Match 'A successful Core validation requires a complete Pester case inventory sidecar\.'
+        $cleanupStep = [regex]::Match($workflow, '(?ms)- name: Clean only this run''s temporary files(?<body>.*?)(?=^      - name:|\z)')
+        $cleanupStep.Success | Should -BeTrue
+        $cleanupBody = $cleanupStep.Groups['body'].Value
+        $cleanupBody | Should -Match 'without this run ownership evidence'
+        $cleanupBody | Should -Match 'Get-ChildItem -LiteralPath \$directory -Force -ErrorAction Stop'
+        $cleanupBody | Should -Match 'owned tree contains a reparse point'
+        $cleanupBody | Should -Match 'owned root or an ancestor is a reparse point'
+        $cleanupBody | Should -Match 'Remove-Item -LiteralPath \$ownedRoot -Recurse -Force'
+        $rootIdentityIndex = $cleanupBody.IndexOf('if (-not [string]::Equals($ownedRoot, $expectedRoot', [StringComparison]::Ordinal)
+        $ancestorCheckIndex = $cleanupBody.IndexOf('$pathEntry.Attributes -band [IO.FileAttributes]::ReparsePoint', [StringComparison]::Ordinal)
+        $treeScanIndex = $cleanupBody.IndexOf('$directories = [Collections.Generic.Stack[string]]::new()', [StringComparison]::Ordinal)
+        $recursiveRemoveIndex = $cleanupBody.IndexOf('Remove-Item -LiteralPath $ownedRoot -Recurse -Force', [StringComparison]::Ordinal)
+        ($rootIdentityIndex -ge 0 -and $ancestorCheckIndex -gt $rootIdentityIndex -and
+            $treeScanIndex -gt $ancestorCheckIndex -and $recursiveRemoveIndex -gt $treeScanIndex) | Should -BeTrue
+        $validateIndex = $workflow.IndexOf('Validate exact candidate with the verified runtime', [StringComparison]::Ordinal)
+        $inventoryIndex = $workflow.IndexOf('Preserve complete Core Pester case inventory', [StringComparison]::Ordinal)
+        $publishIndex = $workflow.IndexOf('Publish protected validation result', [StringComparison]::Ordinal)
+        $cleanupIndex = $workflow.IndexOf('Clean only this run''s temporary files', [StringComparison]::Ordinal)
+        ($validateIndex -ge 0 -and $inventoryIndex -gt $validateIndex -and
+            $publishIndex -gt $inventoryIndex -and $cleanupIndex -gt $publishIndex) | Should -BeTrue
         $workflow | Should -Not -Match '(?m)^\s*(Install-Module|npm install|go install|pip install)\b'
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.github/workflows/skill-validator.yml') | Should -BeFalse
 
@@ -205,7 +289,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$driverHead -cne \$env:EXPECTED_DRIVER_SHA'
         $workflow | Should -Match '\$baselineAuthority = ''51399617ddebe21656fe4265a8d9ad116a943583'''
         $workflow | Should -Match '\$nextAuthority = ''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
-        $workflow | Should -Match '\$mergedAuthority = ''e46de30e2365ad090f101e140485ca0eba7a9a55'''
+        $workflow | Should -Match '\$mergedAuthority = ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'''
         $workflow | Should -Match '\$coreAuthorities = @\(\$nextAuthority, \$mergedAuthority\)'
         $workflow | Should -Match '\$candidatePin\.authority\.commit -cnotin \(\@\(\$baselineAuthority\) \+ \$coreAuthorities\)'
         $workflow | Should -Match 'A protected Core driver cannot downgrade an unapproved or baseline candidate\.'

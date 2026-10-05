@@ -99,8 +99,8 @@ $script:NextAuthorityFiles = [ordered]@{
     'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
     'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
 }
-$script:MergedAuthorityCommit = 'e46de30e2365ad090f101e140485ca0eba7a9a55'
-$script:MergedAuthorityArchiveSha256 = '963ebad13cfadc297647e7bbf6452da8bd5db5a3d465103c0ca70ec136e15be2'
+$script:MergedAuthorityCommit = '053b80143b5ef48b06a8c448d5ac1abaf9a49df8'
+$script:MergedAuthorityArchiveSha256 = 'cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9'
 $script:MergedAuthorityFiles = [ordered]@{
     'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
     'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -109,13 +109,13 @@ $script:MergedAuthorityFiles = [ordered]@{
     'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
     'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'ac58302e0e350c1ab4ba4dad8a33cd3abce12d592537fbdb23dfb1936d064e91'
     'docs/standards/skill-repository-review-matrix.md' = '299925aabe3cab360827baad9bdeb1f0f56fc320dad967e49fe0b6bf9cdf8f8a'
-    'docs/standards/skill-repository-standard.md' = 'bba519d01efc8d6d8508427c39a8cb3cd7e430f170febba507471bb4b8531294'
+    'docs/standards/skill-repository-standard.md' = '4eaf26afb98bbc42e9d1ddd51cf3d375958a37068998beda5c0f62471e64cbe9'
     'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
     'docs/standards/validation-security-gate.json' = '657122dde340f1f7f4442780cc27ffcb00b60c0d2afdcea22d63fbf7dbfdca7d'
     'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
     'scripts/Invoke-StandardAuthorityGate.ps1' = '8e00ee1e48ef8359ab7be3539f8f7585ccde18b41e26d810843715ebc3656a4c'
-    'scripts/Resolve-PythonWheelClosure.py' = 'd209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35'
-    'scripts/Resolve-StandardValidationTool.ps1' = '86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2'
+    'scripts/Resolve-PythonWheelClosure.py' = 'f9fcd99c408849f98564fbc4c30f3d7e6ad8148b60cb4d8f58fc29b040c4519c'
+    'scripts/Resolve-StandardValidationTool.ps1' = '71e6d5b191b74202e96f34a856d3317efb18662e17c8368d112d89b7d6795b15'
     'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
     'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
     'docs/standards/standard-validation-contract-v1.json' = '707edf8945ad9a7097df1dfb22a8f05ce47d0e0a66e2e44381036d630e854da0'
@@ -637,6 +637,7 @@ function New-StandardCoreAdapterV2 {
     param(
         [Parameter(Mandatory = $true)][string] $PowerShellPath,
         [Parameter(Mandatory = $true)][string] $TrustedToolRoot,
+        [Parameter(Mandatory = $true)][string] $CandidateAuthorityAdapterRunId,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]] $ActiveSkillIds
     )
 
@@ -648,13 +649,17 @@ function New-StandardCoreAdapterV2 {
          -not $fullPowerShellPath.StartsWith($fullTrustedToolRoot + [IO.Path]::DirectorySeparatorChar, $comparison))) {
         throw 'Trusted PowerShell executable must be a regular file within TrustedToolRoot.'
     }
+    if ($CandidateAuthorityAdapterRunId -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'Core Pester requires the canonical outer adapter run identity.'
+    }
     if ($ActiveSkillIds.Count -eq 0) { throw 'Core adapter requires at least one active Skill.' }
     foreach ($skillId in $ActiveSkillIds) {
         if ($skillId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "Core adapter contains an invalid active Skill ID: '$skillId'." }
     }
     $powerShellSha256 = (Get-FileHash -LiteralPath $fullPowerShellPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $generalArguments = @('-NoProfile', '-NonInteractive', '-File', 'scripts/Test-SkillGeneral.ps1', '-ReadOnlySnapshot')
-    $pesterArguments = @('-NoProfile', '-NonInteractive', '-File', 'scripts/Invoke-CorePester.ps1')
+    $pesterArguments = @('-NoProfile', '-NonInteractive', '-File', 'scripts/Invoke-CorePester.ps1',
+        '-CandidateAuthorityAdapterRunId', $CandidateAuthorityAdapterRunId)
     return [ordered]@{
         schemaVersion = 2
         adapter = 'standard-core-adapter-v2'
@@ -699,6 +704,35 @@ function Test-LegacyRunRequested {
         if (@($BoundParameters.Keys) -ccontains $name) { return $true }
     }
     return $false
+}
+
+function Assert-OrdinaryCoreRunRequest {
+    param(
+        [Parameter(Mandatory = $true)][string] $ExecutionMode,
+        [Parameter(Mandatory = $true)] $CandidateAuthority,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary] $BoundParameters
+    )
+
+    # ValidateSet accepts case variants, and PowerShell's ordinary comparisons
+    # select Run case-insensitively. Keep this preflight on the same boundary.
+    if ($ExecutionMode -ine 'Run') { return }
+    if (Test-LegacyRunRequested -BoundParameters $BoundParameters) {
+        throw 'Ordinary Run does not accept legacy tool-resolution or development-harness inputs; use PrepareSemantic or ResumeSemantic for explicit Semantic setup and execution.'
+    }
+    if ([string]$CandidateAuthority.repository -cne $script:AuthorityRepository -or
+        [string]$CandidateAuthority.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)) {
+        throw 'Ordinary Run requires one exact approved Core authority pin; it cannot fall back to legacy tool resolution.'
+    }
+}
+
+function Get-SemanticRunClaimPath {
+    param(
+        [Parameter(Mandatory = $true)][string] $RunRoot,
+        [Parameter(Mandatory = $true)][string] $RunId
+    )
+
+    if ($RunId -cnotmatch '^[0-9a-f]{32}$') { throw 'Semantic run claim requires a canonical run identity.' }
+    return Join-Path ([IO.Path]::GetFullPath($RunRoot)) "semantic-run-$RunId.consumed.json"
 }
 
 function Get-StandardCoreRunPaths {
@@ -1542,7 +1576,8 @@ try {
         $outputFull = Assert-PathWithinRoot -Path ([string]$plan.execution.outputPath) -Root $planArtifactsRoot -Context 'Prepared output path'
         if (Test-Path -LiteralPath $outputFull) { throw 'Prepared output path is no longer create-only.' }
         $claimPath = Assert-PathWithinRoot -Path ([string]$plan.execution.consumptionClaimPath) -Root $planArtifactsRoot -Context 'Prepared consumption claim'
-        if (-not (Test-PathEqual -Left $claimPath -Right "$planFull.consumed.json")) { throw 'Prepared consumption claim path is not derived from the run plan.' }
+        $expectedClaimPath = Get-SemanticRunClaimPath -RunRoot $runRoot -RunId ([string]$plan.runId)
+        if (-not (Test-PathEqual -Left $claimPath -Right $expectedClaimPath)) { throw 'Prepared consumption claim path is not derived from the run identity.' }
         $claimStream = $null
         try {
             $claimStream = [IO.File]::Open($claimPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -1597,15 +1632,13 @@ try {
     if ($ExecutionMode -eq 'Run') {
         $candidateConfig = Read-JsonFile -Path (Join-Path $repoRoot 'config/standard-v1.json') -Context 'candidate config/standard-v1.json'
         $candidateAuthority = Assert-AuthorityConfig -Config $candidateConfig -AllowNextAuthority
+        Assert-OrdinaryCoreRunRequest -ExecutionMode $ExecutionMode -CandidateAuthority $candidateAuthority -BoundParameters $PSBoundParameters
     }
     $activeSkillIds = Get-ActiveSkillIds -Root $repoRoot
     $eventName = Get-EventName
-    $legacyRunRequested = if ($ExecutionMode -eq 'Run') {
-        Test-LegacyRunRequested -BoundParameters $PSBoundParameters
-    }
-    else { $false }
     $coreRunSelected = $ExecutionMode -eq 'Run' -and
-        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit) -and -not $legacyRunRequested
+        [string]$candidateAuthority.repository -ceq $script:AuthorityRepository -and
+        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)
     if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
         ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
         throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'
@@ -1657,7 +1690,8 @@ try {
             Assert-NoReparseAncestors -Path $adapterRoot -Context 'Core adapter root'
             $authoritySnapshot = New-StandardCoreAuthoritySnapshot -GitPath $gitPath -SourceRoot $authorityCheckout.root -OwnedRoot $adapterRoot -AuthorityPin $candidateAuthority
             $centralRunnerPath = [string]$authoritySnapshot.runnerPath
-            $adapter = New-StandardCoreAdapterV2 -PowerShellPath $pwshPath -TrustedToolRoot $trustedRoot -ActiveSkillIds $activeSkillIds
+            $adapter = New-StandardCoreAdapterV2 -PowerShellPath $pwshPath -TrustedToolRoot $trustedRoot `
+                -CandidateAuthorityAdapterRunId $coreRunPaths.runId -ActiveSkillIds $activeSkillIds
             Write-Utf8NoBomCreateNew -Path $adapterPath -Text (($adapter | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
             $coreRunnerArgs = @(
                 '-CandidateRoot', $repoRoot,
@@ -1966,7 +2000,7 @@ try {
                 outputPath = $outputFull
                 timeoutSeconds = $TimeoutSeconds
                 semanticTriggered = $true
-                consumptionClaimPath = "$semanticRunPlanFull.consumed.json"
+                consumptionClaimPath = Get-SemanticRunClaimPath -RunRoot $runRoot -RunId $runId
             }
             semantic = [ordered]@{
                 consentRequestPath = $semanticArtifactPaths.consentRequest

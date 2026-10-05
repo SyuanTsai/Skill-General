@@ -58,7 +58,7 @@ jobs:
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
-          $mergedAuthority = 'e46de30e2365ad090f101e140485ca0eba7a9a55'
+          $mergedAuthority = '053b80143b5ef48b06a8c448d5ac1abaf9a49df8'
           $baselineAuthority = '51399617ddebe21656fe4265a8d9ad116a943583'
           $coreAuthorities = @($nextAuthority, $mergedAuthority)
           if ([string]$candidatePin.authority.commit -cnotin (@($baselineAuthority) + $coreAuthorities)) {
@@ -76,15 +76,14 @@ jobs:
               throw 'Protected Core driver is missing the trusted Pester wrapper.'
             }
             $mode = 'core'
-            "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
           else {
             throw 'Protected driver has an unapproved authority pin.'
           }
+          "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Checkout pinned Core authority
-        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+      - name: Checkout candidate-pinned authority for validation tests
         uses: *checkout-action-reference # actions/checkout v7
         with:
           repository: SyuanTsai/SyuanTsai-AI-Instructions
@@ -92,6 +91,135 @@ jobs:
           path: authority
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify and bind candidate-pinned authority for integration tests
+        shell: pwsh
+        env:
+          VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $authorityRoot = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'authority'))
+          $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $pin = $candidatePin.authority
+          $git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          $cursor = $authorityRoot
+          while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+            $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Candidate authority checkout contains a reparse ancestor.' }
+            $parent = Split-Path -Parent $cursor
+            if ($parent -ceq $cursor) { break }
+            $cursor = $parent
+          }
+          & $git -C $authorityRoot config --local core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion for exact pinned file verification.' }
+          & $git -C $authorityRoot checkout-index --all --force
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore exact pinned authority blobs into the disposable checkout.' }
+          $top = @(& $git -C $authorityRoot rev-parse --show-toplevel)
+          if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or
+              -not [IO.Path]::GetFullPath([string]$top[0]).Equals($authorityRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Candidate-pinned authority is not the expected Git checkout root.'
+          }
+          $head = @(& $git -C $authorityRoot rev-parse --verify HEAD)
+          if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or [string]$head[0] -cne [string]$pin.commit) {
+            throw 'Candidate-pinned authority checkout HEAD differs from the immutable candidate config.'
+          }
+          $origins = @(& $git -C $authorityRoot config --local --get-all remote.origin.url)
+          $expectedOrigin = ([string]$pin.repository).Trim().TrimEnd('/') -replace '\.git$', ''
+          if ($LASTEXITCODE -ne 0 -or $origins.Count -ne 1 -or
+              -not (([string]$origins[0]).Trim().TrimEnd('/') -replace '\.git$', '').Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Candidate-pinned authority origin differs from the immutable candidate config.'
+          }
+          $dirty = @(& $git -C $authorityRoot status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Candidate-pinned authority checkout must be clean.' }
+          foreach ($entry in @($pin.files)) {
+            $relativePath = [string]$entry.path
+            if ([string]::IsNullOrWhiteSpace($relativePath) -or $relativePath.StartsWith('/') -or
+                $relativePath -match '(^|/)\.\.?(/|$)' -or $relativePath.Contains('\')) {
+              throw 'Candidate authority file inventory contains an unsafe relative path.'
+            }
+            $filePath = [IO.Path]::GetFullPath((Join-Path $authorityRoot ($relativePath -replace '/', [IO.Path]::DirectorySeparatorChar)))
+            if (-not $filePath.StartsWith($authorityRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+              throw "Candidate-pinned authority file identity mismatch: $relativePath"
+            }
+            $fileCursor = $filePath
+            while ($fileCursor -ine $authorityRoot) {
+              $fileEntry = Get-Item -LiteralPath $fileCursor -Force -ErrorAction Stop
+              if ($fileEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Candidate authority inventory traverses a reparse point: $relativePath"
+              }
+              $fileCursor = Split-Path -Parent $fileCursor
+            }
+            if ((Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
+              throw "Candidate-pinned authority file identity mismatch: $relativePath"
+            }
+          }
+          if ($env:VALIDATION_MODE -ceq 'legacy') {
+            if ([string]$pin.commit -cnotmatch '^[0-9a-f]{40}$') { throw 'Legacy authority transport requires an exact commit pin.' }
+            $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+            $cursor = $tempRoot
+            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+              $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+              if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Legacy TEMP transport parent contains a reparse ancestor.' }
+              $parent = Split-Path -Parent $cursor
+              if ($parent -ceq $cursor) { break }
+              $cursor = $parent
+            }
+            $snapshotRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot ('syp154-authority-' + [string]$pin.commit)))
+            if (-not $snapshotRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Legacy authority snapshot escaped the runner TEMP root.'
+            }
+            if (-not (Test-Path -LiteralPath $snapshotRoot)) {
+              & $git clone --config core.autocrlf=false --local --no-hardlinks $authorityRoot $snapshotRoot
+              if ($LASTEXITCODE -ne 0) { throw 'Could not create the missing local legacy authority snapshot.' }
+              & $git -C $snapshotRoot remote set-url origin ([string]$pin.repository)
+              if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its pinned origin.' }
+              & $git -C $snapshotRoot checkout --detach ([string]$pin.commit)
+              if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its exact commit.' }
+            }
+            if (-not (Test-Path -LiteralPath $snapshotRoot -PathType Container)) { throw 'Legacy authority snapshot path is not a directory.' }
+            $cursor = $snapshotRoot
+            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+              $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+              if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Legacy authority snapshot contains a reparse ancestor.' }
+              $parent = Split-Path -Parent $cursor
+              if ($parent -ceq $cursor) { break }
+              $cursor = $parent
+            }
+            $snapshotTop = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --show-toplevel)
+            $snapshotHead = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --verify HEAD)
+            if ($LASTEXITCODE -ne 0 -or $snapshotTop.Count -ne 1 -or
+                -not [IO.Path]::GetFullPath([string]$snapshotTop[0]).Equals($snapshotRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                $snapshotHead.Count -ne 1 -or [string]$snapshotHead[0] -cne [string]$pin.commit) {
+              throw 'Legacy authority snapshot does not match its exact immutable pin.'
+            }
+            $snapshotOrigins = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot config --local --get-all remote.origin.url)
+            if ($LASTEXITCODE -ne 0 -or $snapshotOrigins.Count -ne 1 -or
+                -not ((([string]$snapshotOrigins[0]).Trim().TrimEnd('/') -replace '\.git$', '').Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase))) {
+              throw 'Legacy authority snapshot origin differs from its immutable pin.'
+            }
+            $snapshotDirty = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot status --porcelain=v1 --untracked-files=all)
+            if ($LASTEXITCODE -ne 0 -or $snapshotDirty.Count -ne 0) { throw 'Legacy authority snapshot must be clean; existing cache was not modified.' }
+            foreach ($entry in @($pin.files)) {
+              $relativePath = [string]$entry.path
+              $filePath = [IO.Path]::GetFullPath((Join-Path $snapshotRoot ($relativePath -replace '/', [IO.Path]::DirectorySeparatorChar)))
+              if (-not $filePath.StartsWith($snapshotRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+                  -not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+                throw "Legacy authority snapshot is missing a pinned file: $relativePath"
+              }
+              $fileCursor = $filePath
+              while ($fileCursor -ine $snapshotRoot) {
+                $fileEntry = Get-Item -LiteralPath $fileCursor -Force -ErrorAction Stop
+                if ($fileEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Legacy authority inventory traverses a reparse point: $relativePath" }
+                $fileCursor = Split-Path -Parent $fileCursor
+              }
+              if ((Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
+                throw "Legacy authority snapshot file differs from its immutable pin: $relativePath"
+              }
+            }
+            Write-Host 'Legacy driver authority transport is a verified local snapshot; runtime acquisition remains disabled.'
+          }
 
       - name: Set up approved Go runtime
         if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
@@ -185,28 +313,33 @@ jobs:
           "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
 
-      - name: Install pinned Pester for ordinary Core
-        if: ${{ steps.authority-mode.outputs.validation_mode == 'core' }}
+      - name: Acquire and bind exact Pester 6.2.0 for Core and legacy-driver regressions
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $install = @(
-            '$ErrorActionPreference = ''Stop'''
-            'Install-PSResource -Name Pester -Version ''6.2.0'' -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet -AcceptLicense -ErrorAction Stop'
-            '$modules = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -eq 6 } | Sort-Object Version -Descending)'
-            'if ($modules.Count -eq 0 -or $modules[0].Version.ToString() -cne ''6.2.0'') { throw ''Ordinary Core requires the reviewed Pester 6.2.0 runtime.'' }'
-            'Import-Module -Name $modules[0].Path -ErrorAction Stop'
-          ) -join '; '
-          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
-          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
-            throw 'Pester installer PowerShell differs from the verified runtime.'
+          if ([string]::IsNullOrWhiteSpace($env:RUN_OWNED_ROOT) -or [string]::IsNullOrWhiteSpace($env:POWERSHELL_RUNTIME)) {
+            throw 'Run-owned setup root or verified PowerShell executable is missing.'
           }
-          pwsh -NoLogo -NoProfile -NonInteractive -Command $install
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Pester installation or verification failed.' }
+          $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
+          $setupScript = Join-Path $candidate 'scripts/Prepare-PesterRuntime.ps1'
+          if (-not (Test-Path -LiteralPath $setupScript -PathType Leaf)) { throw 'Candidate Pester setup script is missing.' }
+          & $env:POWERSHELL_RUNTIME -NoLogo -NoProfile -NonInteractive -File $setupScript `
+            -RuntimeExecutable $env:POWERSHELL_RUNTIME -OwnedRoot $env:RUN_OWNED_ROOT
+          $setupExitCode = [int]$LASTEXITCODE
+          if ($setupExitCode -ne 0) { throw "Verified Pester runtime setup failed with true child exit $setupExitCode." }
+          $receipt = Join-Path $env:RUN_OWNED_ROOT 'pester-setup/setup-receipt.json'
+          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw 'Verified Pester setup did not persist its run-owned receipt.' }
+          $setupResult = Get-Content -LiteralPath $receipt -Raw -Encoding utf8 | ConvertFrom-Json -Depth 20
+          if ([string]$setupResult.terminalStatus -cne 'verified' -or
+              [string]$setupResult.runtimeExecutable -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME) -or
+              [bool]$setupResult.officialArchiveDigestClaimed -or [int]$setupResult.modulePayloadCount -ne 17) {
+            throw 'Pester setup receipt does not prove the exact runtime closure and observed-only archive hash.'
+          }
+          $receiptSha = (Get-FileHash -LiteralPath $receipt -Algorithm SHA256).Hash.ToLowerInvariant()
+          "Pester setup receipt: $receipt (sha256 $receiptSha); observed archive SHA $($setupResult.observedArchiveSha256)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Validate exact candidate with the verified runtime
-        id: canonical-source-report
+        id: validate-candidate-report
         shell: pwsh
         working-directory: driver
         env:
@@ -484,6 +617,179 @@ jobs:
             }
           }
           else { throw 'Protected authority mode changed before report acceptance.' }
+      - name: Preserve complete Core Pester case inventory
+        id: preserve-core-pester-inventory
+        if: ${{ always() && steps.authority-mode.outputs.validation_mode == 'core' }}
+        shell: pwsh
+        env:
+          VALIDATION_STEP_OUTCOME: ${{ steps.validate-candidate-report.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
+          $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          if (-not $ownedRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Case inventory preservation root differs from this run registered ownership path.'
+          }
+
+          function Assert-RunOwnedPathHasNoReparseAncestor {
+            param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $Boundary)
+            $fullPath = [IO.Path]::GetFullPath($Path)
+            $fullBoundary = [IO.Path]::GetFullPath($Boundary)
+            $prefix = if ($fullBoundary.EndsWith([IO.Path]::DirectorySeparatorChar)) { $fullBoundary } else { $fullBoundary + [IO.Path]::DirectorySeparatorChar }
+            if (-not $fullPath.Equals($fullBoundary, [StringComparison]::OrdinalIgnoreCase) -and
+                -not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Case inventory evidence path escaped its approved root.'
+            }
+            $boundaryItem = Get-Item -LiteralPath $fullBoundary -Force -ErrorAction Stop
+            if (-not $boundaryItem.PSIsContainer) { throw 'Case inventory evidence boundary is not a directory.' }
+            $cursor = $fullPath
+            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+              if (Test-Path -LiteralPath $cursor) {
+                $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+                if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                  throw "Case inventory evidence path contains a reparse point: $cursor"
+                }
+              }
+              $parent = [IO.Directory]::GetParent($cursor)
+              if ($null -eq $parent) { break }
+              $cursor = $parent.FullName
+            }
+            return $fullPath
+          }
+
+          function Add-VerifiedInventoryStatusToSummary {
+            param([Parameter(Mandatory)][string] $Text)
+            $summaryPath = Assert-RunOwnedPathHasNoReparseAncestor -Path $env:GITHUB_STEP_SUMMARY -Boundary $tempRoot
+            $summaryBytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+            $summaryStream = [IO.FileStream]::new($summaryPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            try {
+              $initialLength = $summaryStream.Length
+              if ($initialLength + $summaryBytes.Length -gt 1000000) { throw 'Step summary evidence would exceed the bounded 1,000,000-byte limit.' }
+              $summaryStream.Position = $initialLength
+              $summaryStream.Write($summaryBytes, 0, $summaryBytes.Length)
+              $summaryStream.Flush($true)
+              $summaryStream.Position = $initialLength
+              $readback = [byte[]]::new($summaryBytes.Length)
+              $read = 0
+              while ($read -lt $readback.Length) {
+                $count = $summaryStream.Read($readback, $read, $readback.Length - $read)
+                if ($count -le 0) { throw 'Step summary metadata readback was truncated.' }
+                $read += $count
+              }
+              for ($index = 0; $index -lt $summaryBytes.Length; $index++) {
+                if ($readback[$index] -ne $summaryBytes[$index]) { throw 'Step summary metadata readback differed from the exact appended bytes.' }
+              }
+            }
+            finally { $summaryStream.Dispose() }
+          }
+
+          $coreRoot = Join-Path $ownedRoot 'artifacts'
+          $runsRoot = Join-Path $coreRoot 'runs'
+          $sidecarName = 'repository-pester-case-inventory-v1.json'
+          $sidecars = [Collections.Generic.List[string]]::new()
+          if (Test-Path -LiteralPath $runsRoot -PathType Container) {
+            [void](Assert-RunOwnedPathHasNoReparseAncestor -Path $runsRoot -Boundary $ownedRoot)
+            foreach ($runDirectory in @(Get-ChildItem -LiteralPath $runsRoot -Directory -Force -ErrorAction Stop)) {
+              if ($runDirectory.Name -cnotmatch '^[0-9a-f]{32}$') { throw "Core run directory has a noncanonical identity: $($runDirectory.Name)" }
+              [void](Assert-RunOwnedPathHasNoReparseAncestor -Path $runDirectory.FullName -Boundary $ownedRoot)
+              $candidateSidecar = Join-Path $runDirectory.FullName $sidecarName
+              if (Test-Path -LiteralPath $candidateSidecar) {
+                [void](Assert-RunOwnedPathHasNoReparseAncestor -Path $candidateSidecar -Boundary $ownedRoot)
+                $sidecarItem = Get-Item -LiteralPath $candidateSidecar -Force -ErrorAction Stop
+                if ($sidecarItem.PSIsContainer) { throw 'Core case inventory sidecar is not a regular file.' }
+                $sidecars.Add($candidateSidecar)
+              }
+            }
+          }
+
+          if ($sidecars.Count -eq 0) {
+            $reportPath = Join-Path $coreRoot 'standard-core-validation-v2-report.json'
+            $pesterCheckRan = $false
+            if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
+              [void](Assert-RunOwnedPathHasNoReparseAncestor -Path $reportPath -Boundary $ownedRoot)
+              $coreReport = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+              $pesterCheckRan = @($coreReport.checks | Where-Object { $_.id -ceq 'repository-pester' -and $_.kind -ceq 'pester' }).Count -gt 0
+            }
+            if ($env:VALIDATION_STEP_OUTCOME -ceq 'success' -or $pesterCheckRan) {
+              throw 'Core Pester ran or validated successfully but produced no preservable case inventory sidecar.'
+            }
+            $summary = "`n### Core Pester case inventory`n`n- Status: not produced`n- Validation step outcome: $env:VALIDATION_STEP_OUTCOME`n- Repository Pester check ran: $pesterCheckRan`n- Reason: Core validation ended before a Pester case-inventory sidecar was produced.`n"
+            Add-VerifiedInventoryStatusToSummary -Text $summary
+            [Console]::Out.WriteLine("CORE_PESTER_INVENTORY_NOT_PRODUCED outcome=$env:VALIDATION_STEP_OUTCOME pesterCheckRan=$pesterCheckRan")
+          }
+          else {
+            if ($sidecars.Count -ne 1) { throw "Expected exactly one Core case inventory sidecar, found $($sidecars.Count)." }
+            $sidecarPath = [IO.Path]::GetFullPath($sidecars[0])
+            $sidecarItem = Get-Item -LiteralPath $sidecarPath -Force -ErrorAction Stop
+            if ($sidecarItem.Length -le 0 -or $sidecarItem.Length -gt 524288) { throw 'Core case inventory sidecar exceeds the 512 KiB preservation bound.' }
+            $relativeSidecar = [IO.Path]::GetRelativePath($ownedRoot, $sidecarPath).Replace('\', '/')
+            $runId = [IO.Path]::GetFileName((Split-Path -Parent $sidecarPath))
+            $sidecarBytes = [IO.File]::ReadAllBytes($sidecarPath)
+            $sidecarSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sidecarBytes)).ToLowerInvariant()
+            $sidecarText = [Text.UTF8Encoding]::new($false, $true).GetString($sidecarBytes)
+            $caseLedger = ConvertFrom-Json -InputObject $sidecarText -Depth 100 -ErrorAction Stop
+            if ([string]$caseLedger.report -cne 'standard-core-pester-case-inventory-v1' -or
+                [string]$caseLedger.coreRunId -cne $runId -or
+                [string]$caseLedger.candidateSnapshotIdentity.coreRunId -cne $runId -or
+                [string]$caseLedger.shardIdentity -cne 'core-full') {
+              throw 'Core case inventory sidecar identity or full-suite scope does not match its run-owned path.'
+            }
+            if ($env:VALIDATION_STEP_OUTCOME -ceq 'success' -and
+                ([bool]$caseLedger.complete -ne $true -or [string]$caseLedger.terminalStatus -cne 'complete')) {
+              throw 'A successful Core validation requires a complete Pester case inventory sidecar.'
+            }
+            $afterReadSha256 = (Get-FileHash -LiteralPath $sidecarPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($afterReadSha256 -cne $sidecarSha256) { throw 'Core case inventory sidecar changed while preservation evidence was prepared.' }
+
+            $encoded = [Convert]::ToBase64String($sidecarBytes)
+            $chunkChars = 8192
+            $chunks = [Collections.Generic.List[string]]::new()
+            for ($offset = 0; $offset -lt $encoded.Length; $offset += $chunkChars) {
+              $length = [Math]::Min($chunkChars, $encoded.Length - $offset)
+              $chunks.Add($encoded.Substring($offset, $length))
+            }
+            $reconstructed = [Convert]::FromBase64String(($chunks -join ''))
+            if ($reconstructed.Length -ne $sidecarBytes.Length -or
+                [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($reconstructed)).ToLowerInvariant() -cne $sidecarSha256) {
+              throw 'Numbered job-log chunks do not reconstruct the complete sidecar bytes.'
+            }
+            for ($index = 0; $index -lt $sidecarBytes.Length; $index++) {
+              if ($reconstructed[$index] -ne $sidecarBytes[$index]) { throw 'Job-log chunk reconstruction differs from the source sidecar bytes.' }
+            }
+
+            [Console]::Out.WriteLine("CORE_PESTER_INVENTORY_BEGIN path=$relativeSidecar bytes=$($sidecarBytes.Length) sha256=$sidecarSha256 chunks=$($chunks.Count) encoding=base64")
+            $markdownTick = [string][char]96
+            $summaryLines = [Collections.Generic.List[string]]::new()
+            foreach ($line in @(
+              ''
+              '### Core Pester case inventory'
+              ''
+              '- Status: preserved'
+              ('- Sidecar: {0}{1}{0}' -f $markdownTick, $relativeSidecar)
+              ('- Bytes: {0}' -f $sidecarBytes.Length)
+              ('- SHA-256: {0}{1}{0}' -f $markdownTick, $sidecarSha256)
+              ('- Run ID: {0}{1}{0}' -f $markdownTick, $runId)
+              ('- Full content: numbered Base64 chunks follow; the retained job log is the primary byte record.')
+              ('CORE_PESTER_INVENTORY_BEGIN path={0} bytes={1} sha256={2} chunks={3} encoding=base64' -f $relativeSidecar, $sidecarBytes.Length, $sidecarSha256, $chunks.Count)
+            )) { $summaryLines.Add($line) }
+            for ($index = 0; $index -lt $chunks.Count; $index++) {
+              $chunkLine = 'CORE_PESTER_INVENTORY_CHUNK index={0:D4}/{1:D4} data={2}' -f ($index + 1), $chunks.Count, $chunks[$index]
+              [Console]::Out.WriteLine($chunkLine)
+              $summaryLines.Add($chunkLine)
+            }
+            $inventoryEndLine = 'CORE_PESTER_INVENTORY_END sha256={0} bytes={1}' -f $sidecarSha256, $sidecarBytes.Length
+            [Console]::Out.WriteLine($inventoryEndLine)
+            $summaryLines.Add($inventoryEndLine)
+            $summary = ($summaryLines -join "`n") + "`n"
+            Add-VerifiedInventoryStatusToSummary -Text $summary
+          }
+
+      - name: Publish protected validation result
+        id: canonical-source-report
+        if: ${{ success() }}
+        shell: pwsh
+        run: |
           "source_conformance=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Clean only this run's temporary files
@@ -498,14 +804,37 @@ jobs:
           $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
           $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
           $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
-          if (-not $ownedRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar,
-              [StringComparison]::OrdinalIgnoreCase) -or
-              -not [string]::Equals($ownedRoot, $expectedRoot,
-                [StringComparison]::OrdinalIgnoreCase)) {
+          if (-not [string]::Equals($ownedRoot, $expectedRoot, [StringComparison]::OrdinalIgnoreCase) -or
+              -not $ownedRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Refusing to clean a path without this run ownership evidence.'
           }
           if (Test-Path -LiteralPath $ownedRoot) {
+            $ownedRootItem = Get-Item -LiteralPath $ownedRoot -Force -ErrorAction Stop
+            if (-not $ownedRootItem.PSIsContainer) { throw 'Refusing recursive cleanup because the registered owned root is not a directory.' }
+            $pathToCheck = $ownedRoot
+            while (-not [string]::IsNullOrWhiteSpace($pathToCheck)) {
+              $pathEntry = Get-Item -LiteralPath $pathToCheck -Force -ErrorAction Stop
+              if ($pathEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Refusing recursive cleanup because the owned root or an ancestor is a reparse point: $pathToCheck"
+              }
+              $parentPath = [IO.Directory]::GetParent($pathToCheck)
+              if ($null -eq $parentPath) { break }
+              $pathToCheck = $parentPath.FullName
+            }
+
+            $directories = [Collections.Generic.Stack[string]]::new()
+            $directories.Push($ownedRoot)
+            while ($directories.Count -gt 0) {
+              $directory = $directories.Pop()
+              foreach ($entry in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+                if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                  throw "Refusing recursive cleanup because the owned tree contains a reparse point: $($entry.FullName)"
+                }
+                if ($entry.PSIsContainer) { $directories.Push($entry.FullName) }
+              }
+            }
             Remove-Item -LiteralPath $ownedRoot -Recurse -Force
+            if (Test-Path -LiteralPath $ownedRoot) { throw 'Owned cleanup did not remove the exact registered run directory.' }
           }
 
   repository-contract:

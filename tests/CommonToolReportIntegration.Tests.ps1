@@ -1,7 +1,88 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
+
+# Keep the shared helper in the test-file scope for both independent Describe containers.
+. (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
+
+Describe 'Candidate-pinned Common Tool authority transport' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
+        $script:transportRepositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+        $script:transportPin = (Get-Content -LiteralPath (Join-Path $script:transportRepositoryRoot 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json).authority
+    }
+
+    # Scenario: Core identity is supplied but the wrapper's scoped snapshot is absent.
+    # Purpose: Core must fail closed instead of selecting an adjacent legacy TEMP cache.
+    It 'InterT00_fails_closed_when_Core_context_lacks_its_scoped_snapshot_even_if_TEMP_has_a_cache' {
+        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-core-no-fallback-' + [guid]::NewGuid().ToString('N'))
+        $candidate = Join-Path $tempRoot ('syp154-authority-' + [string]$script:transportPin.commit)
+        [void](New-Item -ItemType Directory -Path $candidate -Force)
+        try {
+            {
+                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
+                    -CoreRunId ('a' * 32) -CoreCheckId 'repository-pester' -ScopedAuthorityRoot '' -TempRoot $tempRoot
+            } | Should -Throw -ExpectedMessage '*Core run has no scoped verified authority snapshot*'
+        }
+        finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+
+    # Scenario: a sanitized legacy child has no custom SYP or Core environment.
+    # Purpose: derive only the exact commit-named TEMP transport and fail if setup was omitted.
+    It 'InterT10_fails_closed_when_the_exact_legacy_TEMP_snapshot_is_missing' {
+        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-legacy-missing-' + [guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $tempRoot -Force)
+        try {
+            {
+                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
+                    -CoreRunId '' -CoreCheckId '' -ScopedAuthorityRoot '' -TempRoot $tempRoot
+            } | Should -Throw -ExpectedMessage '*Legacy authority snapshot is missing*'
+        }
+        finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+
+    # Scenario: setup provides a named local cache but one of its pinned files changes.
+    # Purpose: existing cache content is read-only evidence and must fail closed without repair.
+    It 'InterT20_rejects_a_tampered_existing_legacy_TEMP_snapshot_without_repair' {
+        $sourceRoot = [Environment]::GetEnvironmentVariable('SYP154_CANDIDATE_AUTHORITY_ROOT', 'Process')
+        if ([string]::IsNullOrWhiteSpace($sourceRoot)) {
+            $sourceRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-authority-' + [string]$script:transportPin.commit)
+        }
+        Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
+            -ScopedAuthorityRoot $sourceRoot | Should -Be $sourceRoot
+        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-legacy-tamper-' + [guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $tempRoot -Force)
+        $snapshotRoot = Join-Path $tempRoot ('syp154-authority-' + [string]$script:transportPin.commit)
+        $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+        $safeSource = 'safe.directory=' + [IO.Path]::GetFullPath($sourceRoot)
+        try {
+            & $gitPath -c $safeSource clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create isolated transport fixture from the already verified pin.' }
+            & $gitPath -C $snapshotRoot remote set-url origin ([string]$script:transportPin.repository)
+            if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture origin.' }
+            & $gitPath -C $snapshotRoot checkout --detach ([string]$script:transportPin.commit)
+            if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture commit.' }
+            $tamperEntry = @($script:transportPin.files)[0]
+            $tamperPath = Join-Path $snapshotRoot ([string]$tamperEntry.path -replace '/', [IO.Path]::DirectorySeparatorChar)
+            [IO.File]::AppendAllText($tamperPath, "`n")
+            {
+                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
+                    -ScopedAuthorityRoot '' -TempRoot $tempRoot
+            } | Should -Throw -ExpectedMessage '*must be clean and immutable*'
+            Test-Path -LiteralPath $tamperPath -PathType Leaf | Should -BeTrue
+        }
+        finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+}
+
 Describe 'General child uses central package tool report rules' {
     BeforeAll {
+        . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
         $validationPath = if ([string]::IsNullOrWhiteSpace($env:SYP154_TEST_VALIDATE_SOURCE)) { Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1' } else { [string]$env:SYP154_TEST_VALIDATE_SOURCE }
         $script:validationSource = Get-Content -LiteralPath $validationPath -Raw
         $script:childMatch = [regex]::Match($script:validationSource, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
@@ -14,33 +95,16 @@ Describe 'General child uses central package tool report rules' {
         [IO.File]::WriteAllText($script:childPath, $script:childMatch.Groups['body'].Value)
         $script:fakeToolPath = Join-Path $script:testRoot 'skill-validator.ps1'
         [IO.File]::WriteAllText($script:fakeToolPath, 'Get-Content -LiteralPath $env:SYP154_TEST_TOOL_REPORT -Raw; $global:LASTEXITCODE = 0')
-        if ([string]::IsNullOrWhiteSpace($env:SYP154_CANDIDATE_AUTHORITY_ROOT)) {
-            # Run the actual candidate driver against its immutable authority,
-            # including when the protected CI driver still uses an older pin.
-            $repositoryRoot = Split-Path -Parent $PSScriptRoot
-            $authority = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'config/standard-v1.json') -Raw | ConvertFrom-Json).authority
-            $archive = Join-Path $script:testRoot 'authority.zip'
-            Invoke-WebRequest -Uri ([string]$authority.archiveUrl) -OutFile $archive -TimeoutSec 60
-            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$authority.archiveSha256) {
-                throw 'Integration authority archive identity differs from the candidate pin.'
-            }
-            $extract = Join-Path $script:testRoot 'authority'
-            Expand-Archive -LiteralPath $archive -DestinationPath $extract
-            $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
-            if ($roots.Count -ne 1) { throw 'Integration authority archive must contain one root.' }
-            $moduleRoot = $roots[0].FullName
-            foreach ($entry in @($authority.files)) {
-                $path = Join-Path $moduleRoot ([string]$entry.path)
-                if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
-                    throw "Integration authority file identity differs: $($entry.path)"
-                }
-            }
-        }
-        else { $moduleRoot = [string]$env:SYP154_CANDIDATE_AUTHORITY_ROOT }
+        $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+        $authority = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json).authority
+        $script:moduleRoot = Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $repositoryRoot -AuthorityPin $authority `
+            -CoreRunId ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_CORE_RUN_ID', 'Process')) `
+            -CoreCheckId ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_CORE_CHECK_ID', 'Process')) `
+            -ScopedAuthorityRoot ([Environment]::GetEnvironmentVariable('SYP154_CANDIDATE_AUTHORITY_ROOT', 'Process'))
         $script:runnerPath = Join-Path $moduleRoot 'scripts/Invoke-StandardValidation.ps1'
         $script:pwshPath = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
         $script:priorEnv = @{}
-        foreach ($name in @('STANDARD_VALIDATION_ACTIVE_SKILLS', 'STANDARD_VALIDATION_SKILLS_ROOT', 'STANDARD_VALIDATION_SKILL_ID', 'STANDARD_VALIDATION_CANDIDATE_ID', 'STANDARD_VALIDATION_CANDIDATE_ROOT', 'STANDARD_VALIDATION_SKILL_INVENTORY_SHA256', 'SYP154_TEST_TOOL_REPORT', 'SYP154_CANDIDATE_AUTHORITY_ROOT')) {
+        foreach ($name in @('STANDARD_VALIDATION_ACTIVE_SKILLS', 'STANDARD_VALIDATION_SKILLS_ROOT', 'STANDARD_VALIDATION_SKILL_ID', 'STANDARD_VALIDATION_CANDIDATE_ID', 'STANDARD_VALIDATION_CANDIDATE_ROOT', 'STANDARD_VALIDATION_SKILL_INVENTORY_SHA256', 'SYP154_TEST_TOOL_REPORT')) {
             $script:priorEnv[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:STANDARD_VALIDATION_ACTIVE_SKILLS = 'demo'

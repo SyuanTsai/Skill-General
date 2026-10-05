@@ -24,6 +24,8 @@ Describe 'manage-task-handoff Skill contract' {
         }
         $script:Contract.routing.newConversationAutoScan | Should -BeFalse
         $script:Contract.routing.elapsedTimeAloneTriggersWrite | Should -BeFalse
+        $script:Contract.routing.defaultRiskRecheckMinutes | Should -Be 5
+        $script:Contract.routing.riskRecheckMinutesConfigurable | Should -BeTrue
     }
 
     It 'ContractT11_keeps_core_recording_independent_of_optional_storage' {
@@ -39,7 +41,11 @@ Describe 'manage-task-handoff Skill contract' {
         $record.externalHandlingOwnedByCaller | Should -BeTrue
         $record.existingAdapterMappingOptional | Should -BeTrue
         $script:Contract.storageSelection.appliesOnlyToOptionalExternalAdapterIO | Should -BeTrue
+        $script:Contract.storageSelection.selectionOwnedByCallerOrTrustedConfiguration | Should -BeTrue
+        $script:Contract.storageSelection.coreSelectsStorageSource | Should -BeFalse
         $script:Contract.memoryTargetSelection.appliesOnlyToOptionalExternalAdapterIO | Should -BeTrue
+        $script:Contract.memoryTargetSelection.selectionOwnedByCallerOrTrustedConfiguration | Should -BeTrue
+        $script:Contract.memoryTargetSelection.coreSelectsStorageSourceOrProvider | Should -BeFalse
     }
 
     # Contract decision-table test only: interpret structured cases without connectors or E2E calls.
@@ -64,9 +70,10 @@ Describe 'manage-task-handoff Skill contract' {
         $selectionContract.selectionChecks.missingUnselectedConnectorMustNotBeProbed | Should -BeTrue
         $selectionContract.selectionChecks.silentFallback | Should -BeFalse
         $selectionContract.selectionChecks.formalTaskAuthoritySeparateFromStorageSelection | Should -BeTrue
-        $selectionContract.outcomes.success.category | Should -Be 'supported+configured+authorized+available+readback-verified'
-        $selectionContract.outcomes.success.durableSave | Should -BeTrue
-        $selectionContract.outcomes.success.reportVerifiedLocator | Should -BeTrue
+        $selectionContract.outcomes.success.category | Should -Be 'source-reported-supported+configured+authorized+available+readback-matched'
+        $selectionContract.outcomes.success.sourceReportedDurable | Should -BeTrue
+        $selectionContract.outcomes.success.coreDurable | Should -BeFalse
+        $selectionContract.outcomes.success.reportSourceLocator | Should -BeTrue
         foreach ($category in @('unsupported','unconfigured','denied','unavailable','declined','unverified-write-or-readback')) {
             @($selectionContract.outcomes.failureCategories) | Should -Contain $category
         }
@@ -309,9 +316,9 @@ Describe 'manage-task-handoff Skill contract' {
         }
     }
 
-    # Scenario: Core selection identifies an opaque target before the selected adapter is activated.
-    # Purpose: Keep target selection provider-agnostic and fail closed before content I/O.
-    It 'ContractT81_selects_opaque_memory_target_and_gates_selected_adapter_only' {
+    # Scenario: Caller configuration binds a selected target before its source is activated.
+    # Purpose: Keep source selection outside the core and fail closed before content I/O.
+    It 'ContractT81_selects_caller_source_and_gates_selected_adapter_only' {
         $targetContract = $script:Contract.memoryTargetSelection
         $targetContract.coreIdentityOpaque | Should -BeTrue
         @($targetContract.coreIdentityFields) | Should -Be @('Target ID', 'Selection Scope', 'Resource', 'Location')
@@ -329,7 +336,10 @@ Describe 'manage-task-handoff Skill contract' {
         $targetContract.productionActivation.missingOrUnverifiedFailsClosedBeforeContentIO | Should -BeTrue
         $targetContract.productionActivation.capabilityDeniedOrUnavailableFailsClosedBeforeContentIO | Should -BeTrue
         $targetContract.productionActivation.readbackMismatchIsNonDurable | Should -BeTrue
-        $targetContract.productionActivation.matchingReadbackIsDurable | Should -BeTrue
+        $targetContract.productionActivation.matchingReadbackIsSourceReportedDurable | Should -BeTrue
+        $targetContract.productionActivation.coreDurable | Should -BeFalse
+        $targetContract.binding.retiredGitRefExplicitlyUnsupportedWithoutIo | Should -BeTrue
+        $targetContract.binding.inferSourceFromRecordForbidden | Should -BeTrue
 
         foreach ($case in $script:Cases.memoryTargetSelection) {
             $forbiddenFields = @('provider', 'account', 'model', 'endpoint', 'signer')
@@ -382,8 +392,8 @@ Describe 'manage-task-handoff Skill contract' {
         }
     }
 
-    # Scenario: A fork creates A and B from the same point, with neither branch privileged.
-    # Purpose: Stop cross-branch last-write-wins and exact-key integrity failures.
+    # Scenario: A task has one common record and independently identified peer branch records.
+    # Purpose: Preserve exact task and branch identity without a storage-owned fork-recovery protocol.
     It 'InterT20_resolves_exact_common_and_peer_branch_identity' {
         @($script:Contract.common.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.common.requiredFields) | Should -Contain 'Task Key'
@@ -393,101 +403,13 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.branch.requiredFields) | Should -Contain 'Fork Point'
         @($script:Contract.branch.requiredFields) | Should -Contain 'Continuation Generation'
         @($script:Contract.branch.uniqueKey) | Should -Be @('Authority Scope','Task Key','Branch ID')
-        @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Authority Scope'
-        @($script:Contract.forkRecovery.uniqueKey) | Should -Be @('Authority Scope','Task Key','Fork ID')
-        @($script:Contract.forkRecovery.statusValues) | Should -Be @('Pending','Completed','Abandoned')
-        $script:Contract.forkRecovery.payloadFreeEnvelopePhysicallyOrLogicallySeparateFromPayload | Should -BeTrue
-        $script:Contract.forkRecovery.envelopeListNeverLoadsPayload | Should -BeTrue
-        @($script:Contract.forkRecovery.creationOrder) | Should -Be @(
-            'atomic-payload-free-pending-envelope-protected-control-pending-index-and-common-revision-fence',
-            'isolated-snapshot-payload'
-        )
-        @($script:Contract.forkRecovery.completionOrder) | Should -Be @(
-            'isolated-snapshot-payload','common-fence-released-or-atomically-released',
-            'atomic-payload-free-completed-envelope-and-terminal-pending-index','terminal-set-readback'
-        )
-        $script:Contract.forkRecovery.terminalEnvelopeAndPendingIndexAtomic | Should -BeTrue
-        $script:Contract.forkRecovery.terminalSetReadbackRequired | Should -BeTrue
-        $script:Contract.forkRecovery.commonFenceReleasedBeforeOrWithTerminalTransition | Should -BeTrue
-        $script:Contract.forkRecovery.initialCommonRevisionFenceAtomic | Should -BeTrue
-        $script:Contract.forkRecovery.commonRevisionFenceIsPayloadFreeNoOpCommit | Should -BeTrue
-        @($script:Contract.forkRecovery.terminalIndexStatusValues) | Should -Be @('Completed','Abandoned')
-        $script:Contract.forkRecovery.terminalIndexNoLongerBlocksRecall | Should -BeTrue
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target Identity Digests'
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Payload Revision'
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Operation Identity Digests'
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Target-Operation Bindings'
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Verified Common Revision At Creation'
-        @($script:Contract.forkRecovery.envelopeRequiredEvidence) | Should -Contain 'Branch Creation Claims'
-        @($script:Contract.forkRecovery.requiredFields) | Should -Contain 'Branch Creation Operations'
-        $script:Contract.forkRecovery.commonOnlyForkPointEqualsVerifiedCommonRevision | Should -BeTrue
-        $script:Contract.forkRecovery.envelopeCreationRevalidatesCommonRevision | Should -BeTrue
-        $script:Contract.forkRecovery.branchCreationTargetOperationMappingExact | Should -BeTrue
-        $script:Contract.forkRecovery.protectedControlRecordSeparateFromEnvelopeAndPayload | Should -BeTrue
-        $script:Contract.forkRecovery.initialEnvelopeControlAndPendingIndexAtomic | Should -BeTrue
-        @($script:Contract.forkRecovery.initialAtomicSet) | Should -Be @(
-            'payload-free-pending-envelope','protected-control-record','protected-pending-index-entry','common-revision-fence'
-        )
-        @($script:Contract.forkRecovery.protectedControlRequiredEvidence) | Should -Be @(
-            'Source Branch ID','Source Branch Revision','Source Branch Fork Point','Source Continuation Generation',
-            'Branch Creation Operations','Expected Branch Creation Payload Digests',
-            'Payload Object Identity','Payload Digest','Verified Common Revision At Creation','Source ACL Locator'
-        )
-        $script:Contract.forkRecovery.pendingListUsesAuthorizationIndexWithoutEnvelopeLoad | Should -BeTrue
-        $script:Contract.forkRecovery.pendingListMayReturnOpaqueBlockingIndicator | Should -BeTrue
-        $script:Contract.forkRecovery.pendingIndexBlocksCommonArchivalIndependentOfItemVisibility | Should -BeTrue
-        $script:Contract.forkRecovery.sourceBranchAuthorizationBeforePayloadRead | Should -BeTrue
-        $script:Contract.forkRecovery.payloadAttestationRequiredBeforeClaim | Should -BeTrue
-        $script:Contract.forkRecovery.payloadRevisionBoundInEnvelope | Should -BeTrue
-        $script:Contract.forkRecovery.payloadCreationAndAbandonmentShareEnvelopeRevision | Should -BeTrue
-        $script:Contract.forkRecovery.payloadAndEnvelopeUpdateAtomic | Should -BeTrue
-        $script:Contract.forkRecovery.payloadAttestationExcludesMutableRecoveryStatus | Should -BeTrue
-        $script:Contract.forkRecovery.terminalStatusStoredOutsideSnapshotAttestation | Should -BeTrue
-        $script:Contract.forkRecovery.completionDoesNotRotateSnapshotPayloadDigest | Should -BeTrue
-        $script:Contract.forkRecovery.everyForkPointEqualsVerifiedCommonRevision | Should -BeTrue
-        $script:Contract.forkRecovery.liveSourceBranchBindingBeforeRecoveryAdmission | Should -BeTrue
-        $script:Contract.forkRecovery.firstClaimAtomicallyFencesCommonRevision | Should -BeTrue
-        $script:Contract.forkRecovery.existingBranchForkUsesSameCommonFence | Should -BeTrue
-        $script:Contract.forkRecovery.branchCreateAtomicallyValidatesClaimBinding | Should -BeTrue
-        $script:Contract.forkRecovery.branchCreateValidatesExpectedPayloadDigest | Should -BeTrue
-        @($script:Contract.forkRecovery.abandonmentPreconditions) | Should -Be @(
-            'isolated-payload-absent','envelope-payload-revision-absent','all-branch-creation-target-records-absent',
-            'all-branch-creation-target-outcomes-absent','all-branch-creation-target-index-entries-absent'
-        )
-        $script:Contract.forkRecovery.abandonmentRequiresExactAuthorization | Should -BeTrue
-        $script:Contract.forkRecovery.abandonmentUsesConditionalRevision | Should -BeTrue
-        $script:Contract.forkRecovery.branchCreationClaimUsesSameEnvelopeRevisionBoundary | Should -BeTrue
-        $script:Contract.forkRecovery.branchCreationClaimPrecedesTargetWrite | Should -BeTrue
-        $script:Contract.forkRecovery.abandonmentRequiresNoBranchCreationClaims | Should -BeTrue
-        $script:Contract.forkRecovery.concurrentClaimAndAbandonmentCannotBothSucceed | Should -BeTrue
-        $script:Contract.forkRecovery.unverifiableAbandonmentRemainsPending | Should -BeTrue
-        $script:Contract.forkRecovery.abandonedEnvelopeBlocksSingletonResume | Should -BeFalse
-        $script:Contract.forkRecovery.abandonedForkIdMayBeReused | Should -BeFalse
         $script:Contract.branch.uniquePrimaryBranch | Should -BeFalse
         $script:Contract.branch.forkInheritsParentTaskKey | Should -BeTrue
         $script:Contract.branch.generatedBranchIdRecoverableFromHost | Should -BeTrue
+        $script:Contract.branch.updatesOnlyOwnBranch | Should -BeTrue
         $script:Contract.common.structuralIndexChangesRequireIntegrationDecision | Should -BeFalse
-        $script:Contract.firstFork.pendingBeforeEveryMissingBranchCreation | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingCarriesBranchAndIndexOperations | Should -BeTrue
-        $script:Contract.firstFork.existingPeerContinuationPrecedesRecovery | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingCarriesPostFenceGenerationAndContinuationOperation | Should -BeTrue
-        $script:Contract.firstFork.pendingUsesDedicatedForkRecoveryRecord | Should -BeTrue
-        $script:Contract.firstFork.pendingNeverUsesCommonOrBranchFields | Should -BeTrue
-        $script:Contract.firstFork.forkRecoveryPayloadExcludedFromTaskRecall | Should -BeTrue
-        $script:Contract.firstFork.pendingEnvelopeVisibleToTaskRecall | Should -BeFalse
-        $script:Contract.firstFork.pendingRecallExposesProtectedIndexIndicatorOnly | Should -BeTrue
-        $script:Contract.firstFork.forkRecoveryHistoryKeepsPayloadIsolated | Should -BeTrue
-        $script:Contract.firstFork.commonOnlyRecoveryCompletesAfterConfirmedCommonReadback | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingPreservesBranchCurrentAndSource | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingCarriesVerifiedSharedBaseline | Should -BeTrue
-        $script:Contract.firstFork.existingPeerAdvanceUsesPersistedSnapshot | Should -BeTrue
-        $script:Contract.firstFork.existingPeerPendingClearsAfterBranchAndIndexReadback | Should -BeTrue
         $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
         $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
-        $script:Contract.adapter.exactForkRecoveryLookup | Should -BeTrue
-        $script:Contract.adapter.atomicRecordAndEventIntentOrWriteAheadStage | Should -BeTrue
-        $script:Contract.adapter.eventIntentDurableBeforeExposedMutation | Should -BeTrue
-        $script:Contract.adapter.eventRecoveryDoesNotDependOnLostProcess | Should -BeTrue
         foreach ($case in $script:Cases.lookup) {
             $action = if ($case.mainCount -gt 1 -or $case.branchMatches -gt 1) { 'stop-integrity-conflict' }
                 elseif ($case.branchId -and $case.branchMatches -eq 1) { 'exact-branch' }
@@ -516,61 +438,40 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.common.conflictMarker.values) | Should -Contain 'Conflict'
     }
 
-    # Scenario: A branch is selected after a common write that may fail on readback.
-    # Purpose: Keep every related branch recoverable until the common decision is verified.
-    It 'InterT40_preserves_order_and_append_only_status_history' {
+    # Scenario: A branch decision is prepared from exact caller-supplied records and a source result may be pending.
+    # Purpose: Keep decision identity exact while leaving persistence and event history to the selected source.
+    It 'InterT40_binds_reviewed_branch_identity_and_returns_proposed_changes' {
         @($script:Contract.integration.selectionOrder) | Should -Be @(
-            'read-and-bind-reviewed-branch-revisions-content-identities-and-outcomes',
-            'reject-changed-reviewed-branches-before-common-write',
-            'conditional-common-write-with-branch-bindings',
-            'common-readback-bind-origin-revision-and-decision-identity',
-            'per-branch-common-and-reviewed-identity-precheck',
-            'atomic-decision-fenced-branch-outcomes',
-            'per-branch-common-and-reviewed-identity-postcheck',
-            'per-branch-common-and-reviewed-identity-precheck',
-            'atomic-decision-fenced-archive-selected-and-superseded-branches',
-            'per-branch-common-and-reviewed-identity-postcheck',
-            'remove-archived-branches-from-active-index-using-latest-storage-revisions',
-            'common-decision-reviewed-branch-and-active-index-readback'
+            'bind-user-decision-to-exact-reviewed-branch-identity-content-generation-and-outcome',
+            'stop-if-supplied-reviewed-identity-content-or-generation-changed',
+            'return-proposed-record-and-field-change-intents-to-the-caller',
+            'perform-no-source-write-or-automatic-retry-in-the-core',
+            'accept-only-a-matching-source-reported-operation-result'
         )
-        $script:Contract.integration.selectedBranchIndexRemovalRequired | Should -BeTrue
-        $script:Contract.integration.indexRemovalRetainsStableOperationIds | Should -BeTrue
-        $script:Contract.integration.indexRemovalFailureIsPartialReconciliation | Should -BeTrue
-        $script:Contract.integration.finalizationBindsDecisionOriginRevision | Should -BeTrue
-        $script:Contract.integration.finalizationBindsDecisionIdentity | Should -BeTrue
-        $script:Contract.integration.decisionIdentityBasis | Should -Be 'canonical-common-fields-at-bound-origin-revision'
-        @($script:Contract.integration.decisionIdentityExcludes) | Should -Be @('Active Branches','Last Activity At','operation-log')
-        $script:Contract.integration.storageRevisionCursorIndependentFromDecisionIdentity | Should -BeTrue
-        $script:Contract.integration.structuralIndexMutationMayAdvanceStorageRevision | Should -BeTrue
-        $script:Contract.integration.acceptedStructuralRevisionMustDescendFromDecisionOrigin | Should -BeTrue
-        $script:Contract.integration.acceptedStructuralRevisionMustPreserveDecisionIdentity | Should -BeTrue
-        $script:Contract.integration.recheckCommonDecisionIdentityBeforeEachBranchMutation | Should -BeTrue
-        $script:Contract.integration.recheckCommonDecisionIdentityAfterEachBranchMutation | Should -BeTrue
-        $script:Contract.integration.decisionDrivenBranchCommitRequiresAtomicCommonRevisionFence | Should -BeTrue
-        $script:Contract.integration.decisionFenceSharesCommonMutationCursor | Should -BeTrue
-        $script:Contract.integration.staleDecisionCannotCommitNewBranchOutcomeOrArchive | Should -BeTrue
-        $script:Contract.integration.postCommitDecisionChangeMayRequirePartialReconciliation | Should -BeTrue
-        $script:Contract.integration.onCommonDecisionIdentityChangeDuringFinalization | Should -Be 'stop-and-reconcile-from-current-decision'
         $script:Contract.integration.finalizationBindsReviewedBranchOrigins | Should -BeTrue
         $script:Contract.integration.decisionPersistsBranchRevisionContentIdentityAndOutcome | Should -BeTrue
         $script:Contract.integration.decisionPersistsContinuationGeneration | Should -BeTrue
-        $script:Contract.integration.reviewedBranchContentIdentityBasis | Should -Be 'canonical-user-reviewable-branch-fields-at-bound-origin-revision'
+        $script:Contract.integration.reviewedBranchContentIdentityBasis | Should -Be 'canonical-user-reviewable-branch-fields-at-bound-source-revision'
         @($script:Contract.integration.reviewedBranchContentIdentityExcludes) | Should -Be @('Lifecycle','Branch Outcome','Last Activity At','operation-log')
         $script:Contract.integration.continuationGenerationIncludedInReviewedBranchIdentity | Should -BeTrue
         $script:Contract.integration.finalizationRejectsContinuationGenerationChange | Should -BeTrue
         $script:Contract.integration.explicitContinuationAlwaysAdvancesGeneration | Should -BeTrue
         $script:Contract.integration.forkFromExistingBranchBeginsContinuationBeforeSnapshot | Should -BeTrue
         $script:Contract.integration.decisionWriteRequiresExactReviewedBranchRevisionAndIdentity | Should -BeTrue
-        $script:Contract.integration.branchStorageRevisionCursorIndependentFromReviewedContentIdentity | Should -BeTrue
-        $script:Contract.integration.acceptedBranchRevisionMustDescendFromReviewedOrigin | Should -BeTrue
-        $script:Contract.integration.acceptedBranchRevisionMustPreserveReviewedContentIdentity | Should -BeTrue
-        $script:Contract.integration.recheckReviewedBranchIdentityBeforeEachFinalizationMutation | Should -BeTrue
-        $script:Contract.integration.recheckReviewedBranchIdentityAfterEachFinalizationMutation | Should -BeTrue
         $script:Contract.integration.appliedOutcomeMustMatchDecisionBranchBinding | Should -BeTrue
         $script:Contract.integration.onReviewedBranchChangeDuringFinalization | Should -Be 'stop-and-require-renewed-user-confirmation'
+        $script:Contract.integration.sourceOwnsConflictResolutionMergePersistenceAndRetry | Should -BeTrue
+        $script:Contract.integration.corePerformsSourceCompareAndSwap | Should -BeFalse
+        $script:Contract.integration.coreRetriesSourceWrites | Should -BeFalse
+        $script:Contract.integration.onCommonDecisionIdentityChangeDuringFinalization | Should -Be 'stop-and-require-current-source-and-user-review'
         $script:Contract.integration.archiveOnCommonReadbackFailure | Should -BeFalse
-        $script:Contract.changes.appendOnly | Should -BeTrue
-        @($script:Contract.changes.eventUniqueKey) | Should -Be @('Authority Scope','Operation ID','Record ID','Field')
+        $script:Contract.changes.proposalOnly | Should -BeTrue
+        $script:Contract.changes.perChangedField | Should -BeTrue
+        @($script:Contract.changes.requiredFields) | Should -Be @('Authority Scope','Task Key','Branch ID','Operation ID','Field','Previous State','New State','Status')
+        $script:Contract.changes.proposedStatus | Should -Be 'proposed'
+        $script:Contract.changes.doNotEmitUnchangedFields | Should -BeTrue
+        $script:Contract.changes.sourceOwnsPersistenceAndAnyEventHistory | Should -BeTrue
+        $script:Contract.changes.corePersistsEvents | Should -BeFalse
         @($script:Contract.changes.requiredFields) | Should -Contain 'Operation ID'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Authority Scope'
         @($script:Contract.changes.requiredFields) | Should -Contain 'Previous State'
@@ -587,8 +488,12 @@ Describe 'manage-task-handoff Skill contract' {
     It 'UnitT50_evaluates_activity_boundary_and_active_peer_protection' {
         $script:Contract.archive.defaultInactivityDays | Should -Be 7
         $script:Contract.archive.inactivityDaysConfigurable | Should -BeTrue
+        $script:Contract.archive.expireAtBoundary | Should -BeTrue
         $script:Contract.archive.readRefreshesActivity | Should -BeFalse
         $script:Contract.archive.noOpRefreshesActivity | Should -BeFalse
+        $script:Contract.archive.archiveChangesLifecycleOnly | Should -BeTrue
+        $script:Contract.archive.noContentDeletion | Should -BeTrue
+        $script:Contract.archive.activeBranchProtectsCommon | Should -BeTrue
         $script:Contract.archive.exactArchivedBranchOnlyRestored | Should -BeTrue
         $script:Contract.archive.otherPeersRemainArchived | Should -BeTrue
         $script:Contract.archive.branchContinuationGenerationInitial | Should -Be 0
@@ -597,11 +502,8 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.archive.continuationIncrementPrecedesResumedWorkOrFork | Should -BeTrue
         $script:Contract.archive.sameContinuationOperationIdOwnsOneIncrement | Should -BeTrue
         $script:Contract.archive.readOnlyInspectionAndFinalizationDoNotIncrementGeneration | Should -BeTrue
-        $script:Contract.archive.restoreLifecycleAndGenerationInOneConditionalOperation | Should -BeTrue
+        $script:Contract.archive.restoreLifecycleAndGenerationInOneSourceOperation | Should -BeTrue
         $script:Contract.archive.oldDecisionCannotFinalizeRestoredGeneration | Should -BeTrue
-        $script:Contract.archive.indexRemovalBindsArchivedBranchRevision | Should -BeTrue
-        $script:Contract.archive.schedulerRechecksLifecycleBeforeRemovalRetry | Should -BeTrue
-        $script:Contract.archive.activeBranchMissingFromIndexMustBeReadded | Should -BeTrue
         foreach ($case in $script:Cases.archive) {
             $now = [DateTimeOffset]$case.now
             $last = [DateTimeOffset]$case.lastActivity
@@ -613,9 +515,9 @@ Describe 'manage-task-handoff Skill contract' {
         }
     }
 
-    # Scenario: A retry arrives after an uncertain write and a peer modifies the revision.
-    # Purpose: Prevent duplicate events and silent overwrites on an arbitrary storage platform.
-    It 'InterT60_requires_conditional_writes_and_idempotent_retries' {
+    # Scenario: A source reports a pending result or a matching readback for one archive operation.
+    # Purpose: Keep source persistence and conflict handling outside the core and prevent automatic write replay.
+    It 'InterT60_keeps_source_persistence_and_conflict_handling_source_owned' {
         $script:Contract.adapter.fixedAuthorityPlatform | Should -BeNullOrEmpty
         $script:Contract.authority.accessPolicyChosenByAdopter | Should -BeTrue
         $script:Contract.authority.authorityScopeIsOpaqueAndAdopterDefined | Should -BeTrue
@@ -624,45 +526,90 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.adapter.trustedCallerContextRequired | Should -BeTrue
         $script:Contract.adapter.authorizationPolicyChosenByAdopter | Should -BeTrue
         @($script:Contract.adapter.authorizationTuple) | Should -Be @(
-            'Verified Principal','Authority Scope','Task Key','Branch ID or Fork ID','Action'
+            'Verified Principal','Authority Scope','Task Key','Branch ID','Action'
         )
-        $script:Contract.adapter.authorizationCheckBeforeEveryLookupAndMutation | Should -BeTrue
-        $script:Contract.adapter.recordAndEventBindAuthorityScope | Should -BeTrue
+        $script:Contract.adapter.sourceAuthorizesEveryLookupAndMutation | Should -BeTrue
+        $script:Contract.adapter.recordIdentityIncludesAuthorityScope | Should -BeTrue
         $script:Contract.adapter.scopeIdentityUsesUnambiguousComponentEncoding | Should -BeTrue
-        $script:Contract.adapter.authorityScopeIsLogicalComponentOfEveryStorageKey | Should -BeTrue
-        @($script:Contract.adapter.logicalOperationKeys.getCommon) | Should -Be @('Authority Scope','Task Key')
-        @($script:Contract.adapter.logicalOperationKeys.getBranch) | Should -Be @('Authority Scope','Task Key','Branch ID')
-        @($script:Contract.adapter.logicalOperationKeys.listPendingForkRecovery) | Should -Be @('Authority Scope','Task Key')
-        @($script:Contract.adapter.logicalOperationKeys.getForkRecovery) | Should -Be @('Authority Scope','Task Key','Fork ID')
-        @($script:Contract.adapter.logicalOperationKeys.createOrUpdateForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
-        @($script:Contract.adapter.logicalOperationKeys.claimForkRecoveryTargetIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID','Branch ID Digest','Operation ID Digest')
-        @($script:Contract.adapter.logicalOperationKeys.createBoundForkBranchIfAbsent) | Should -Be @(
-            'Authority Scope','Task Key','Fork ID','Branch ID','Operation ID','Envelope Revision',
-            'Payload Attestation','Common Revision'
-        )
-        @($script:Contract.adapter.logicalOperationKeys.abandonForkRecoveryIfRevision) | Should -Be @('Authority Scope','Task Key','Fork ID')
-        @($script:Contract.adapter.logicalOperationKeys.listActiveBranches) | Should -Be @('Authority Scope','Task Key')
-        @($script:Contract.adapter.logicalOperationKeys.createCommonIfAbsent) | Should -Be @('Authority Scope','Task Key')
-        @($script:Contract.adapter.logicalOperationKeys.createBranchIfAbsent) | Should -Be @('Authority Scope','Task Key','Branch ID')
-        @($script:Contract.adapter.logicalOperationKeys.createForkRecoveryIfAbsent) | Should -Be @('Authority Scope','Task Key','Fork ID')
-        @($script:Contract.adapter.logicalOperationKeys.stageEventIntentsIfAbsent) | Should -Be @('Authority Scope','Operation ID','Record ID')
-        @($script:Contract.adapter.logicalOperationKeys.appendEventIfAbsent) | Should -Be @('Authority Scope','Operation ID','Record ID','Field')
         $script:Contract.adapter.actorIsDisplayClaimNotAuthorization | Should -BeTrue
-        $script:Contract.adapter.verifiedPrincipalPersistedInOperationIntentAndEvent | Should -BeTrue
-        $script:Contract.adapter.verifiedPrincipalImmutableAcrossEventRecovery | Should -BeTrue
         $script:Contract.adapter.crossScopeLookupForbidden | Should -BeTrue
-        $script:Contract.adapter.forkRecoveryAclAtLeastSourceBranch | Should -BeTrue
+        $script:Contract.adapter.exactTaskKeyLookup | Should -BeTrue
+        $script:Contract.adapter.exactBranchIdLookup | Should -BeTrue
+        $script:Contract.adapter.sourceOwnsPersistence | Should -BeTrue
+        $script:Contract.adapter.sourceOwnsConditionalMutationAndOperationIdIdempotency | Should -BeTrue
+        $script:Contract.adapter.sourceOwnsConflictResolutionAndMerge | Should -BeTrue
+        $script:Contract.adapter.sourceOwnsWriteRetry | Should -BeTrue
+        $script:Contract.adapter.sourceReportsItsOwnReadback | Should -BeTrue
+        $script:Contract.adapter.coreCallsExternalConnector | Should -BeFalse
+        $script:Contract.adapter.corePerformsSourceCompareAndSwap | Should -BeFalse
+        $script:Contract.adapter.coreRetriesSourceWrites | Should -BeFalse
+        $script:Contract.adapter.coreIndependentlyVerifiesSourceResult | Should -BeFalse
         $script:Contract.adapter.onAuthorizationUnavailableOrDenied | Should -Be 'deny-without-reading-or-writing-record-content'
-        $script:Contract.adapter.conditionalMutation | Should -BeTrue
-        $script:Contract.adapter.operationIdIdempotency | Should -BeTrue
-        $script:Contract.adapter.eventAppendAfterRecordReadback | Should -BeTrue
-        @($script:Contract.changes.requiredFields) | Should -Contain 'Verified Principal'
-        @($script:Contract.adapter.durableEventIntentFields) | Should -Be @(
-            'Authority Scope','Verified Principal','Operation ID','Record ID','Field','Previous State','New State','Reason','Actor','Time','Source','Integration Result'
-        )
-        $script:Contract.adapter.onRevisionConflict | Should -Be 'reread-and-reapply-gate'
-        $script:Contract.adapter.onPartialFailure | Should -Be 'retain-retryable-state-and-report-each-record'
+        $script:Contract.adapter.onRevisionConflict | Should -Be 'source-owned; caller-supplies-a-new-result-for-the-same-operation'
+        $script:Contract.adapter.onPartialFailure | Should -Be 'retain-source-reported-pending-state-with-the-original-operation-id'
         $script:Contract.adapter.onAuthorityUnavailable | Should -Be 'do-not-promote-unverified-facts'
+        $script:Contract.adapterResultReport.coreExecutesSourceOperations | Should -BeFalse
+        $script:Contract.adapterResultReport.pendingActionsAreDescriptiveOnly | Should -BeTrue
+        $script:Contract.adapterResultReport.operationIdMustMatchCoreOperation | Should -BeTrue
+        $script:Contract.adapterResultReport.matchedReadbackRequiresMatchingRevision | Should -BeTrue
+        $script:Contract.adapterResultReport.corePreservesCallerReportWithoutExternalVerification | Should -BeTrue
+        @($script:Contract.adapterResultReport.statuses) | Should -Be @('denied','unavailable','partial','unknown','readback-mismatch','readback-matched')
+        $script:Contract.adapterResultReport.coreDurable | Should -BeFalse
+
+        $cycle = $script:Contract.archiveCycle
+        $cycle.selectionIsPure | Should -BeTrue
+        $cycle.freshArchiveActionInvokedOnce | Should -BeTrue
+        $cycle.freshCallbackReturnsCallerResultV1 | Should -BeTrue
+        $cycle.archiveCallbackRequiredOnlyForFreshActions | Should -BeTrue
+        $cycle.callerResultV1SchemaUnchanged | Should -BeTrue
+        $cycle.sourceResultsCallerResultRequiresExactFullV1Shape | Should -BeTrue
+        $cycle.sourceResultsCallerResultFieldCount | Should -Be 13
+        $cycle.sourceResultsRejectStatusOnlyCallerResult | Should -BeTrue
+        $cycle.pendingArchiveActionNeverReplayed | Should -BeTrue
+        $cycle.sourceResultsOnlyResumeSupported | Should -BeTrue
+        $cycle.sourceResultsOnlyResumeDoesNotRequireArchiveCallback | Should -BeTrue
+        @($cycle.sourceResultsItemFields) | Should -Be @('Decision','Cursor','OperationId','CallerResult')
+        $cycle.sourceResultsOuterOperationIdMustMatchSavedPendingOperationId | Should -BeTrue
+        $cycle.sourceResultsCallerResultOperationIdMustMatchSavedPendingOperationId | Should -BeTrue
+        $cycle.sourceResultsDecisionAndCursorMustMatchSameRecordRevisionGenerationAndOutcome | Should -BeTrue
+        $cycle.malformedDuplicateUnauthorizedOrMismatchedSourceResultsRemainPending | Should -BeTrue
+        $cycle.matchingReadbackMatchedIsSourceReportedDurable | Should -BeTrue
+        $cycle.onlyReadbackMatchedCanBeReportedCompleted | Should -BeTrue
+        $cycle.sourceReportedCompletionCollectionField | Should -Be 'SourceReportedCompleted'
+        $cycle.sourceReportedCompletedMirrorsCompleted | Should -BeTrue
+        $cycle.sourceReportedDurableField | Should -Be 'SourceReportedDurable'
+        $cycle.sourceReportedDurableIsAggregateOverEverySelectedAction | Should -BeTrue
+        $cycle.coreDurableField | Should -Be 'Durable'
+        $cycle.coreDurableOnSourceReportedCompletion | Should -BeFalse
+        @($cycle.nonSuccessStatusesRemainPending) | Should -Be @('denied','unavailable','partial','unknown','readback-mismatch')
+        $cycle.noConfiguredSource | Should -Be 'report-unsupported-or-unpersisted-and-preserve-pending'
+        $cycle.sourceOwnsPersistenceConflictResolutionMergeAndRetry | Should -BeTrue
+        $cycle.noAutomaticFallback | Should -BeTrue
+        $script:Contract.PSObject.Properties.Name | Should -Not -Contain 'forkRecovery'
+        $script:Contract.PSObject.Properties.Name | Should -Not -Contain 'firstFork'
+        $script:Contract.adapter.PSObject.Properties.Name | Should -Not -Contain 'logicalOperationKeys'
+    }
+
+    It 'ContractT82_binds_archive_cursor_to_branch_outcome_and_rejects_legacy_pending_shape' {
+        $cycle = $script:Contract.archiveCycle
+        @($cycle.cursorFields) | Should -Be @(
+            'Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision','ContinuationGeneration','BranchOutcome'
+        )
+        $cycle.cursorHasExactlyEightCaseSensitiveFieldsInOrder | Should -BeTrue
+        $cycle.commonCursorBranchOutcome | Should -BeNullOrEmpty
+        $cycle.branchCursorBranchOutcomeMustEqualValidatedDecisionOutcome | Should -BeTrue
+        @($cycle.branchOutcomeValues) | Should -Be @('Selected','Partially Selected','Superseded')
+        $cycle.archiveOperationIdDigestBindsCursorIncludingBranchOutcome | Should -BeTrue
+        $cycle.sourceRevisionsRemainOpaque | Should -BeTrue
+        $cycle.legacySevenFieldPendingActionAccepted | Should -BeFalse
+        $cycle.legacySevenFieldPendingActionGateReason | Should -Be 'invalid-pending-action'
+        $cycle.legacyPendingActionRejectedBeforeSourceResultsOrCallback | Should -BeTrue
+        $cycle.legacyPendingActionZeroSourceIo | Should -BeTrue
+        $cycle.legacyPendingActionAndCallerRecordsPreservedUnchanged | Should -BeTrue
+        $cycle.legacyPendingActionAutomaticMigration | Should -BeFalse
+        $cycle.legacyPendingActionReplay | Should -BeFalse
+        $cycle.legacyPendingReconciliationIsSeparatelyCallerAuthorizedAndSourceOwned | Should -BeTrue
+        @($cycle.sourceResultsItemFields) | Should -Be @('Decision','Cursor','OperationId','CallerResult')
     }
 
     # Scenario: A new consumer sees old Notion records and retrieved content contains a secret or directive.
