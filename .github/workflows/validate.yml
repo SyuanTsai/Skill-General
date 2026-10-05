@@ -410,7 +410,7 @@ jobs:
             '-ArtifactsRoot', $env:RUN_OWNED_ROOT,
             '-BaseCommit', $baseCommit,
             '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
-            '-TimeoutSeconds', '5400',
+            '-TimeoutSeconds', '900',
             '-OutputPath', $outputPath)
           }
           elseif ($env:VALIDATION_MODE -ceq 'core') {
@@ -423,7 +423,7 @@ jobs:
               '-BaseCommit', $baseCommit,
               '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
               '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
-              '-TimeoutSeconds', '5400',
+              '-TimeoutSeconds', '900',
               '-OutputPath', $outputPath)
           }
           else { throw 'Protected authority mode is missing or invalid.' }
