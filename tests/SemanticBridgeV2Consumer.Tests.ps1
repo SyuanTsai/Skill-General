@@ -162,9 +162,16 @@ function Invoke-SyntheticResume {
 
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
         $script:ValidatorPath = Join-Path $script:RepositoryRoot 'scripts/Validate.ps1'
-        $authorityConfig = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'config/standard-v1.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        $script:ExpectedAuthorityRevision = [string]$authorityConfig.authority.commit
-        $script:ExpectedAuthorityArchiveSha256 = [string]$authorityConfig.authority.archiveSha256
+        # Synthetic Resume plans must carry the base pin emitted by PrepareSemantic,
+        # rather than the next pin selected in candidate configuration.
+        $validatorSource = Get-Content -LiteralPath $script:ValidatorPath -Raw -Encoding UTF8
+        $commitBindings = [regex]::Matches($validatorSource, '(?m)^\$script:AuthorityCommit = ''([0-9a-f]{40})''\r?$')
+        $archiveBindings = [regex]::Matches($validatorSource, '(?m)^\$script:AuthorityArchiveSha256 = ''([0-9a-f]{64})''\r?$')
+        if ($commitBindings.Count -ne 1 -or $archiveBindings.Count -ne 1) {
+            throw 'The Semantic plan producer must expose one exact base authority binding.'
+        }
+        $script:ExpectedAuthorityRevision = $commitBindings[0].Groups[1].Value
+        $script:ExpectedAuthorityArchiveSha256 = $archiveBindings[0].Groups[1].Value
     }
 
     It 'preserves helper inputs across the dot-sourced central runner parameter scope' {
