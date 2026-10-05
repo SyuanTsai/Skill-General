@@ -53,17 +53,17 @@ Describe 'Candidate-pinned Common Tool authority transport' {
         }
         Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
             -ScopedAuthorityRoot $sourceRoot | Should -Be $sourceRoot
-        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-legacy-tamper-' + [guid]::NewGuid().ToString('N'))
+        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('st-' + [guid]::NewGuid().ToString('N'))
         [void](New-Item -ItemType Directory -Path $tempRoot -Force)
         $snapshotRoot = Join-Path $tempRoot ('syp154-authority-' + [string]$script:transportPin.commit)
         $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
         $safeSource = 'safe.directory=' + [IO.Path]::GetFullPath($sourceRoot)
         try {
-            & $gitPath -c $safeSource clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not create isolated transport fixture from the already verified pin.' }
+            $cloneOutput = @(& $gitPath -c $safeSource -c core.longpaths=true clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1)
+            if ($LASTEXITCODE -ne 0) { throw ('Could not create isolated transport fixture from the already verified pin: ' + ($cloneOutput -join ' ')) }
             & $gitPath -C $snapshotRoot remote set-url origin ([string]$script:transportPin.repository)
             if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture origin.' }
-            & $gitPath -C $snapshotRoot checkout --detach ([string]$script:transportPin.commit)
+            & $gitPath -c core.longpaths=true -C $snapshotRoot checkout --detach ([string]$script:transportPin.commit)
             if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture commit.' }
             $tamperEntry = @($script:transportPin.files)[0]
             $tamperPath = Join-Path $snapshotRoot ([string]$tamperEntry.path -replace '/', [IO.Path]::DirectorySeparatorChar)

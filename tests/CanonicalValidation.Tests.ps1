@@ -599,7 +599,7 @@ function Test-CoreRunSelected {
         $wrapper | Should -Match 'Get-VerifiedCoreAuthoritySnapshotPath'
         $wrapper | Should -Match 'STANDARD_VALIDATION_CORE_RUN_ID'
         $wrapper | Should -Match 'SYP154_CANDIDATE_AUTHORITY_ROOT'
-        $wrapper | Should -Match "\.Version -eq \[version\]'6\.2\.0'"
+        $wrapper | Should -Match 'Test-CorePesterLoadedModuleIdentity -Modules \$loadedPester -ExpectedVersion \(\[string\]\$closureLockRecord\.Value\.source\.version\)'
         $wrapper | Should -Match 'Core Pester module candidate check failed'
         $wrapper | Should -Match 'Core Pester runtime closure check failed before import'
         $wrapper | Should -Match 'Get-CorePesterRuntimeModuleRoot'
@@ -608,7 +608,8 @@ function Test-CoreRunSelected {
         $wrapper | Should -Match "runScope = 'complete-unfiltered-tests-tree'"
         $wrapper | Should -Match 'sourceStartOffset'
         $wrapper | Should -Match 'ExpandedPath'
-        $wrapper | Should -Match 'duplicate or ambiguous case identity'
+        $integritySource = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'scripts/CorePesterIntegrity.psm1') -Raw
+        $integritySource | Should -Match 'duplicate or ambiguous case identity'
         $wrapper | Should -Match 'execution collection union differs from TotalCount'
         $wrapper | Should -Match "-Filter '\*\.Tests\.ps1'"
         $wrapper | Should -Match 'Candidate test-file container'

@@ -104,7 +104,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $coreWrapper | Should -Match '\$pesterConfig\.Run\.Path = \$testRoot'
         $coreWrapper | Should -Match '\$pesterConfig\.Run\.PassThru = \$true'
         $coreWrapper | Should -Match '\$pesterConfig\.TestRegistry\.Enabled = \$false'
-        $coreWrapper | Should -Match "\.Version -eq \[version\]'6\.2\.0'"
+        $coreWrapper | Should -Match 'Test-CorePesterLoadedModuleIdentity -Modules \$loadedPester -ExpectedVersion \(\[string\]\$closureLockRecord\.Value\.source\.version\)'
         $coreWrapper | Should -Match '\$verifiedAuthoritySnapshotRoot = Get-VerifiedCoreAuthoritySnapshotPath -OuterAdapterRunId \$CandidateAuthorityAdapterRunId'
         $coreWrapper | Should -Match '\[Environment\]::SetEnvironmentVariable\(''SYP154_CANDIDATE_AUTHORITY_ROOT'', \$verifiedAuthoritySnapshotRoot, ''Process''\)'
         $coreWrapper | Should -Match 'Core Pester module candidate check failed'
@@ -112,7 +112,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $coreWrapper | Should -Match 'Test-CorePesterClosure'
         $coreWrapper | Should -Match '\$entry = "Pester progress utc='
         $coreWrapper | Should -Match '\[Console\]::Error\.WriteLine\(\$entry\)'
-        $coreWrapper | Should -Match '\$summary \| ConvertTo-Json -Compress'
+        $coreWrapper | Should -Match 'ConvertTo-Json -InputObject \$summary -Compress'
         $coreWrapper | Should -Match '\$failedBlocks = \[int\]\$result\.FailedBlocksCount'
         $coreWrapper | Should -Match '\$failedContainers = \[int\]\$result\.FailedContainersCount'
         $commonToolSource = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'tests/CommonToolReportIntegration.Tests.ps1') -Raw

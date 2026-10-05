@@ -25,18 +25,18 @@ Describe 'Legacy sanitized child authority transport' {
         $sourceDirty = @(& $gitPath -c $safeSource -C $sourceRoot status --porcelain=v1 --untracked-files=all)
         if ($LASTEXITCODE -ne 0 -or $sourceDirty.Count -ne 0) { throw 'Sanitized child fixture source must be clean.' }
 
-        $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-legacy-child-' + [guid]::NewGuid().ToString('N'))
+        $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('sc-' + [guid]::NewGuid().ToString('N'))
         $tempRoot = Join-Path $testRoot 'temp'
         [void](New-Item -ItemType Directory -Path $tempRoot -Force)
         $snapshotRoot = Join-Path $tempRoot ('syp154-authority-' + [string]$pin.commit)
         $helperPath = Join-Path $testRoot 'run-common-tool-pester6.ps1'
         $process = $null
         try {
-            & $gitPath -c $safeSource clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1 | Out-Null
+            & $gitPath -c $safeSource -c core.longpaths=true clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated local authority transport fixture.' }
             & $gitPath -C $snapshotRoot remote set-url origin ([string]$pin.repository)
             if ($LASTEXITCODE -ne 0) { throw 'Could not bind the transport fixture to the pinned origin.' }
-            & $gitPath -C $snapshotRoot checkout --detach ([string]$pin.commit)
+            & $gitPath -c core.longpaths=true -C $snapshotRoot checkout --detach ([string]$pin.commit)
             if ($LASTEXITCODE -ne 0) { throw 'Could not bind the transport fixture to the exact pinned commit.' }
             foreach ($entry in @($pin.files)) {
                 $path = [IO.Path]::GetFullPath((Join-Path $snapshotRoot ([string]$entry.path -replace '/', [IO.Path]::DirectorySeparatorChar)))
@@ -77,7 +77,21 @@ $configuration.TestRegistry.Enabled = $false
 $result = Invoke-Pester -Configuration $configuration 6>$null
 $summary = [ordered]@{ version = [string](Get-Module Pester).Version; total = [int]$result.TotalCount; passed = [int]$result.PassedCount; failed = [int]$result.FailedCount; skipped = [int]$result.SkippedCount; coreContextAbsent = $true; scopedRootAbsent = $true }
 [Console]::Out.WriteLine('SYP154_TRANSPORT:' + ($summary | ConvertTo-Json -Compress))
-if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summary.skipped) -ne $summary.total) { exit 1 }
+if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summary.skipped) -ne $summary.total) {
+    foreach ($failedCase in @($result.Failed)) {
+        [Console]::Error.WriteLine("Sanitized child failed case: $($failedCase.ExpandedPath)")
+        foreach ($failure in @($failedCase.ErrorRecord)) { [Console]::Error.WriteLine("Sanitized child test error: $($failure.Exception.Message)") }
+    }
+    foreach ($failedBlock in @($result.FailedBlocks)) {
+        [Console]::Error.WriteLine("Sanitized child failed block: $($failedBlock.Name)")
+        foreach ($failure in @($failedBlock.ErrorRecord)) { [Console]::Error.WriteLine("Sanitized child block error: $($failure.Exception.Message)") }
+    }
+    foreach ($failedContainer in @($result.FailedContainers)) {
+        [Console]::Error.WriteLine("Sanitized child failed container: $($failedContainer.Name)")
+        foreach ($failure in @($failedContainer.ErrorRecord)) { [Console]::Error.WriteLine("Sanitized child container error: $($failure.Exception.Message)") }
+    }
+    exit 1
+}
 '@
             [IO.File]::WriteAllText($helperPath, $helper, [Text.UTF8Encoding]::new($false))
 
@@ -102,7 +116,8 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
                 $value = [Environment]::GetEnvironmentVariable($name, 'Process')
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $startInfo.Environment[$name] = $value }
             }
-            $startInfo.Environment['PATH'] = "$PSHOME;$env:PATH"
+            $startInfo.Environment['PATH'] = "$PSHOME;$([IO.Path]::GetDirectoryName($gitPath))"
+            $startInfo.Environment['PATHEXT'] = '.EXE'
             $startInfo.Environment['TEMP'] = $tempRoot
             $startInfo.Environment['TMP'] = $tempRoot
             $startInfo.Environment['PSModulePath'] = $moduleSearchRoot
@@ -122,7 +137,7 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
             $process.WaitForExit()
             $stdout = $stdoutTask.GetAwaiter().GetResult()
             $stderr = $stderrTask.GetAwaiter().GetResult()
-            $process.ExitCode | Should -Be 0 -Because $stderr
+            $process.ExitCode | Should -Be 0 -Because ("child stdout: {0}; child stderr: {1}" -f $stdout, $stderr)
             $summaryLine = @($stdout -split '\r?\n' | Where-Object { $_ -match '^SYP154_TRANSPORT:' })
             $summaryLine.Count | Should -Be 1
             $summary = $summaryLine[0].Substring('SYP154_TRANSPORT:'.Length) | ConvertFrom-Json
@@ -138,7 +153,7 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
             if ($null -ne $process) { $process.Dispose() }
             $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
             $actualParent = [IO.Path]::GetFullPath((Split-Path -Parent $testRoot)).TrimEnd([IO.Path]::DirectorySeparatorChar)
-            if ($actualParent -cne $expectedParent -or (Split-Path -Leaf $testRoot) -cnotmatch '^syp154-legacy-child-[0-9a-f]{32}$') {
+            if ($actualParent -cne $expectedParent -or (Split-Path -Leaf $testRoot) -cnotmatch '^sc-[0-9a-f]{32}$') {
                 throw 'Refusing to clean a path outside the allocated legacy transport test root.'
             }
             if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }

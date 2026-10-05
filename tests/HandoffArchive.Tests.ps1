@@ -1184,7 +1184,7 @@ Describe 'Handoff seven-day archive selection' {
 
         # Scenario: a matched pending action receives partial, unknown, or mismatched readback from its source.
         # Purpose: retain the validated source result and keep the action unresolved without writing again.
-        It 'UnitT59_preserves_nonterminal_source_results_without_replaying_the_archive_action' -ForEach @(
+        It 'UnitT59_preserves_nonterminal_source_results_without_replaying_the_archive_action_<Status>' -ForEach @(
             @{ Status='partial' }, @{ Status='unknown' }, @{ Status='readback-mismatch' }, @{ Status='unavailable' }, @{ Status='denied' }
         ) {
             $pending = New-PendingArchiveCycleAction -CycleOperationId "status-$Status"
