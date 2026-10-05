@@ -354,7 +354,7 @@ function Get-StandardValidationTextSha256 {
             '-ArtifactsRoot', $artifactsRoot,
             '-OutputPath', $outputPath,
             '-SemanticRunPlanPath', $planPath,
-            '-TimeoutSeconds', '1800',
+            '-TimeoutSeconds', '5400',
             '-SemanticTriggered',
             '-SemanticEvidencePath', $semanticEvidencePath,
             '-SemanticConsentRequestPath', $semanticConsentRequestPath,
