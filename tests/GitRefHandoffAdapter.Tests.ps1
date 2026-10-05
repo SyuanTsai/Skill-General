@@ -3026,7 +3026,12 @@ exit /b %ERRORLEVEL%
                     }
                 }
             }
-            & $env:SYP_TEST_REAL_GIT @gitArguments
+            if ($gitArguments -contains '--stdin') {
+                $input | & $env:SYP_TEST_REAL_GIT @gitArguments
+            }
+            else {
+                & $env:SYP_TEST_REAL_GIT @gitArguments
+            }
         }
         $decisionJob = $null
         $originalPath = $env:Path
