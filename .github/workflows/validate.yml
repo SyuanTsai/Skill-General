@@ -49,6 +49,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $gitCommand = Get-Command git -ErrorAction Stop | Select-Object -First 1
+          if ([string]$gitCommand.CommandType -cne 'Application') { throw 'Git command is shadowed in protected authority selection.' }
           $driver = Join-Path $env:GITHUB_WORKSPACE 'driver'
           $driverHead = ([string](& git -C $driver rev-parse HEAD)).Trim()
           if ($LASTEXITCODE -ne 0 -or $driverHead -cne $env:EXPECTED_DRIVER_SHA) {
@@ -102,7 +104,8 @@ jobs:
           $authorityRoot = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'authority'))
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $pin = $candidatePin.authority
-          $git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
+          $gitCommand = Get-Command git -ErrorAction Stop | Select-Object -First 1
+          if ([string]$gitCommand.CommandType -cne 'Application') { throw 'Git command is shadowed in pinned authority verification.' }
           $cursor = $authorityRoot
           while (-not [string]::IsNullOrWhiteSpace($cursor)) {
             $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
@@ -111,27 +114,27 @@ jobs:
             if ($parent -ceq $cursor) { break }
             $cursor = $parent
           }
-          & $git -C $authorityRoot config --local core.autocrlf false
+          git -C $authorityRoot config --local core.autocrlf false
           if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion for exact pinned file verification.' }
           # Rebuild both the disposable worktree and index after changing Windows line-ending conversion.
-          & $git -C $authorityRoot read-tree --reset -u HEAD
+          git -C $authorityRoot read-tree --reset -u HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the exact pinned authority tree and index in the disposable checkout.' }
-          $top = @(& $git -C $authorityRoot rev-parse --show-toplevel)
+          $top = @(git -C $authorityRoot rev-parse --show-toplevel)
           if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or
               -not [IO.Path]::GetFullPath([string]$top[0]).Equals($authorityRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Candidate-pinned authority is not the expected Git checkout root.'
           }
-          $head = @(& $git -C $authorityRoot rev-parse --verify HEAD)
+          $head = @(git -C $authorityRoot rev-parse --verify HEAD)
           if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or [string]$head[0] -cne [string]$pin.commit) {
             throw 'Candidate-pinned authority checkout HEAD differs from the immutable candidate config.'
           }
-          $origins = @(& $git -C $authorityRoot config --local --get-all remote.origin.url)
+          $origins = @(git -C $authorityRoot config --local --get-all remote.origin.url)
           $expectedOrigin = ([string]$pin.repository).Trim().TrimEnd('/') -replace '\.git$', ''
           if ($LASTEXITCODE -ne 0 -or $origins.Count -ne 1 -or
               -not (([string]$origins[0]).Trim().TrimEnd('/') -replace '\.git$', '').Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Candidate-pinned authority origin differs from the immutable candidate config.'
           }
-          $dirty = @(& $git -C $authorityRoot status --porcelain=v1 --untracked-files=all)
+          $dirty = @(git -C $authorityRoot status --porcelain=v1 --untracked-files=all)
           if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Candidate-pinned authority checkout must be clean.' }
           foreach ($entry in @($pin.files)) {
             $relativePath = [string]$entry.path
@@ -172,11 +175,11 @@ jobs:
               throw 'Legacy authority snapshot escaped the runner TEMP root.'
             }
             if (-not (Test-Path -LiteralPath $snapshotRoot)) {
-              & $git clone --config core.autocrlf=false --local --no-hardlinks $authorityRoot $snapshotRoot
+              git clone --config core.autocrlf=false --local --no-hardlinks $authorityRoot $snapshotRoot
               if ($LASTEXITCODE -ne 0) { throw 'Could not create the missing local legacy authority snapshot.' }
-              & $git -C $snapshotRoot remote set-url origin ([string]$pin.repository)
+              git -C $snapshotRoot remote set-url origin ([string]$pin.repository)
               if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its pinned origin.' }
-              & $git -C $snapshotRoot checkout --detach ([string]$pin.commit)
+              git -C $snapshotRoot checkout --detach ([string]$pin.commit)
               if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its exact commit.' }
             }
             if (-not (Test-Path -LiteralPath $snapshotRoot -PathType Container)) { throw 'Legacy authority snapshot path is not a directory.' }
@@ -188,19 +191,19 @@ jobs:
               if ($parent -ceq $cursor) { break }
               $cursor = $parent
             }
-            $snapshotTop = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --show-toplevel)
-            $snapshotHead = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --verify HEAD)
+            $snapshotTop = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --show-toplevel)
+            $snapshotHead = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --verify HEAD)
             if ($LASTEXITCODE -ne 0 -or $snapshotTop.Count -ne 1 -or
                 -not [IO.Path]::GetFullPath([string]$snapshotTop[0]).Equals($snapshotRoot, [StringComparison]::OrdinalIgnoreCase) -or
                 $snapshotHead.Count -ne 1 -or [string]$snapshotHead[0] -cne [string]$pin.commit) {
               throw 'Legacy authority snapshot does not match its exact immutable pin.'
             }
-            $snapshotOrigins = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot config --local --get-all remote.origin.url)
+            $snapshotOrigins = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot config --local --get-all remote.origin.url)
             if ($LASTEXITCODE -ne 0 -or $snapshotOrigins.Count -ne 1 -or
                 -not ((([string]$snapshotOrigins[0]).Trim().TrimEnd('/') -replace '\.git$', '').Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase))) {
               throw 'Legacy authority snapshot origin differs from its immutable pin.'
             }
-            $snapshotDirty = @(& $git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot status --porcelain=v1 --untracked-files=all)
+            $snapshotDirty = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot status --porcelain=v1 --untracked-files=all)
             if ($LASTEXITCODE -ne 0 -or $snapshotDirty.Count -ne 0) { throw 'Legacy authority snapshot must be clean; existing cache was not modified.' }
             foreach ($entry in @($pin.files)) {
               $relativePath = [string]$entry.path
@@ -300,8 +303,9 @@ jobs:
           $runtimePath = Join-Path $runtimeRoot 'pwsh.exe'
           if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) { throw 'Verified archive lacks pwsh.exe.' }
           $env:PATH = "$runtimeRoot;$env:PATH"
-          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($runtimePath)) {
+          $resolvedRuntime = Get-Command pwsh -ErrorAction Stop | Select-Object -First 1
+          if ([string]$resolvedRuntime.CommandType -cne 'Application' -or
+              [IO.Path]::GetFullPath($resolvedRuntime.Path) -ine [IO.Path]::GetFullPath($runtimePath)) {
             throw 'PowerShell command resolution differs from the verified archive.'
           }
           $runtimeEvidence = pwsh -NoLogo -NoProfile -NonInteractive -Command `
@@ -324,7 +328,13 @@ jobs:
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $setupScript = Join-Path $candidate 'scripts/Prepare-PesterRuntime.ps1'
           if (-not (Test-Path -LiteralPath $setupScript -PathType Leaf)) { throw 'Candidate Pester setup script is missing.' }
-          & $env:POWERSHELL_RUNTIME -NoLogo -NoProfile -NonInteractive -File $setupScript `
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $resolvedRuntime = Get-Command pwsh -ErrorAction Stop | Select-Object -First 1
+          if ([string]$resolvedRuntime.CommandType -cne 'Application' -or
+              [IO.Path]::GetFullPath($resolvedRuntime.Path) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+            throw 'Pester setup PowerShell resolution differs from the verified runtime.'
+          }
+          pwsh -NoLogo -NoProfile -NonInteractive -File $setupScript `
             -RuntimeExecutable $env:POWERSHELL_RUNTIME -OwnedRoot $env:RUN_OWNED_ROOT
           $setupExitCode = [int]$LASTEXITCODE
           if ($setupExitCode -ne 0) { throw "Verified Pester runtime setup failed with true child exit $setupExitCode." }
@@ -370,10 +380,13 @@ jobs:
           }
           }
           $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
-          $resolvedRuntime = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          if ([IO.Path]::GetFullPath($resolvedRuntime) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
+          $resolvedRuntime = Get-Command pwsh -ErrorAction Stop | Select-Object -First 1
+          if ([string]$resolvedRuntime.CommandType -cne 'Application' -or
+              [IO.Path]::GetFullPath($resolvedRuntime.Path) -ine [IO.Path]::GetFullPath($env:POWERSHELL_RUNTIME)) {
             throw 'Child PowerShell resolution differs from the verified runtime.'
           }
+          $gitCommand = Get-Command git -ErrorAction Stop | Select-Object -First 1
+          if ([string]$gitCommand.CommandType -cne 'Application') { throw 'Git command is shadowed in exact candidate validation.' }
           $checkoutHead = ([string](& git -C $candidate rev-parse HEAD)).Trim()
           if ($LASTEXITCODE -ne 0 -or $checkoutHead -cne $env:EXPECTED_SOURCE_SHA) {
             throw 'Candidate checkout does not match the exact GitHub event source SHA.'
