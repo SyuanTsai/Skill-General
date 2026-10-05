@@ -113,8 +113,9 @@ jobs:
           }
           & $git -C $authorityRoot config --local core.autocrlf false
           if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion for exact pinned file verification.' }
-          & $git -C $authorityRoot checkout-index --all --force
-          if ($LASTEXITCODE -ne 0) { throw 'Could not restore exact pinned authority blobs into the disposable checkout.' }
+          # Rebuild both the disposable worktree and index after changing Windows line-ending conversion.
+          & $git -C $authorityRoot read-tree --reset -u HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the exact pinned authority tree and index in the disposable checkout.' }
           $top = @(& $git -C $authorityRoot rev-parse --show-toplevel)
           if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or
               -not [IO.Path]::GetFullPath([string]$top[0]).Equals($authorityRoot, [StringComparison]::OrdinalIgnoreCase)) {
