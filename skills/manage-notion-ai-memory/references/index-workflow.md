@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Adopter and index workflow
 
-Read this reference when resolving an adopter mapping, using Pages, maintaining `Memory Index`, or recovering a partial write. The machine-readable contract is authoritative for field names and values. This reference guides the workflow; it does not imply a particular connector tool or prove that a live write succeeded.
+Read this reference when resolving an adopter mapping, using Pages, maintaining `Memory Index`, or recovering a partial write. The machine-readable contract is authoritative for field names and values. This reference guides the workflow; it does not imply a particular connector tool or provide evidence of a successful live write.
 
 ## Resolve the adopter mapping
 
