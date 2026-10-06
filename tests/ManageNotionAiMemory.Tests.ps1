@@ -393,6 +393,24 @@ Describe 'manage-notion-ai-memory durable memory contract' {
             $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $_.response.isError -eq $true
         })
         $partialIndexErrors.Count | Should -Be 1
+        $partialIndexWrite = @($partial.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $_.arguments.command -EQ 'insert_content'
+        })[0]
+        $partialIndexWrite | Should -Not -BeNullOrEmpty
+        $partialBodyCreate = @($partial.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $_.arguments.parent.page_id -EQ (($pages.memory.locator -split '/')[-1])
+        })[0]
+        $partialBodyCreate | Should -Not -BeNullOrEmpty
+        $partialCreateText = ($partialBodyCreate.response.content | ForEach-Object text) -join ' '
+        $partialTarget = [regex]::Match($partialCreateText, '(?<target>https://\S+)').Groups['target'].Value
+        $partialTarget | Should -Not -BeNullOrEmpty
+        $partialIndexContent = $partialIndexWrite.arguments.content
+        $partialIndexContent | Should -Match '(?m)^## Topic\s+Release-note language$'
+        $partialIndexContent | Should -Match '(?m)^## Scope\s+example\.project$'
+        $partialIndexContent | Should -Match '(?m)^## Memory Key\s+project:example\.project:release-language$'
+        $partialIndexContent | Should -Match '(?m)^## Locator\s+release-language$'
+        $partialIndexContent | Should -Match "(?m)^## Target\s+$([regex]::Escape($partialTarget))$"
+        $partialIndexContent | Should -Match '(?m)^## Status\s+Active$'
         ($partialIndexErrors[0].response.content | ForEach-Object text) -join ' ' | Should -Match '503 Service Unavailable'
         @($partial.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' }).Count | Should -Be 1
         $partial.oracle.expectedOutcome | Should -Match 'operation is incomplete'
