@@ -277,6 +277,40 @@ function Test-CoreRunSelected {
             catch { return [string]$_.Exception.Message }
         }
 
+        function New-WorkflowLegacySourceProjectionModule {
+            $match = [regex]::Match($script:Workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
+            $header = [regex]::Match($match.Groups['body'].Value, '(?m)^        run: \|\r?\n')
+            if (-not $match.Success -or -not $header.Success) { throw 'Workflow validation run block is missing.' }
+            $lines = $match.Groups['body'].Value.Substring($header.Index + $header.Length) -split '\r?\n'
+            $code = (@($lines | ForEach-Object { if ($_.Length -eq 0) { '' } else { $_.Substring(10) } }) -join "`n")
+            $tokens=$null; $errors=$null
+            $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count) { throw 'Workflow validation run block does not parse.' }
+            $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-LegacySourceCheckProjection'},$true))
+            if ($functions.Count -ne 1) { throw 'Actual workflow source-check projection helper is missing.' }
+            return New-Module -ScriptBlock ([scriptblock]::Create($functions[0].Extent.Text + "`nExport-ModuleMember -Function Assert-LegacySourceCheckProjection"))
+        }
+
+        function New-LegacySourceProjectionFixture {
+            $candidate=[pscustomobject]@{sourceRepository='https://github.com/SyuanTsai/Skill-General.git';sourceRevision=('a'*40);baseRevision=('b'*40);candidateId=('c'*64);contentSha256=('d'*64)}
+            $ids=@('controlled-acquisition','integrity-verification','package-validation','skillspector-static','repository-tests','conditional-semantic-scan','ai-review','human-approval','publish-or-install','post-install-verification')
+            $stages=@(for($i=0;$i -lt $ids.Count;$i++){[pscustomobject]@{order=($i+1);id=$ids[$i];status=$(if($i -lt 5){'passed'}elseif($i -eq 5){'blocked'}else{'not-applicable'});events=@()}})
+            $general=[pscustomobject]@{eventId='00000000-0000-4000-8000-000000000001';stageId='repository-tests';toolId='repository-test-general';candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true;outputSha256=('e'*64)}
+            $pester=[pscustomobject]@{eventId='00000000-0000-4000-8000-000000000002';stageId='repository-tests';toolId='repository-test-pester';candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true;outputSha256=('f'*64)}
+            $stages[2].events=@([pscustomobject]@{candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true})
+            $stages[3].events=@([pscustomobject]@{candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true})
+            $stages[4].events=@($general,$pester)
+            $typed=[pscustomobject]@{eventId=$pester.eventId;toolId=$pester.toolId;outputSha256=$pester.outputSha256;testInventoryCount=2;testInventorySha256=('e'*64);total=7;passed=7;skipped=0;failed=0}
+            return [pscustomobject]@{schemaVersion=1;evidence='standard-validation-evidence-v1';contract='standard-validation-contract-v1';state='BLOCKED';exitCode=10;releaseEligible=$false;candidate=$candidate;authority=[pscustomobject]@{repository='https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git';runnerSha256=('e'*64)};failure=[pscustomobject]@{state='BLOCKED';message='Semantic scan was triggered without explicit consent.'};stages=$stages;sourceConformance=[pscustomobject]@{schemaVersion=1;contract='standard-source-conformance-v1';status='passed';scope='source-stages-1-5';sourceRevision=$candidate.sourceRevision;candidateId=$candidate.candidateId;contentSha256=$candidate.contentSha256;checkedStages=@($stages[0..4] | ForEach-Object {[pscustomobject]@{order=$_.order;id=$_.id;status=$_.status}});pester=[pscustomobject]@{eventCount=1;events=@($typed);total=7;passed=7;skipped=0;failed=0};canonicalValidation=[pscustomobject]@{state='BLOCKED';exitCode=10;stage6Status='blocked';releaseEligible=$false};releaseEligible=$false;failureReasons=@()}}
+        }
+
+        function Invoke-LegacySourceProjectionFixture {
+            param($Report,[int]$ExitCode=10)
+            $module=New-WorkflowLegacySourceProjectionModule
+            try { & $module {param($r,$exit) Assert-LegacySourceCheckProjection -Report $r -ProcessExitCode $exit -ExpectedSourceRevision ('a'*40) -ExpectedBaseRevision ('b'*40) -ExpectedAuthorityRunnerSha256 ('e'*64)} $Report $ExitCode }
+            finally { Remove-Module $module -Force }
+        }
+
         function Invoke-WorkflowCredentialFixture {
             param([Parameter(Mandatory)][ValidateSet('core', 'legacy')][string] $Mode)
             $stepPattern = '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)'
@@ -1250,5 +1284,58 @@ function Test-CoreRunSelected {
         }) | Should -Match 'Ordinary Run requires one exact approved Core authority pin'
         { & $selector { param($selectedPin) Get-LegacyAuthorityPin -SelectedPin $selectedPin } ([pscustomobject]@{ repository = $baseline.repository; commit = '8' * 40 }) } |
             Should -Throw
+    }
+
+    # Scenario: the protected legacy driver fully validates source stages but retains missing Semantic consent as BLOCKED/10.
+    # Purpose: permit only the existing source-check projection without rewriting canonical state or claiming release eligibility.
+    It 'UnitT40_accepts_complete_legacy_source_projection_without_masking_canonical_state' {
+        $report=New-LegacySourceProjectionFixture
+        $before=$report | ConvertTo-Json -Depth 100 -Compress
+        Invoke-LegacySourceProjectionFixture -Report $report | Should -BeTrue
+        ($report | ConvertTo-Json -Depth 100 -Compress) | Should -BeExactly $before
+        $report.state | Should -BeExactly 'BLOCKED'
+        $report.exitCode | Should -Be 10
+        $report.releaseEligible | Should -BeFalse
+        $report.state='PASS';$report.exitCode=0;$report.failure=$null;$report.stages[5].status='not-applicable'
+        $report.sourceConformance.canonicalValidation.state='PASS';$report.sourceConformance.canonicalValidation.exitCode=0;$report.sourceConformance.canonicalValidation.stage6Status='not-applicable'
+        Invoke-LegacySourceProjectionFixture -Report $report -ExitCode 0 | Should -BeTrue
+    }
+
+    # Scenario: report identity, source-stage completion, cleanup, scope or canonical exit disagrees with the protected run.
+    # Purpose: fail the source check instead of promoting an unrelated, incomplete or failed report.
+    It 'UnitT41_rejects_invalid_legacy_source_projection_and_canonical_failures' {
+        $mutations=@(
+            {param($r) $r.schemaVersion=2}, {param($r) $r.evidence='unknown'},
+            {param($r) $r.candidate.sourceRevision=('9'*40)}, {param($r) $r.candidate.baseRevision=('9'*40)},
+            {param($r) $r.authority.runnerSha256=('9'*64)}, {param($r) $r.sourceConformance.sourceRevision=('9'*40)},
+            {param($r) $r.sourceConformance.candidateId=('9'*64)}, {param($r) $r.sourceConformance.contentSha256=('9'*64)},
+            {param($r) $r.releaseEligible=$true}, {param($r) $r.sourceConformance.releaseEligible=$true},
+            {param($r) $r.sourceConformance.scope='release'}, {param($r) $r.sourceConformance.status='failed'},
+            {param($r) $r.sourceConformance.failureReasons=@('raw event mismatch')},
+            {param($r) $r.stages[3].status='partial'}, {param($r) $r.sourceConformance.checkedStages[3].status='partial'},
+            {param($r) $r.stages[4].events[1].exitCode=20}, {param($r) $r.stages[4].events[1].cleanedUp=$false},
+            {param($r) $r.stages[4].events[1].candidateId=('9'*64)}, {param($r) $r.stages[5].status='failed'},
+            {param($r) $r.stages[6].status='blocked'}, {param($r) $r.failure.message='unrelated failure'},
+            {param($r) $r.sourceConformance.canonicalValidation.exitCode=0}
+        )
+        foreach($mutate in $mutations){$r=New-LegacySourceProjectionFixture;& $mutate $r;{Invoke-LegacySourceProjectionFixture -Report $r}|Should -Throw}
+        {Invoke-LegacySourceProjectionFixture -Report (New-LegacySourceProjectionFixture) -ExitCode 20}|Should -Throw
+        {Invoke-LegacySourceProjectionFixture -Report (New-LegacySourceProjectionFixture) -ExitCode 0}|Should -Throw
+    }
+
+    # Scenario: a source projection asserts passed tests without a matching positive typed Pester inventory and process event.
+    # Purpose: reject empty/all-skipped/failed or mismatched test evidence before source-context publication.
+    It 'UnitT42_rejects_incomplete_or_mismatched_legacy_pester_projection' {
+        $mutations=@(
+            {param($r) $r.sourceConformance.pester.total=0}, {param($r) $r.sourceConformance.pester.passed=0},
+            {param($r) $r.sourceConformance.pester.failed=1}, {param($r) $r.sourceConformance.pester.skipped=1},
+            {param($r) $r.sourceConformance.pester.events=@()}, {param($r) $r.sourceConformance.pester.eventCount=2},
+            {param($r) $r.sourceConformance.pester.events[0].eventId='00000000-0000-4000-8000-000000000009'},
+            {param($r) $r.sourceConformance.pester.events[0].outputSha256=('9'*64)},
+            {param($r) $r.sourceConformance.pester.events[0].testInventoryCount=0},
+            {param($r) $r.sourceConformance.pester.events[0].failed=1},
+            {param($r) $r.sourceConformance.pester.events[0].total=8}
+        )
+        foreach($mutate in $mutations){$r=New-LegacySourceProjectionFixture;& $mutate $r;{Invoke-LegacySourceProjectionFixture -Report $r}|Should -Throw}
     }
 }

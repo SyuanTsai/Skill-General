@@ -212,7 +212,10 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Not -Match '(?m)^\s*if \[\['
         ([regex]::Matches($workflow, '(?m)^\s*pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs\s*$')).Count | Should -Be 1
         $workflow | Should -Match '\$validatorExitCode = \[int\]\$LASTEXITCODE'
-        $workflow | Should -Match 'if \(\$validatorExitCode -ne 0\)'
+        $workflow | Should -Match 'if \(\$validatorExitCode -ne 0 -and -not \$legacySourceAccepted\)'
+        $workflow | Should -Match '\$legacySourceAccepted = Assert-LegacySourceCheckProjection -Report \$report -ProcessExitCode \$validatorExitCode -ExpectedSourceRevision \$env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision \$baseCommit -ExpectedAuthorityRunnerSha256 \$runnerPins\[0\]\.sha256'
+        $workflow | Should -Match 'if \(-not \$legacySourceAccepted\) \{ throw'
+        $workflow | Should -Match 'original canonical state=\$\(\$report\.state\), exitCode=\$validatorExitCode, releaseEligible=false'
         $workflow | Should -Match '\$report\.candidate\.sourceRevision -cne \$env:EXPECTED_SOURCE_SHA'
         $workflow | Should -Match '\$report\.state -cne ''PASS'' -or \$report\.exitCode -ne 0'
         $workflow | Should -Match 'Core Pester evidence lacks a complete passing test count\.'

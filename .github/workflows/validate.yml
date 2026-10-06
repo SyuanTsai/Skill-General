@@ -360,6 +360,119 @@ jobs:
           VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
           APPROVED_AUTHORITY_REVISION: ${{ steps.authority-mode.outputs.authority_revision }}
         run: |
+          function Assert-LegacySourceCheckProjection {
+            param(
+              [Parameter(Mandatory)] $Report,
+              [Parameter(Mandatory)][int] $ProcessExitCode,
+              [Parameter(Mandatory)][string] $ExpectedSourceRevision,
+              [Parameter(Mandatory)][string] $ExpectedBaseRevision,
+              [Parameter(Mandatory)][string] $ExpectedAuthorityRunnerSha256
+            )
+            # Standard 8.1.2 permits this source-only projection while canonical BLOCKED/10 remains unchanged.
+            $source = $Report.sourceConformance
+            if ($Report.schemaVersion -ne 1 -or
+                $Report.evidence -cne 'standard-validation-evidence-v1' -or
+                $Report.contract -cne 'standard-validation-contract-v1' -or
+                $Report.releaseEligible -cne $false -or
+                $Report.candidate.sourceRepository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
+                $Report.candidate.sourceRevision -cne $ExpectedSourceRevision -or
+                $Report.candidate.baseRevision -cne $ExpectedBaseRevision -or
+                [string]$Report.candidate.candidateId -cnotmatch '^[0-9a-f]{64}$' -or
+                [string]$Report.candidate.contentSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $Report.authority.repository -cne 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git' -or
+                $Report.authority.runnerSha256 -cne $ExpectedAuthorityRunnerSha256 -or
+                $source.schemaVersion -ne 1 -or $source.contract -cne 'standard-source-conformance-v1' -or
+                $source.status -cne 'passed' -or $source.scope -cne 'source-stages-1-5' -or
+                $source.sourceRevision -cne $ExpectedSourceRevision -or
+                $source.candidateId -cne $Report.candidate.candidateId -or
+                $source.contentSha256 -cne $Report.candidate.contentSha256 -or
+                $source.releaseEligible -cne $false -or @($source.failureReasons).Count -ne 0) {
+              throw 'Legacy report lacks the exact approved source-check projection.'
+            }
+            $ids = @('controlled-acquisition', 'integrity-verification', 'package-validation',
+              'skillspector-static', 'repository-tests', 'conditional-semantic-scan',
+              'ai-review', 'human-approval', 'publish-or-install', 'post-install-verification')
+            $stages = @($Report.stages)
+            $checked = @($source.checkedStages)
+            if ($stages.Count -ne 10 -or $checked.Count -ne 5) { throw 'Legacy source stage inventory is incomplete.' }
+            for ($i = 0; $i -lt $ids.Count; $i++) {
+              if ($stages[$i].order -ne ($i + 1) -or $stages[$i].id -cne $ids[$i]) {
+                throw 'Legacy canonical stage identity or order differs.'
+              }
+              if ($i -lt 5 -and ($stages[$i].status -cne 'passed' -or
+                  $checked[$i].order -ne ($i + 1) -or $checked[$i].id -cne $ids[$i] -or
+                  $checked[$i].status -cne 'passed')) { throw 'Legacy source stage did not fully pass.' }
+              if ($i -ge 6 -and $stages[$i].status -cne 'not-applicable') {
+                throw 'Legacy source projection includes an unexpected later-stage result.'
+              }
+            }
+            foreach ($stage in $stages[2..4]) {
+              $events = @($stage.events)
+              if ($events.Count -le 0) { throw 'Legacy source stage has no validated process events.' }
+              foreach ($event in $events) {
+                if ($event.candidateId -cne $Report.candidate.candidateId -or
+                    $event.status -cne 'passed' -or $event.exitCode -ne 0 -or $event.cleanedUp -cne $true) {
+                  throw 'Legacy source process evidence failed, changed candidate, or did not clean up.'
+                }
+              }
+            }
+            $canonical = $source.canonicalValidation
+            if ($Report.exitCode -ne $ProcessExitCode -or
+                $canonical.state -cne $Report.state -or $canonical.exitCode -ne $ProcessExitCode -or
+                $canonical.stage6Status -cne $stages[5].status -or $canonical.releaseEligible -cne $false) {
+              throw 'Legacy projection disagrees with the original canonical process result.'
+            }
+            if ($Report.state -ceq 'PASS' -and $ProcessExitCode -eq 0) {
+              if ($null -ne $Report.failure -or $stages[5].status -cne 'not-applicable') {
+                throw 'Legacy PASS has unexpected failure or Semantic evidence.'
+              }
+            }
+            elseif ($Report.state -ceq 'BLOCKED' -and $ProcessExitCode -eq 10) {
+              if ($stages[5].status -cne 'blocked' -or $Report.failure.state -cne 'BLOCKED' -or
+                  $Report.failure.message -cne 'Semantic scan was triggered without explicit consent.') {
+                throw 'Legacy BLOCKED is not the permitted missing-consent source projection.'
+              }
+            }
+            else { throw 'Legacy canonical failure cannot be projected as a passed source check.' }
+            $repositoryEvents = @($stages[4].events)
+            $generalEvents = @($repositoryEvents | Where-Object { $_.toolId -ceq 'repository-test-general' })
+            $pesterEvents = @($repositoryEvents | Where-Object { $_.toolId -ceq 'repository-test-pester' })
+            $typedEvents = @($source.pester.events)
+            if ($repositoryEvents.Count -ne 2 -or $generalEvents.Count -ne 1 -or $pesterEvents.Count -ne 1 -or
+                $typedEvents.Count -ne 1 -or $source.pester.eventCount -ne 1) {
+              throw 'Legacy report lacks the two reviewed repository checks and typed Pester event.'
+            }
+            foreach ($event in $repositoryEvents) {
+              if ($event.stageId -cne 'repository-tests' -or
+                  [string]$event.eventId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+                  [string]$event.outputSha256 -cnotmatch '^[0-9a-f]{64}$') {
+                throw 'Legacy repository process identity is incomplete.'
+              }
+            }
+            if ($generalEvents[0].eventId -ceq $pesterEvents[0].eventId) { throw 'Legacy repository event identity is duplicated.' }
+            $typed = $typedEvents[0]
+            if ($typed.eventId -cne $pesterEvents[0].eventId -or $typed.toolId -cne 'repository-test-pester' -or
+                $typed.outputSha256 -cne $pesterEvents[0].outputSha256 -or $typed.testInventoryCount -le 0 -or
+                [string]$typed.testInventorySha256 -cnotmatch '^[0-9a-f]{64}$') {
+              throw 'Legacy typed Pester evidence does not match its validated process and inventory.'
+            }
+            foreach ($counts in @($source.pester, $typed)) {
+              foreach ($name in @('total', 'passed', 'skipped', 'failed')) {
+                $value = $counts.$name
+                if ($null -eq $value -or $value -is [bool] -or [string]$value -cnotmatch '^(0|[1-9][0-9]*)$') {
+                  throw 'Legacy Pester count is missing or invalid.'
+                }
+              }
+              if ($counts.total -le 0 -or $counts.passed -le 0 -or $counts.failed -ne 0 -or
+                  ($counts.passed + $counts.skipped) -ne $counts.total) {
+                throw 'Legacy Pester evidence is empty, failed, all-skipped, or inconsistent.'
+              }
+            }
+            foreach ($name in @('total', 'passed', 'skipped', 'failed')) {
+              if ($source.pester.$name -ne $typed.$name) { throw 'Legacy aggregate and typed Pester counts differ.' }
+            }
+            return $true
+          }
           $ErrorActionPreference = 'Stop'
           if ($env:VALIDATION_MODE -ceq 'core') {
             [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $null, 'Process')
@@ -443,7 +556,19 @@ jobs:
           else { throw 'Protected authority mode is missing or invalid.' }
           pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
           $validatorExitCode = [int]$LASTEXITCODE
-          if ($validatorExitCode -ne 0) {
+          $legacySourceAccepted = $false
+          $legacyProjectionError = $null
+          if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+            try {
+              $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+              $candidateConfig = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json -Depth 20
+              $runnerPins = @($candidateConfig.authority.files | Where-Object { $_.path -ceq 'scripts/Invoke-StandardValidation.ps1' })
+              if ($runnerPins.Count -ne 1) { throw 'Legacy candidate has no unique approved authority runner pin.' }
+              $legacySourceAccepted = Assert-LegacySourceCheckProjection -Report $report -ProcessExitCode $validatorExitCode -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision $baseCommit -ExpectedAuthorityRunnerSha256 $runnerPins[0].sha256
+            }
+            catch { $legacyProjectionError = $_.Exception.Message }
+          }
+          if ($validatorExitCode -ne 0 -and -not $legacySourceAccepted) {
             if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
               try {
                 $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
@@ -587,16 +712,17 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-          if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
-              $report.state -cne 'PASS' -or $report.exitCode -ne 0) {
-            throw 'Canonical report does not prove full exact-head source validation.'
-          }
           if ($env:VALIDATION_MODE -ceq 'legacy') {
-            if ($report.sourceConformance.status -cne 'passed') {
-              throw 'Legacy canonical report lacks passed source conformance.'
-            }
+            if (-not $legacySourceAccepted) { throw "Legacy source projection rejected: $legacyProjectionError" }
+            Write-Host "Source stages 1-5 passed for $($report.candidate.sourceRevision); original canonical state=$($report.state), exitCode=$validatorExitCode, releaseEligible=false."
+            # The workflow publishes source checks only; preserve the report and actual validator exit above.
+            $global:LASTEXITCODE = 0
           }
           elseif ($env:VALIDATION_MODE -ceq 'core') {
+            if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
+                $report.state -cne 'PASS' -or $report.exitCode -ne 0) {
+              throw 'Canonical report does not prove full exact-head source validation.'
+            }
             $checks = @($report.checks)
             if ($report.schemaVersion -ne 2 -or
                 $report.evidence -cne 'standard-core-validation-evidence-v2' -or
