@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 interface:
   display_name: "Manage Notion AI Memory"
-  short_description: "Recall and capture durable Notion memory"
+  short_description: "Recall and capture indexed Notion memory"
   default_prompt: "Use $manage-notion-ai-memory to recall or capture reusable Notion memory."
 
 dependencies:

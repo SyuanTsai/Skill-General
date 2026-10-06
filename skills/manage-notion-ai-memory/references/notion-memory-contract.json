@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "workspace": {
     "purpose": "dedicated-ai-memory",
     "sourceOfTruth": "Notion",
@@ -82,5 +82,121 @@
     "allowsBulkNotionSchemaChanges": false,
     "allowsBatchDataProcessing": false,
     "allowsDropboxReorganizationOrMigration": false
+  },
+  "adopterConfig": {
+    "schemaVersion": 1,
+    "codexFile": "memory-adopter.json",
+    "codexHomeEnvironment": "CODEX_HOME",
+    "codexHomeFallback": "~/.codex",
+    "precedence": [
+      "explicit-user-entry",
+      "trusted-host-project-config"
+    ],
+    "requiredFields": [
+      "schemaVersion",
+      "mode",
+      "scope",
+      "boundary",
+      "index",
+      "memory",
+      "inbox"
+    ],
+    "unknownVersionAction": "stop-affected-write",
+    "conflictAction": "stop-affected-write-continue-independent-work",
+    "noTitleGuessing": true
+  },
+  "modes": {
+    "structured": {
+      "preservesContractVersion": 3,
+      "defaultWhenModeOmitted": true,
+      "mappingKind": "existing-properties",
+      "requiredFields": [
+        "Title",
+        "Type",
+        "Scope",
+        "Status",
+        "Content",
+        "Source",
+        "Memory Key",
+        "Confidence",
+        "Storage Type"
+      ],
+      "queryStates": [
+        "Active"
+      ],
+      "exactKeyField": "Memory Key"
+    },
+    "pages": {
+      "mappingKind": "existing-sections",
+      "requiredFields": [
+        "Memory Key",
+        "Scope",
+        "Status",
+        "Confidence",
+        "Source",
+        "Content"
+      ],
+      "optionalFields": [
+        "Title",
+        "Type",
+        "Storage Type"
+      ],
+      "unmappedImportedState": "historical-unconfirmed",
+      "createsProperties": false
+    }
+  },
+  "index": {
+    "role": "navigation-only",
+    "requiredFields": [
+      "Topic",
+      "Scope",
+      "Memory Key",
+      "Locator",
+      "Target",
+      "Status"
+    ],
+    "currentStates": [
+      "Active"
+    ],
+    "nonCurrentStates": [
+      "Pending",
+      "Superseded",
+      "Archived",
+      "historical-unconfirmed"
+    ],
+    "factsAuthority": "target-body-and-formal-source",
+    "repairRequiresVerifiedTarget": true
+  },
+  "workflow": {
+    "writeOrder": [
+      "verify-authority-and-same-key",
+      "save-body",
+      "maintain-index",
+      "read-back"
+    ],
+    "unchangedAction": "skip-duplicate",
+    "replacementAction": "preserve-old-as-Superseded",
+    "archiveAction": "retain-body-mark-Archived",
+    "confirmedRecallRequires": [
+      "Active",
+      "Confirmed",
+      "matching-scope",
+      "verified-source"
+    ],
+    "partialIndexFailure": {
+      "retainBody": true,
+      "reportFields": [
+        "bodyLocator",
+        "missingIndexStep",
+        "actualError"
+      ],
+      "resumeAction": "read-current-state-repair-index-only"
+    },
+    "retrieval": {
+      "exactLocatorMayBypassIndex": true,
+      "transientRecallOptional": true,
+      "boundedTopicLookup": true,
+      "mutableFactsRevalidateFormalSource": true
+    }
   }
 }
