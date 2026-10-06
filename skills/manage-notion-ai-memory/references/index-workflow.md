@@ -44,6 +44,8 @@ An imported record whose status has no known mapping is `historical-unconfirmed`
 
 `Memory Index` locates a body; it does not establish facts. The body and its formal source are authoritative. Use only `Active` index rows for current navigation. `Pending`, `Superseded`, `Archived`, and `historical-unconfirmed` are non-current. A row must match the configured scope and carry a verified target locator before it is followed.
 
+An INDEX `Locator` identifies the verified body: include its verified page URL or ID, with an actual section/block locator within that body when needed. `Target` is the verified link to that page. Keep both grounded in verified destinations; a topic or title cannot supply a locator. `Locator` and `Target` may use different valid representations, and retained history rows keep their original values.
+
 For retrieval, prefer an exact `Memory Key`. If the configured memory destination exposes a narrow exact-key lookup, query that key and scope directly; otherwise locate it through the configured index. For topic retrieval, use a bounded index lookup, then read only the matching body. A verified body locator already supplied by the user or another trusted source may be used without an index lookup. Never guess a locator from a title. Confirmed recall requires an `Active` body, `Confirmed` confidence, matching scope, and a verified source. Revalidate mutable facts against their formal source.
 
 ## Same-key body check and replacement

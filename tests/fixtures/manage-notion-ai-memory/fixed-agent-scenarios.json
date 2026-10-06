@@ -120,7 +120,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "## Memory Index\n| Topic | Scope | Memory Key | Locator | Target | Status |\n| Release-note language | example.project | project:example.project:release-language | release-language | https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005 | Active |"
+                "text": "## Memory Index\n| Topic | Scope | Memory Key | Locator | Target | Status |\n| Release-note language | example.project | project:example.project:release-language | https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005 | https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005 | Active |"
               }
             ]
           }
@@ -326,7 +326,7 @@
             },
             "pages": [
               {
-                "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\n## Status\nActive"
+                "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\n## Status\nActive"
               }
             ]
           },
@@ -348,7 +348,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000025\nStatus: Active"
               }
             ]
           }
@@ -500,7 +500,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Index rows before replacement:\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
+                "text": "Index rows before replacement:\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
               }
             ]
           }
@@ -619,7 +619,7 @@
             "allow_async": false,
             "command": "insert_content",
             "page_id": "00000000-0000-4000-8000-000000000002",
-            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language-japanese\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\n## Status\nActive",
+            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\n## Status\nActive",
             "position": {
               "type": "end"
             }
@@ -642,7 +642,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Index rows after replacement:\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Superseded\n\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language-japanese\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\nStatus: Active"
+                "text": "Index rows after replacement:\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Superseded\n\nTopic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000027\nStatus: Active"
               }
             ]
           }
@@ -741,7 +741,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active\nExact key/scope match count: 1\nActive count: 1"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active\nExact key/scope match count: 1\nActive count: 1"
               }
             ]
           }
@@ -827,7 +827,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Archived"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Archived"
               }
             ]
           }
@@ -959,7 +959,7 @@
             },
             "pages": [
               {
-                "content": "## Topic\nRelease-note length\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-note-length\n## Locator\nrelease-note-length\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\n## Status\nPending"
+                "content": "## Topic\nRelease-note length\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-note-length\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\n## Status\nPending"
               }
             ]
           },
@@ -995,7 +995,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note length\nScope: example.project\nMemory Key: project:example.project:release-note-length\nLocator: release-note-length\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\nStatus: Pending"
+                "text": "Topic: Release-note length\nScope: example.project\nMemory Key: project:example.project:release-note-length\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000028\nStatus: Pending"
               }
             ]
           }
@@ -1358,7 +1358,7 @@
             "allow_async": false,
             "command": "insert_content",
             "page_id": "00000000-0000-4000-8000-000000000002",
-            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Status\nActive",
+            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Status\nActive",
             "position": {
               "type": "end"
             }
@@ -1504,7 +1504,7 @@
             "allow_async": false,
             "command": "insert_content",
             "page_id": "00000000-0000-4000-8000-000000000002",
-            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Status\nActive",
+            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\n## Status\nActive",
             "position": {
               "type": "end"
             }
@@ -1527,7 +1527,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000030\nStatus: Active"
               }
             ]
           }
@@ -1669,7 +1669,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language-legacy\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000031\nStatus: historical-unconfirmed\nExact key/scope match count: 1\nActive count: 0"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000031\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000031\nStatus: historical-unconfirmed\nExact key/scope match count: 1\nActive count: 0"
               }
             ]
           }
@@ -1716,7 +1716,7 @@
             "allow_async": false,
             "command": "insert_content",
             "page_id": "00000000-0000-4000-8000-000000000002",
-            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language-current\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\n## Status\nActive",
+            "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\n## Status\nActive",
             "position": {
               "type": "end"
             }
@@ -1753,7 +1753,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language-current\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000032\nStatus: Active"
               }
             ]
           }
@@ -1878,7 +1878,7 @@
             },
             "pages": [
               {
-                "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nrelease-language\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\n## Status\nActive"
+                "content": "## Topic\nRelease-note language\n## Scope\nexample.project\n## Memory Key\nproject:example.project:release-language\n## Locator\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\n## Target\nhttps://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\n## Status\nActive"
               }
             ]
           },
@@ -1900,7 +1900,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000050\nStatus: Active"
               }
             ]
           }
@@ -1997,7 +1997,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
               }
             ]
           }
@@ -2062,7 +2062,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
               }
             ]
           }
@@ -2160,7 +2160,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
               }
             ]
           }
@@ -2225,7 +2225,7 @@
             "content": [
               {
                 "type": "text",
-                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: release-language\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
+                "text": "Topic: Release-note language\nScope: example.project\nMemory Key: project:example.project:release-language\nLocator: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nTarget: https://www.notion.so/example-workspace/00000000-0000-4000-8000-000000000005\nStatus: Active"
               }
             ]
           }

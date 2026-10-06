@@ -373,6 +373,54 @@ Describe 'manage-notion-ai-memory durable memory contract' {
             }
         }
 
+        $positiveIndexScenarioIds = @(
+            'pages-topic-lookup-confirmed-active',
+            'first-capture-absent-key',
+            'replacement-preserves-superseded-body',
+            'archive-retains-body',
+            'inferred-candidate-pending-inbox',
+            'body-saved-index-failed',
+            'repair-index-only-after-readback',
+            'formal-adoption-of-new-context',
+            'orphan-body-without-index-repairs-index-only',
+            'replacement-create-refused-retains-current',
+            'replacement-create-ambiguous-retains-current'
+        )
+        foreach ($id in $positiveIndexScenarioIds) {
+            $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $indexTexts = @()
+            foreach ($call in $scenario.connectorTranscript) {
+                if ($call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $pages.index.locator) {
+                    $indexTexts += @(($call.response.content | ForEach-Object text) -join "`n")
+                }
+                if ($call.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $call.arguments.parent.page_id -EQ (($pages.index.locator -split '/')[-1])) {
+                    $indexTexts += @($call.arguments.pages | ForEach-Object content)
+                }
+                if ($call.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $call.arguments.page_id -EQ (($pages.index.locator -split '/')[-1]) -and $call.arguments.command -EQ 'insert_content') {
+                    $indexTexts += @($call.arguments.content)
+                }
+            }
+            $pairs = [System.Collections.Generic.List[object]]::new()
+            foreach ($text in $indexTexts) {
+                foreach ($match in [regex]::Matches($text, '(?m)^## Locator\s*\r?\n(?<locator>[^\r\n]+)\r?\n## Target\s*\r?\n(?<target>https://[^\r\n]+)')) {
+                    $pairs.Add([pscustomobject]@{ locator = $match.Groups['locator'].Value.Trim(); target = $match.Groups['target'].Value.Trim() })
+                }
+                foreach ($match in [regex]::Matches($text, '(?m)^Locator:\s*(?<locator>\S+)\s*\r?\nTarget:\s*(?<target>https://\S+)')) {
+                    $pairs.Add([pscustomobject]@{ locator = $match.Groups['locator'].Value.Trim(); target = $match.Groups['target'].Value.Trim() })
+                }
+                foreach ($match in [regex]::Matches($text, '(?m)^\|\s*[^|]+\|\s*[^|]+\|\s*[^|]+\|\s*(?<locator>[^|]+?)\s*\|\s*(?<target>https://[^|\s]+)\s*\|\s*[^|]+\s*\|$')) {
+                    $pairs.Add([pscustomobject]@{ locator = $match.Groups['locator'].Value.Trim(); target = $match.Groups['target'].Value.Trim() })
+                }
+            }
+            $pairs.Count | Should -BeGreaterThan 0
+            foreach ($pair in $pairs) {
+                $pair.locator | Should -BeExactly $pair.target
+                $verifiedBody = @($scenario.connectorTranscript | Where-Object {
+                    $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $pair.target -and $_.response.PSObject.Properties['isError'] -eq $null -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
+                })
+                $verifiedBody.Count | Should -BeGreaterThan 0
+            }
+        }
         $repair = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'repair-index-only-after-readback')[0]
         $repairBodyReadback = @($repair.connectorTranscript | Where-Object {
             $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
@@ -408,7 +456,7 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $partialIndexContent | Should -Match '(?m)^## Topic\s+Release-note language$'
         $partialIndexContent | Should -Match '(?m)^## Scope\s+example\.project$'
         $partialIndexContent | Should -Match '(?m)^## Memory Key\s+project:example\.project:release-language$'
-        $partialIndexContent | Should -Match '(?m)^## Locator\s+release-language$'
+        $partialIndexContent | Should -Match "(?m)^## Locator\s+$([regex]::Escape($partialTarget))$"
         $partialIndexContent | Should -Match "(?m)^## Target\s+$([regex]::Escape($partialTarget))$"
         $partialIndexContent | Should -Match '(?m)^## Status\s+Active$'
         ($partialIndexErrors[0].response.content | ForEach-Object text) -join ' ' | Should -Match '503 Service Unavailable'
@@ -487,6 +535,8 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $newBodyLocator | Should -Not -Be $oldBodyLocator
         $finalIndexText | Should -Not -BeNullOrEmpty
         $finalIndexText | Should -Match "(?s)$([regex]::Escape($oldBodyLocator)).*Status: Superseded.*$([regex]::Escape($newBodyLocator)).*Status: Active"
+        $finalIndexText | Should -Match "(?s)Locator:\s*$([regex]::Escape($oldBodyLocator))\s+Target:\s*$([regex]::Escape($oldBodyLocator))\s+Status: Superseded"
+        $finalIndexText | Should -Match "(?s)Locator:\s*$([regex]::Escape($newBodyLocator))\s+Target:\s*$([regex]::Escape($newBodyLocator))\s+Status: Active"
 
         $orphan = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'orphan-body-without-index-repairs-index-only')[0]
         $orphanMemoryScan = @($orphan.connectorTranscript | Where-Object {
