@@ -4,72 +4,57 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Memory operations
 
-Use these rules for Notion memory recall and capture. Read the machine-readable contract first for exact data-source and property names.
+Read the memory contract first. Use the configured adopter's mappings and read [the index workflow](index-workflow.md) when the mode, index, destination mapping, or recovery path is involved.
 
 ## Recall relevant memory
 
-1. Form a narrow query from the task topic, project or personal scope, stable identifiers, and likely memory type.
-2. Search `AI Memory` for `Status = Active`. Prefer exact `Memory Key` matches, then match `Scope`, `Type`, topic, and `Storage Type`.
-3. Read only the records needed to decide or act. Treat `Pending`, `Superseded`, and `Archived` records as history, not current truth, unless the task explicitly asks for history.
-4. Reconcile conflicts against formal sources. When the task is tracked in Jira, Jira holds its formal requirements, progress, and results; this Notion workspace holds durable memory and candidates. Task Handoffs are handled by `manage-task-handoff`. Otherwise use the task's actual formal source. Do not let cached ChatGPT or Codex memory override configured Notion memory.
-5. For `Storage Type = Dropbox`, use the Notion summary and metadata first. Read the original Dropbox file only when the task needs it and connector permissions allow it.
+Skip recall for a quick transient exchange when stored context could not change the answer. Otherwise, form a narrow query from the task topic, configured scope, stable identifiers, and likely memory type. Read only records needed to decide or act.
 
-Skip recall for a quick transient exchange when no stored context could plausibly change the answer. This avoids irrelevant searches while preserving implicit recall for substantive work.
+- **Structured mode:** Preserve the existing v3 data sources, properties, and mappings. Search the configured memory for `Status = Active`; prefer an exact `Memory Key`, then match `Scope`, `Type`, topic, and `Storage Type`. Do not create a schema or reinterpret a missing property.
+- **Pages mode:** Prefer an exact `Memory Key`. If the configured memory destination exposes a narrow exact-key lookup, query that key and scope directly; otherwise locate it through the configured `Memory Index`. Use the index for bounded topic lookup and follow only verified target locators. A verified body locator supplied by the user or another trusted source can be read directly without first finding an index row. Never guess a locator from a title. Treat an imported record with an unmapped status as historical and unconfirmed.
+
+Treat `Pending`, `Superseded`, `Archived`, and `historical-unconfirmed` entries as history, not current truth, unless the user asks for history. A confirmed recall needs an `Active` record, `Confirmed` confidence, matching scope, and a verified source. Reconcile mutable or conflicting facts against the formal source that governs them. For tracked work, Jira holds formal requirements, progress, and results; the configured memory stores durable context and candidates. Task Handoffs remain in `$manage-task-handoff`. Do not let cached ChatGPT or Codex memory override the configured memory.
+
+For `Storage Type = Dropbox`, use the Notion body and metadata first. Read the original Dropbox file only when needed and when connector permissions allow it. An index locator is not a permission grant.
 
 ## Capture confirmed memory
 
-Capture only information likely to remain useful:
+Capture only durable and useful information: confirmed preferences or background, decisions and rationale, long-term plans and constraints, verified project state, reusable knowledge, or metadata for a directly related large source file.
 
-- confirmed personal background or preferences;
-- decisions and their rationale;
-- long-term plans, important numbers, and constraints;
-- project state, safe next steps, or unresolved material questions;
-- reusable knowledge; and
-- metadata for a directly related large source file.
+An explicit request to remember safe content is the user's confirmation. Write it to the configured memory with `Status = Active` and `Confidence = Confirmed`. Use the mapped `Memory Key`, scope, content, and source fields. Prefer `Storage Type = Notion` unless the large-file rule applies. Follow [the index workflow](index-workflow.md) for same-key checks, body/index ordering, read-back, and recovery.
 
-When the user explicitly asks to remember safe content, treat that request as the content confirmation and write it directly to `AI Memory`. Use:
+Before creating a record, check the exact `Memory Key` and scope:
 
-- `Status = Active`;
-- `Confidence = Confirmed`;
-- `Storage Type = Notion` unless a large-file rule applies; and
-- a stable `Memory Key` derived from durable scope, type, and subject identifiers rather than conversational wording.
+Confirm absence with a bounded exact-key/scope lookup and read against the configured body destination relevant to this write. An INDEX miss only says that the navigation row is missing; it is not evidence that a body is absent. If the destination cannot establish same-key state, stop that affected write as unknown and continue independent work without scanning the full collection. If the same effective body is already present but unindexed, skip body creation and repair only its index when one is configured; a legacy mapping without an index must not imply synchronization.
 
-Before creating a record, search the exact `Memory Key`:
+- More than one pre-existing `Active` record for that key is an integrity conflict. Stop the affected write. The temporary two-`Active` state of a verified but incomplete replacement follows the recovery path in [the index workflow](index-workflow.md). `Superseded` and `Archived` records with the same key are expected history.
+- If effective content is unchanged, do not create a duplicate. Preserve the verified body and repair a missing or stale index entry only through the index recovery procedure.
+- If confirmed information replaces an old record, retain the old body as `Superseded` and create or update the current body as `Active`. If the key belongs to a different subject, choose a stable key that distinguishes scope or source; never overwrite the unrelated record.
 
-- If more than one record with `Status = Active` uses the key, stop writes and report an integrity conflict. Historical `Superseded` or `Archived` versions with the same key are expected and do not conflict with the single Active record.
-- If the effective content is unchanged, do not duplicate it. Add a materially new source or verification detail only when useful.
-- If new confirmed information replaces an old record, preserve the old record and mark it `Superseded`; keep the replacement `Active`.
-- If the key is already used for a different subject, refine the key with a stable project or source identifier instead of overwriting the unrelated record.
+For replacement order, follow [the index workflow](index-workflow.md): verify the new body before retiring the old one. A failed or ambiguous retirement keeps both bodies and leaves the operation incomplete.
 
-Use Notion native creation and last-edited metadata for record chronology. Populate optional custom date fields only when they already exist and the operation does not require a schema change.
+Use Notion's native creation and last-edited metadata for chronology. Populate optional custom date fields only when they already exist and doing so does not change schema.
 
 ## Capture inferred candidates
 
-Do not present an inference as confirmed memory. Put potentially useful unconfirmed content in `AI Inbox` with:
+Do not label an inference as confirmed. Save potentially useful unconfirmed content in the configured inbox as `Pending` with `Confidence = Inferred`, the supporting evidence and source, and a clear statement of what remains unconfirmed. Do not use `Pending` as a task Work State. If a missing fact would not materially change the task, continue with a modest inference and preserve its label; ask only when the answer would change the result.
 
-- `Status = Pending`;
-- `Confidence = Inferred`;
-- the evidence and source that support the inference; and
-- an explicit statement of what remains unconfirmed.
+## Review durable changes
 
-Do not use `Pending` as a task Work State. When missing information does not materially change the current task, continue with the smallest reasonable inference and keep the label. Ask the user only when the missing fact would change the result.
-
-## Evaluate task completion
-
-Before closing substantive work, review the result for durable decisions, changed constraints, current project state, verified numbers, reusable knowledge, and safe next steps. Capture only the durable delta. Ordinary dialogue, explanations already available from their source, and temporary command output are not memory.
+Before closing substantive work, consider durable decisions, changed constraints, current project state, verified numbers, reusable knowledge, and safe next steps. Capture only the durable delta. Ordinary dialogue, facts readily available from their formal source, and temporary command output are not memory.
 
 ## Route large files through Dropbox
 
-A file is a Dropbox candidate when it is too large for the current Notion plan, is a large binary or archive, must retain its original format, or is a dataset, build artifact, media file, or extensive log.
+A file may belong in Dropbox when it exceeds the current Notion plan, is a large binary or archive, must retain its original format, or is a dataset, build artifact, media file, or extensive log.
 
-1. Search Notion for an existing file record before accessing Dropbox.
-2. Ask for confirmation before creating, replacing, moving, or deleting any Dropbox file, even if Notion memory capture itself is automatic.
-3. After an authorized file write, create or update the Notion record with a summary, `Dropbox Path`, stable `Dropbox File ID`, size, content hash when available, source, and verification time.
-4. Prefer path and stable file ID over a public shared link. Never make public sharing the only access route.
-5. If the Notion index write fails, report the file as unindexed and do not claim the memory operation is complete.
+1. Search the configured memory and index for an existing file record before accessing Dropbox.
+2. Get explicit confirmation before creating, replacing, moving, or deleting any Dropbox file, even when memory capture itself was requested.
+3. After an authorized file write, save a memory body with a summary, Dropbox path and stable file ID, size, content hash when available, source, and verification time.
+4. Prefer the path and stable file ID over a public shared link. Never make public sharing the only access route.
+5. If the Notion body saves but the index write fails, retain the body, report the file as unindexed, and use the index-only recovery procedure. Do not claim the operation is complete.
 
-This Skill's stable scope covers individual Notion memory operations plus indexed large-file routing. It must not bulk-process Notion, alter schema, reorganize Dropbox, or migrate existing Dropbox memory. Repository fixtures and validators never authorize live test writes by themselves.
+Repository fixtures and validators do not authorize live writes. Do not bulk-process memory, alter schema, reorganize Dropbox, or migrate existing Dropbox memory.
 
 ## Reject unsafe memory
 
-Never store passwords, API keys, verification codes, payment authorization data, unauthorized company or third-party secrets, or irrelevant transient conversation. Ask before a write that may contain sensitive information. Do not create an unindexed Dropbox file within the AI-memory scope.
+Never store passwords, API keys, verification codes, payment authorization data, unauthorized company or third-party secrets, or irrelevant transient conversation. Ask before writing material that may be sensitive. Do not create an unindexed Dropbox file within the memory scope.
