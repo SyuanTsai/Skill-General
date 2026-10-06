@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "ea1d368ac7b36f838ce4c3af363972c90fa12930",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/ea1d368ac7b36f838ce4c3af363972c90fa12930",
-    "archiveSha256": "c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653",
+    "commit": "053b80143b5ef48b06a8c448d5ac1abaf9a49df8",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/053b80143b5ef48b06a8c448d5ac1abaf9a49df8",
+    "archiveSha256": "cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "bba519d01efc8d6d8508427c39a8cb3cd7e430f170febba507471bb4b8531294"
+        "sha256": "4eaf26afb98bbc42e9d1ddd51cf3d375958a37068998beda5c0f62471e64cbe9"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -57,11 +57,11 @@
       },
       {
         "path": "scripts/Resolve-PythonWheelClosure.py",
-        "sha256": "d209c973f331fdbb82a4d546bda18b1d485bcd1e446dd446b6d8bc4360b5ce35"
+        "sha256": "f9fcd99c408849f98564fbc4c30f3d7e6ad8148b60cb4d8f58fc29b040c4519c"
       },
       {
         "path": "scripts/Resolve-StandardValidationTool.ps1",
-        "sha256": "86540ff07e1b73177d179ae6a9ee2f0fef8029e27286604d68a9a98d0d205ec2"
+        "sha256": "71e6d5b191b74202e96f34a856d3317efb18662e17c8368d112d89b7d6795b15"
       },
       {
         "path": "docs/standards/schemas/standard-validation-adapter-v1.schema.json",
@@ -89,7 +89,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "03c7d01ee4e0c659c245dcf9ce8accdd31e3de343836e4bacaafd7f549e6e4f6"
+        "sha256": "fd60e3f7552d5b4b1fc5837a195fb8f8abff8444e8c1a9ff621ea14cb575b525"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",

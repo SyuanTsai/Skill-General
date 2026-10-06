@@ -162,28 +162,13 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $authorityTransportStep = [regex]::Match($workflow, '(?ms)- name: Verify and bind candidate-pinned authority for integration tests(?<body>.*?)(?=^      - name:|\z)')
         $authorityTransportStep.Success | Should -BeTrue
         $authorityTransportStep.Groups['body'].Value | Should -Match '(?m)^\s+VALIDATION_MODE: \$\{\{ steps\.authority-mode\.outputs\.validation_mode \}\}\r?$'
-        $authorityTransportStep.Groups['body'].Value | Should -Match '\$env:VALIDATION_MODE -ceq ''legacy'''
-        $authorityTransportStep.Groups['body'].Value | Should -Match '\$tempRoot = \[IO\.Path\]::GetFullPath\(\[IO\.Path\]::GetTempPath\(\)\)'
-        $authorityTransportStep.Groups['body'].Value | Should -Match '\$snapshotRoot = \[IO\.Path\]::GetFullPath\(\(Join-Path \$tempRoot \(''syp154-authority-'' \+ \[string\]\$pin\.commit\)\)\)'
-        $authorityTransportStep.Groups['body'].Value | Should -Match 'if \(-not \(Test-Path -LiteralPath \$snapshotRoot\)\)'
-        $authorityTransportStep.Groups['body'].Value | Should -Match '--local --no-hardlinks \$authorityRoot \$snapshotRoot'
-        $authorityTransportStep.Groups['body'].Value | Should -Match 'Legacy authority snapshot must be clean; existing cache was not modified\.'
-        $authorityTransportStep.Groups['body'].Value | Should -Not -Match 'GITHUB_ENV.*SYP154_CANDIDATE_AUTHORITY_ROOT'
-        $authorityTransportBody = $authorityTransportStep.Groups['body'].Value
-        $tempRootIndex = $authorityTransportBody.IndexOf('$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())', [StringComparison]::Ordinal)
-        $tempPreflightIndex = $authorityTransportBody.IndexOf('$cursor = $tempRoot', [StringComparison]::Ordinal)
-        $reparsePreflightIndex = $authorityTransportBody.IndexOf('Legacy TEMP transport parent contains a reparse ancestor.', [StringComparison]::Ordinal)
-        $snapshotIndex = $authorityTransportBody.IndexOf('$snapshotRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot', [StringComparison]::Ordinal)
-        $containmentIndex = $authorityTransportBody.IndexOf('Legacy authority snapshot escaped the runner TEMP root.', [StringComparison]::Ordinal)
-        $cloneIndex = $authorityTransportBody.IndexOf('--config core.autocrlf=false --local --no-hardlinks', [StringComparison]::Ordinal)
-        ($tempRootIndex -ge 0 -and $tempPreflightIndex -gt $tempRootIndex -and
-            $reparsePreflightIndex -gt $tempPreflightIndex -and $snapshotIndex -gt $reparsePreflightIndex -and
-            $containmentIndex -gt $snapshotIndex -and $cloneIndex -gt $containmentIndex) | Should -BeTrue
+        $authorityTransportStep.Groups['body'].Value | Should -Match 'Candidate-pinned authority checkout HEAD differs from the immutable candidate config\.'
+        $authorityTransportStep.Groups['body'].Value | Should -Match 'Candidate-pinned authority origin differs from the immutable candidate config\.'
+        $authorityTransportStep.Groups['body'].Value | Should -Match 'Candidate-pinned authority checkout must be clean\.'
         $authorityTransportStep.Groups['body'].Value | Should -Match '\$fileCursor = \$filePath'
+        $authorityTransportStep.Groups['body'].Value | Should -Not -Match 'snapshotRoot|--local --no-hardlinks|SYP154_CANDIDATE_AUTHORITY_ROOT'
         $workflow | Should -Match '(?m)^\s*id:\s*canonical-source-report\s*$'
-        $workflow | Should -Match '(?m)^\s*uses:\s*actions/setup-go@[0-9a-f]{40}(?:\s+#.*)?$'
-        $workflow | Should -Match '(?ms)- name: Set up approved Go runtime\s+if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == ''legacy'' \}\}'
-        $workflow | Should -Match '(?ms)- name: Set up Node for central npm lock resolution\s+if: \$\{\{ steps\.authority-mode\.outputs\.validation_mode == ''legacy'' \}\}'
+        $workflow | Should -Not -Match 'actions/setup-go@|actions/setup-node@|APPROVED_NPM_PATH|NPM_CONFIG_PREFIX'
         $workflow | Should -Match '(?ms)- name: Install and verify Microsoft''s latest stable PowerShell\s+shell: pwsh'
         $workflow | Should -Match '\$channel = Invoke-WebRequest -Uri \(''https://aka\.ms/powershell-'' \+ ''release\?tag=stable''\)'
         $workflow | Should -Match '\$channelUrl -cnotmatch \(''\^https://github\\\.com/PowerShell/PowerShell/'' \+ ''releases/tag/'
@@ -193,8 +178,8 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$asset\.digest -cnotmatch ''\^sha256:'
         $workflow | Should -Match 'Get-FileHash -LiteralPath \$zipPath -Algorithm SHA256'
         $workflow | Should -Match 'Child PowerShell resolution differs from the verified runtime\.'
-        $workflow | Should -Match '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core and legacy-driver regressions\s+shell: pwsh'
-        $pesterInstallStepMatch = [regex]::Match($workflow, '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core and legacy-driver regressions(?<body>.*?)(?=^      - name:|\z)')
+        $workflow | Should -Match '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core validation\s+shell: pwsh'
+        $pesterInstallStepMatch = [regex]::Match($workflow, '(?ms)- name: Acquire and bind exact Pester 6\.2\.0 for Core validation(?<body>.*?)(?=^      - name:|\z)')
         $pesterInstallStepMatch.Success | Should -BeTrue
         $pesterInstallStepMatch.Groups['body'].Value | Should -Not -Match '(?m)^\s+if:'
         $workflow | Should -Match 'scripts/Prepare-PesterRuntime\.ps1'
@@ -212,12 +197,12 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Not -Match '(?m)^\s*if \[\['
         ([regex]::Matches($workflow, '(?m)^\s*pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs\s*$')).Count | Should -Be 1
         $workflow | Should -Match '\$validatorExitCode = \[int\]\$LASTEXITCODE'
-        $workflow | Should -Match 'if \(\$validatorExitCode -ne 0 -and -not \$legacySourceAccepted\)'
-        $workflow | Should -Match '\$legacySourceAccepted = Assert-LegacySourceCheckProjection -Report \$report -ProcessExitCode \$validatorExitCode -ExpectedSourceRevision \$env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision \$baseCommit -ExpectedAuthorityRunnerSha256 \$runnerPins\[0\]\.sha256'
-        $workflow | Should -Match 'if \(-not \$legacySourceAccepted\) \{ throw'
-        $workflow | Should -Match 'original canonical state=\$\(\$report\.state\), exitCode=\$validatorExitCode, releaseEligible=false'
-        $workflow | Should -Match '\$report\.candidate\.sourceRevision -cne \$env:EXPECTED_SOURCE_SHA'
-        $workflow | Should -Match '\$report\.state -cne ''PASS'' -or \$report\.exitCode -ne 0'
+        $workflow | Should -Match 'if \(\$validatorExitCode -ne 0\)'
+        $workflow | Should -Match 'Assert-CoreSourceCheckReport -Report \$report -ProcessExitCode \$validatorExitCode -ExpectedSourceRevision \$env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision \$baseCommit -ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION -ExpectedEventName \$env:GITHUB_EVENT_NAME -ArtifactsRoot \$artifactsRoot -OutputPath \$outputPath'
+        $workflow | Should -Match '\$Report\.candidate\.sourceRevision -cne \$ExpectedSourceRevision'
+        $workflow | Should -Match '\$Report\.state -cne ''PASS'' -or \$Report\.exitCode -ne 0'
+        $workflow | Should -Match 'Write-CorePesterDiagnostics -ReportPath \$outputPath -RunOwnedRoot \$env:RUN_OWNED_ROOT -ArtifactsRoot \$artifactsRoot -ExpectedSourceRevision \$env:EXPECTED_SOURCE_SHA'
+        $workflow | Should -Not -Match 'legacySourceAccepted|Assert-LegacySourceCheckProjection'
         $workflow | Should -Match 'Core Pester evidence lacks a complete passing test count\.'
         $workflow | Should -Match '\$report\.evidence -cne ''standard-core-validation-evidence-v2'''
         $workflow | Should -Match '\$report\.releaseEligible -ne \$false'
@@ -290,21 +275,20 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$checkoutHead -cne \$env:EXPECTED_SOURCE_SHA'
         $workflow | Should -Match '\$commonBase\.Count -ne 1'
         $workflow | Should -Match '\$driverHead -cne \$env:EXPECTED_DRIVER_SHA'
-        $workflow | Should -Match '\$baselineAuthority = ''51399617ddebe21656fe4265a8d9ad116a943583'''
         $workflow | Should -Match '\$nextAuthority = ''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
         $workflow | Should -Match '\$mergedAuthority = ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'''
         $workflow | Should -Match '\$coreAuthorities = @\(\$nextAuthority, \$mergedAuthority\)'
-        $workflow | Should -Match '\$candidatePin\.authority\.commit -cnotin \(\@\(\$baselineAuthority\) \+ \$coreAuthorities\)'
+        $workflow | Should -Match '\$candidatePin\.authority\.commit -cnotin \$coreAuthorities'
         $workflow | Should -Match 'A protected Core driver cannot downgrade an unapproved or baseline candidate\.'
-        $workflow | Should -Match '\$driverAuthority -ceq \$baselineAuthority'
+        $workflow | Should -Not -Match '\$baselineAuthority|\$mode = ''legacy'''
         $workflow | Should -Match '\$driverAuthority -cin \$coreAuthorities'
         $workflow | Should -Match 'scripts/Invoke-Core.*Pester\.ps1'
         $workflow | Should -Match 'authority_revision=\$\(\[string\]\$candidatePin\.authority\.commit\)'
         $workflow | Should -Match 'ref:\s*\$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}'
         $workflow | Should -Match 'APPROVED_AUTHORITY_REVISION:\s*\$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}'
         $workflow | Should -Match '\$baseCommit = if \(\$env:GITHUB_EVENT_NAME -eq ''pull_request''\)'
-        $workflow | Should -Match '\$report\.candidate\.baseRevision -cne \$baseCommit'
-        $workflow | Should -Match '\$report\.authority\.revision -cne \$env:APPROVED_AUTHORITY_REVISION'
+        $workflow | Should -Match '\$Report\.candidate\.baseRevision -cne \$ExpectedBaseRevision'
+        $workflow | Should -Match '\$Report\.authority\.revision -cne \$ExpectedAuthorityRevision'
         $workflow | Should -Match '\$report\.releaseEligible -ne \$false'
         $workflow | Should -Match 'SetEnvironmentVariable\(''GITHUB_TOKEN'', \$null, ''Process''\)'
         $workflow | Should -Match 'SetEnvironmentVariable\(''GH_TOKEN'', \$null, ''Process''\)'
