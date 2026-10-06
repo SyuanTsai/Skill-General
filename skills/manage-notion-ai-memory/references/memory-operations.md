@@ -37,7 +37,7 @@ Use Notion's native creation and last-edited metadata for chronology. Populate o
 
 ## Capture inferred candidates
 
-Do not label an inference as confirmed. Save potentially useful unconfirmed content in the configured inbox as `Pending` with `Confidence = Inferred`, the supporting evidence and source, and a clear statement of what remains unconfirmed. Do not use `Pending` as a task Work State. If a missing fact would not materially change the task, continue with a modest inference and preserve its label; ask only when the answer would change the result.
+Do not label an inference as confirmed. Save potentially useful unconfirmed content in the configured inbox as `Pending` with `Confidence = Inferred`, the supporting evidence and source, and an explicit description of what remains unconfirmed. Do not use `Pending` as a task Work State. If a missing fact would not materially change the task, continue with a modest inference and preserve its label; ask only when the answer would change the result.
 
 ## Review durable changes
 
