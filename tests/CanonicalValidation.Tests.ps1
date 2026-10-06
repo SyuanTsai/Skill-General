@@ -1788,3 +1788,107 @@ function Test-CoreRunSelected {
     }
 
 }
+
+Describe 'Pinned authority byte materialization' {
+    BeforeAll {
+        $script:MaterializationWorkflowPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.github/workflows/validate.yml'
+        $script:MaterializationGitPath = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+        $script:MaterializationGitRecords = [Collections.Generic.List[object]]::new()
+        function Invoke-MaterializationFixtureGit {
+            param([string[]]$Arguments)
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = $script:MaterializationGitPath
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $start
+            $began = $false; $clean = $false; $exit = $null; $timedOut = $false
+            $output = ''; $errorOutput = ''
+            try {
+                if (-not $process.Start()) { throw 'Could not start owned fixture Git process.' }
+                $began = $true
+                $stdout = $process.StandardOutput.ReadToEndAsync()
+                $stderr = $process.StandardError.ReadToEndAsync()
+                if (-not $process.WaitForExit(20000)) { $timedOut = $true; throw 'Owned fixture Git process exceeded 20 seconds.' }
+                $output = $stdout.GetAwaiter().GetResult()
+                $errorOutput = $stderr.GetAwaiter().GetResult()
+                $exit = $process.ExitCode
+            }
+            finally {
+                if ($began -and -not $process.HasExited) { $process.Kill($true); [void]$process.WaitForExit(5000) }
+                $clean = (-not $began -or $process.HasExited)
+                $process.Dispose()
+                $script:MaterializationGitRecords.Add([ordered]@{
+                    arguments=$Arguments; processExit=$exit; deadlineSeconds=20; timedOut=$timedOut
+                    ownedCleanup=$clean; stdout=$output; stderr=$errorOutput
+                })
+
+            }
+            if ($exit -ne 0) { throw "Fixture Git failed: $errorOutput" }
+            return $output.TrimEnd("`r", "`n")
+        }
+    }
+    # Scenario: Git has a stable, clean index for a CRLF checkout before exact source-byte verification.
+    # Purpose: the actual workflow must recreate pinned bytes instead of accepting Git's clean stat cache.
+    It 'InterT10_materializes_exact_pinned_bytes_from_a_stable_CRLF_checkout' {
+        $workflow = Get-Content -LiteralPath $script:MaterializationWorkflowPath -Raw
+        $startMarker = 'git -C $authorityRoot config --local core.autocrlf false'
+        $endMarker = '$top = @(git -C $authorityRoot rev-parse --show-toplevel)'
+        $start = $workflow.IndexOf($startMarker, [StringComparison]::Ordinal)
+        $end = $workflow.IndexOf($endMarker, $start, [StringComparison]::Ordinal)
+        $start | Should -BeGreaterThan -1
+        $end | Should -BeGreaterThan $start
+        $snippet = ($workflow.Substring($start, $end - $start) -split '\r?\n' | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
+        $tokens = $null; $parseErrors = $null
+        $null = [Management.Automation.Language.Parser]::ParseInput($snippet, [ref]$tokens, [ref]$parseErrors)
+        @($parseErrors).Count | Should -Be 0
+
+        $authorityRoot = Join-Path $TestDrive 'authority'
+        [void][IO.Directory]::CreateDirectory((Join-Path $authorityRoot 'docs/standards'))
+        $readme = Join-Path $authorityRoot 'docs/standards/README.md'
+        [IO.File]::WriteAllText($readme, ("# Fixture authority`n`nNeutral pinned evidence.`n" * 111), [Text.UTF8Encoding]::new($false))
+        $expected = (Get-FileHash -LiteralPath $readme -Algorithm SHA256).Hash.ToLowerInvariant()
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'init', '--quiet')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'remote', 'add', 'origin', 'https://example.test/authority.git')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'config', '--local', 'core.autocrlf', 'false')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'add', '--', 'docs/standards/README.md')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--quiet', '-m', 'fixture')
+        $headBefore = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'rev-parse', 'HEAD')
+        $originBefore = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'remote', 'get-url', 'origin')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'config', '--local', 'core.autocrlf', 'true')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'read-tree', '--empty')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'read-tree', 'HEAD')
+        Remove-Item -LiteralPath $readme -Force
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'checkout-index', '--force', '--all')
+        $initial = (Get-FileHash -LiteralPath $readme -Algorithm SHA256).Hash.ToLowerInvariant()
+        $initial | Should -Not -Be $expected
+        Start-Sleep -Milliseconds 2100
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'config', '--show-origin', '--get-regexp', 'core\.')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'ls-files', '--eol')
+        $null = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'update-index', '--refresh')
+        $indexBefore = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'ls-files', '--debug')
+        (Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'status', '--porcelain=v1', '--untracked-files=all')) | Should -Be ''
+        # Preserve the native Git exit contract while bounding only the owned fixture processes.
+        function git {
+            $nativeOutput = Invoke-MaterializationFixtureGit @($args)
+            Set-Variable -Scope 1 -Name LASTEXITCODE -Value 0
+            return $nativeOutput
+        }
+        try {
+            . ([scriptblock]::Create($snippet))
+            $actual = (Get-FileHash -LiteralPath $readme -Algorithm SHA256).Hash.ToLowerInvariant()
+            $headAfter = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'rev-parse', 'HEAD')
+            $originAfter = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'remote', 'get-url', 'origin')
+            $dirtyAfter = Invoke-MaterializationFixtureGit @('-C', $authorityRoot, 'status', '--porcelain=v1', '--untracked-files=all')
+
+            $headAfter | Should -BeExactly $headBefore
+            $originAfter | Should -BeExactly $originBefore
+            $dirtyAfter | Should -Be ''
+            $actual | Should -BeExactly $expected
+        }
+        finally { Remove-Item Function:git -ErrorAction SilentlyContinue }
+    }
+}

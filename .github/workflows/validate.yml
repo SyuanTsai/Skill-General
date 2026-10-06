@@ -107,9 +107,14 @@ jobs:
           }
           git -C $authorityRoot config --local core.autocrlf false
           if ($LASTEXITCODE -ne 0) { throw 'Could not disable checkout line-ending conversion for exact pinned file verification.' }
-          # Rebuild both the disposable worktree and index after changing Windows line-ending conversion.
-          git -C $authorityRoot read-tree --reset -u HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the exact pinned authority tree and index in the disposable checkout.' }
+          # A stat-clean index may retain converted bytes after autocrlf changes.
+          # Rebuild this disposable index and every tracked file from the same pinned HEAD.
+          git -C $authorityRoot read-tree --empty
+          if ($LASTEXITCODE -ne 0) { throw 'Could not clear the disposable authority index for exact materialization.' }
+          git -C $authorityRoot read-tree HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not rebuild the disposable authority index from the pinned HEAD.' }
+          git -C $authorityRoot checkout-index --force --all
+          if ($LASTEXITCODE -ne 0) { throw 'Could not materialize the exact pinned authority bytes in the disposable checkout.' }
           $top = @(git -C $authorityRoot rev-parse --show-toplevel)
           if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or
               -not [IO.Path]::GetFullPath([string]$top[0]).Equals($authorityRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -146,8 +151,9 @@ jobs:
               }
               $fileCursor = Split-Path -Parent $fileCursor
             }
-            if ((Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
-              throw "Candidate-pinned authority file identity mismatch: $relativePath"
+            $actualFileHash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualFileHash -cne [string]$entry.sha256) {
+              throw "Candidate-pinned authority file identity mismatch: $relativePath; expected=$($entry.sha256); actual=$actualFileHash"
             }
           }
 
