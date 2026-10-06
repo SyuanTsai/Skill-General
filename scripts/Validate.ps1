@@ -17,6 +17,9 @@ param(
     [string] $BaseCommit,
     [string] $ExpectedGoRuntimeVersion = $env:STANDARD_GO_RUNTIME_VERSION,
     [string] $OutputPath,
+    [switch] $PrepareSourceTools,
+    [switch] $SourceValidation,
+    [string] $SourceToolsPath,
     [int] $TimeoutSeconds = 900,
     [switch] $SemanticConsent,
     [string] $SemanticProvider,
@@ -128,6 +131,40 @@ $script:MergedAuthorityFiles = [ordered]@{
     'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
     'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
     'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+}
+
+$script:SourceAuthorityCommit = 'd54ef2cc83a19fa58f62fdcc6fa290095355d03e'
+$script:SourceAuthorityArchiveSha256 = '03a865e164cf4875dc8e6a12ed10c698db9d6e83cf1d0b6adbfe4e53b2396763'
+$script:SourceAuthorityFiles = [ordered]@{
+    'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
+    'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
+    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
+    'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
+    'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
+    'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'ac58302e0e350c1ab4ba4dad8a33cd3abce12d592537fbdb23dfb1936d064e91'
+    'docs/standards/skill-repository-review-matrix.md' = '299925aabe3cab360827baad9bdeb1f0f56fc320dad967e49fe0b6bf9cdf8f8a'
+    'docs/standards/skill-repository-standard.md' = '24a1223415cb3f72ea87b87fcd597bd3e2df32168e003690d695bccddc7b67b8'
+    'docs/standards/upstream-interoperability.md' = '9c544fbfb6b77a589514f1926aa1488882e932786a303a42ce6c6c9b2ba80c7e'
+    'docs/standards/validation-security-gate.json' = '657122dde340f1f7f4442780cc27ffcb00b60c0d2afdcea22d63fbf7dbfdca7d'
+    'docs/standards/validation-toolchain.json' = '1dddbf4c5736e22e56f6ecb298542f41d39e116ab00ca24ad18beb7a3eab40ed'
+    'scripts/Invoke-StandardAuthorityGate.ps1' = '8e00ee1e48ef8359ab7be3539f8f7585ccde18b41e26d810843715ebc3656a4c'
+    'scripts/Resolve-PythonWheelClosure.py' = 'f9fcd99c408849f98564fbc4c30f3d7e6ad8148b60cb4d8f58fc29b040c4519c'
+    'scripts/Resolve-StandardValidationTool.ps1' = '71e6d5b191b74202e96f34a856d3317efb18662e17c8368d112d89b7d6795b15'
+    'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = '8ed4a9d7158273d7a1e9d898acf07f57e9170822cb7cbb70f1e2eec7195867ee'
+    'docs/standards/standard-validation-contract-v1.json' = '707edf8945ad9a7097df1dfb22a8f05ce47d0e0a66e2e44381036d630e854da0'
+    'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
+    'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
+    'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
+    'scripts/Invoke-StandardValidation.ps1' = '923cd136dec2624945f4440aa13a608d19baf3d0f5b8b286c7230fe3453bb37b'
+    'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
+    'scripts/StandardSemanticBridge.psm1' = 'daf90f703898cc56fc3310e1eec462bafa6552edcac0de4f08a3cd4b9f63a429'
+    'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
+    'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
+    'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+    'docs/standards/standard-core-validation-v2.json' = 'ade6b78ecc6e2fcfc5fd47cbe91e9e822182c7014501fb8a82be7c5e9f9a5c9e'
+    'docs/standards/schemas/standard-core-adapter-v2.schema.json' = '3e45c69ec64e6dc39dd39f1cb44c35bdcb7f04f8228b09c0a0f3dd32724fce6a'
+    'docs/standards/schemas/standard-core-evidence-v2.schema.json' = '340f5952a1bbfcb58301fd03cd111ca7de1f2092ff8de71ab6a7010cae4070e5'
 }
 
 function Assert-ExactPropertySet {
@@ -672,6 +709,16 @@ function New-StandardCoreAdapterV2 {
     }
 }
 
+function Get-ApprovedSourceAuthorityPin {
+    return [pscustomobject]@{
+        repository = $script:AuthorityRepository
+        commit = $script:SourceAuthorityCommit
+        archiveUrl = "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:SourceAuthorityCommit)"
+        archiveSha256 = $script:SourceAuthorityArchiveSha256
+        files = $script:SourceAuthorityFiles
+    }
+}
+
 function Get-LegacyAuthorityPin {
     param([Parameter(Mandatory = $true)] $SelectedPin)
 
@@ -679,7 +726,7 @@ function Get-LegacyAuthorityPin {
         throw 'Legacy validation cannot change the approved authority repository.'
     }
     if ([string]$SelectedPin.commit -ceq $script:AuthorityCommit) { return $SelectedPin }
-    if ([string]$SelectedPin.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)) {
+    if ([string]$SelectedPin.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit)) {
         throw 'Legacy validation requires one of the exact reviewed authority pins.'
     }
 
@@ -715,12 +762,26 @@ function Assert-OrdinaryCoreRunRequest {
 
     # ValidateSet accepts case variants, and PowerShell's ordinary comparisons
     # select Run case-insensitively. Keep this preflight on the same boundary.
+    $setup = (@($BoundParameters.Keys) -ccontains 'PrepareSourceTools') -and [bool]$BoundParameters['PrepareSourceTools']
+    $source = (@($BoundParameters.Keys) -ccontains 'SourceValidation') -and [bool]$BoundParameters['SourceValidation']
+    $preparedPath = if ((@($BoundParameters.Keys) -ccontains 'SourceToolsPath')) { [string]$BoundParameters['SourceToolsPath'] } else { '' }
+    if ($setup -and $source) { throw 'PrepareSourceTools and SourceValidation are separate setup and execution requests.' }
+    if (($setup -or $source) -and ($ExecutionMode -ine 'Run' -or [string]::IsNullOrWhiteSpace($preparedPath))) {
+        throw 'Explicit source setup or validation requires Run and SourceToolsPath.'
+    }
+    if (-not ($setup -or $source) -and (@($BoundParameters.Keys) -ccontains 'SourceToolsPath')) { throw 'Ordinary Core does not accept SourceToolsPath.' }
+    if ($source -and [string]$CandidateAuthority.commit -cne $script:SourceAuthorityCommit) {
+        throw 'Source validation requires the exact approved source authority pin.'
+    }
     if ($ExecutionMode -ine 'Run') { return }
-    if (Test-LegacyRunRequested -BoundParameters $BoundParameters) {
+    $ordinaryParameters = @{}
+    foreach ($key in $BoundParameters.Keys) { $ordinaryParameters[$key] = $BoundParameters[$key] }
+    if ($setup) { $ordinaryParameters.Remove('ExpectedGoRuntimeVersion') }
+    if (Test-LegacyRunRequested -BoundParameters $ordinaryParameters) {
         throw 'Ordinary Run does not accept legacy tool-resolution or development-harness inputs; use PrepareSemantic or ResumeSemantic for explicit Semantic setup and execution.'
     }
     if ([string]$CandidateAuthority.repository -cne $script:AuthorityRepository -or
-        [string]$CandidateAuthority.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)) {
+        [string]$CandidateAuthority.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit)) {
         throw 'Ordinary Run requires one exact approved Core authority pin; it cannot fall back to legacy tool resolution.'
     }
 }
@@ -735,15 +796,155 @@ function Get-SemanticRunClaimPath {
     return Join-Path ([IO.Path]::GetFullPath($RunRoot)) "semantic-run-$RunId.consumed.json"
 }
 
+function New-SourceToolSetup {
+    param([string] $Root, [string] $AuthorityRoot, $AuthorityPin, [string] $PowerShell,
+        [string] $CandidateRevision, [string] $Git, [string] $CandidateRoot,
+        [string] $PreparedPath, [string] $GoVersion, [int] $LimitSeconds)
+    $setupId = [guid]::NewGuid().ToString('N')
+    $owned = Assert-PathWithinRoot -Path (Join-Path $Root "source-tools-$setupId") -Root $Root -Context 'Source setup owned root'
+    if (Test-Path -LiteralPath $owned) { throw 'Source setup root already exists.' }
+    [void](New-Item -ItemType Directory -Path $owned -ErrorAction Stop)
+    Assert-NoReparseAncestors -Path $owned -Context 'Source setup owned root'
+    $runner = Join-Path $AuthorityRoot 'scripts/Invoke-StandardValidation.ps1'
+    . $runner -DefineFunctionsOnly -CandidateRoot $CandidateRoot -AdapterPath $PreparedPath -ArtifactsRoot $Root `
+        -SourceRepository $script:SourceRepository -SourceRevision $CandidateRevision -BaseRevision $CandidateRevision
+    $resolver = Join-Path $AuthorityRoot 'scripts/Resolve-StandardValidationTool.ps1'
+    $policy = Join-Path $AuthorityRoot 'docs/standards/validation-toolchain.json'
+    $receipts = [ordered]@{}
+    $receiptBindings = @()
+    foreach ($tool in @('skill-validator', 'skill-tools', 'skillspector')) {
+        $receiptPath = Join-Path $owned "receipt-$tool.json"
+        $result = Invoke-StandardValidationProcess -Command $PowerShell -Arguments @('-NoProfile','-NonInteractive','-File',$resolver,
+            '-PolicyPath',$policy,'-ToolName',$tool,'-Install','-InstallRoot',(Join-Path $owned 'installed'),
+            '-ExpectedGoRuntimeVersion',$GoVersion,'-RunId',$setupId,'-OutputPath',$receiptPath) `
+            -WorkingDirectory $owned -Environment @{} -TimeoutSeconds $LimitSeconds -CoreLifecycleOnly
+        Write-Utf8NoBomCreateNew -Path (Join-Path $owned "setup-$tool-process.json") -Text ($result | ConvertTo-Json -Depth 30)
+        if ($result.status -cne 'passed' -or $result.exitCode -ne 0 -or -not $result.cleanedUp) { throw "Source setup $tool failed: $($result.status), exit=$($result.exitCode), cleanup=$($result.cleanedUp). $($result.stderr)" }
+        $receipts[$tool] = Read-JsonFile -Path $receiptPath -Context "$tool source receipt"
+        $receiptBindings += [pscustomobject]@{path=$receiptPath;sha256=(Get-FileSha256 -Path $receiptPath)}
+    }
+    $toolchain = [ordered]@{
+        centralRunnerPath=$runner; centralRunnerSha256=(Get-FileSha256 -Path $runner)
+        upstreamAdapterValidatorPath=(Join-Path $AuthorityRoot 'scripts/Validate-UpstreamAdapter.ps1')
+        upstreamAdapterValidatorSha256=(Get-FileSha256 -Path (Join-Path $AuthorityRoot 'scripts/Validate-UpstreamAdapter.ps1'))
+        upstreamPolicyPath=(Join-Path $AuthorityRoot 'docs/standards/upstream-adapter.json')
+        upstreamPolicySha256=(Get-FileSha256 -Path (Join-Path $AuthorityRoot 'docs/standards/upstream-adapter.json'))
+        skillValidatorPath=[string]$receipts.'skill-validator'.executablePath; skillValidatorSha256=[string]$receipts.'skill-validator'.executableSha256
+        skillToolsNodePath=[string]$receipts.'skill-tools'.nodePath; skillToolsNodeSha256=[string]$receipts.'skill-tools'.nodeSha256
+        skillToolsEntryPointPath=[string]$receipts.'skill-tools'.entryPointPath; skillToolsEntryPointSha256=[string]$receipts.'skill-tools'.entryPointSha256
+        skillSpectorPath=[string]$receipts.skillspector.executablePath; skillSpectorSha256=[string]$receipts.skillspector.executableSha256
+        skillSpectorReceiptPath=[string]$receiptBindings[2].path; skillSpectorReceiptSha256=[string]$receiptBindings[2].sha256
+    }
+    $toolchainPath = Join-Path $owned 'toolchain.json'
+    Write-Utf8NoBomCreateNew -Path $toolchainPath -Text ($toolchain | ConvertTo-Json -Depth 20)
+    $wrapper = Join-Path $owned 'Invoke-SkillGeneralValidationChild.ps1'
+    Write-Utf8NoBomCreateNew -Path $wrapper -Text $childRunnerText
+    $archive = Join-Path $owned 'candidate.zip'
+    & $Git -C $CandidateRoot archive --format=zip "--output=$archive" $CandidateRevision
+    if ($LASTEXITCODE -ne 0) { throw 'Source setup could not archive the exact candidate.' }
+    $arguments = @('-NoProfile','-NonInteractive','-File',$wrapper,'-ToolchainPath',$toolchainPath,
+        '-ToolchainSha256',(Get-FileSha256 -Path $toolchainPath),'-SourceRepository',$script:SourceRepository,
+        '-SourceRevision',$CandidateRevision,'-ArchiveSha256',(Get-FileSha256 -Path $archive))
+    $files = @($PowerShell,$wrapper,$toolchainPath,$runner,$toolchain.upstreamAdapterValidatorPath,$toolchain.upstreamPolicyPath,
+        $toolchain.skillValidatorPath,[string]$receipts.'skill-tools'.executablePath,$toolchain.skillToolsNodePath,$toolchain.skillToolsEntryPointPath,$toolchain.skillSpectorPath) + @($receiptBindings.path)
+    $frozen = @(foreach ($file in @($files | Select-Object -Unique)) { [pscustomobject]@{path=[IO.Path]::GetFullPath($file);sha256=(Get-FileSha256 -Path $file)} })
+    Assert-StandardCoreFrozenFiles -Files $frozen
+    Assert-StandardCoreSourceToolReceipts -Bindings $receiptBindings -FrozenFiles $frozen -RunId $setupId
+    $dispatch = [ordered]@{
+        packageAdapter=[ordered]@{command=$PowerShell;arguments=@($arguments + @('-Mode','package-adapter'))}
+        skillValidator=[ordered]@{command=$PowerShell;arguments=@($arguments + @('-Mode','skill-validator'))}
+        skillTools=[ordered]@{command=$PowerShell;arguments=@($arguments + @('-Mode','skill-tools'))}
+        staticAnalyzer=[ordered]@{command=$PowerShell;arguments=@($arguments + @('-Mode','static'))}
+        frozenFiles=$frozen;toolReceipts=$receiptBindings
+    }
+    Write-Utf8NoBomCreateNew -Path $PreparedPath -Text ([ordered]@{
+        schemaVersion=1; preparation='skill-general-source-tools';runId=$setupId;sourceRevision=$CandidateRevision
+        authorityRevision=[string]$AuthorityPin.commit;ownedRoot=$owned;sourceValidation=$dispatch
+    } | ConvertTo-Json -Depth 40)
+}
+
+function Read-SourceToolSetup {
+    param([string] $Path, [string] $SourceRevision, [string] $AuthorityRevision, [string] $PowerShell, [string] $AuthorityRoot)
+    if (-not [string]::IsNullOrWhiteSpace($AuthorityRoot)) {
+        . (Join-Path $AuthorityRoot 'scripts/Invoke-StandardValidation.ps1') -DefineFunctionsOnly `
+            -CandidateRoot $AuthorityRoot -AdapterPath $Path -ArtifactsRoot (Split-Path -Parent $Path) `
+            -SourceRepository $script:SourceRepository -SourceRevision $SourceRevision -BaseRevision $SourceRevision -AuthorityRevision $AuthorityRevision
+    }
+    Assert-NoReparseAncestors -Path $Path -Context 'Prepared source setup'
+    $prepared = Read-JsonFile -Path $Path -Context 'Prepared source setup'
+    Assert-ExactPropertySet -Value $prepared -Expected @('schemaVersion','preparation','runId','sourceRevision','authorityRevision','ownedRoot','sourceValidation') -Context 'Prepared source setup'
+    if ($prepared.schemaVersion -ne 1 -or $prepared.preparation -cne 'skill-general-source-tools' -or
+        $prepared.runId -cnotmatch '^[0-9a-f]{32}$' -or $prepared.sourceRevision -cne $SourceRevision -or
+        $prepared.authorityRevision -cne $AuthorityRevision -or $prepared.sourceValidation.packageAdapter.command -cne $PowerShell) {
+        throw 'Prepared source tools do not bind this candidate, authority and runtime.'
+    }
+    $expectedOwned = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($Path))) "source-tools-$($prepared.runId)"
+    if (-not (Test-PathEqual -Left $prepared.ownedRoot -Right $expectedOwned)) { throw 'Prepared source setup owned root differs.' }
+    Assert-NoReparseAncestors -Path $expectedOwned -Context 'Prepared source setup owned root'
+    $wrapper = Join-Path $expectedOwned 'Invoke-SkillGeneralValidationChild.ps1'
+    $wrapperHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($childRunnerText))).ToLowerInvariant()
+    if ((Get-FileSha256 -Path $wrapper) -cne $wrapperHash) { throw 'Prepared source wrapper differs from the protected driver.' }
+    $toolchain = Join-Path $expectedOwned 'toolchain.json'
+    Assert-StandardCoreFrozenFiles -Files @($prepared.sourceValidation.frozenFiles)
+    Assert-StandardCoreSourceToolReceipts -Bindings @($prepared.sourceValidation.toolReceipts) -FrozenFiles @($prepared.sourceValidation.frozenFiles) -RunId $prepared.runId
+    $receipts = @{}
+    foreach ($receiptBinding in @($prepared.sourceValidation.toolReceipts)) {
+        $receipt = Read-JsonFile -Path $receiptBinding.path -Context 'Prepared source resolver receipt'
+        $receipts[[string]$receipt.toolName] = $receipt
+    }
+    $preparedToolchain = Read-JsonFile -Path $toolchain -Context 'Prepared source toolchain'
+    if (-not [string]::IsNullOrWhiteSpace($AuthorityRoot)) {
+        foreach ($authorityBinding in @(
+            @('centralRunnerPath','centralRunnerSha256','scripts/Invoke-StandardValidation.ps1'),
+            @('upstreamAdapterValidatorPath','upstreamAdapterValidatorSha256','scripts/Validate-UpstreamAdapter.ps1'),
+            @('upstreamPolicyPath','upstreamPolicySha256','docs/standards/upstream-adapter.json')
+        )) {
+            $expectedAuthorityFile = Join-Path $AuthorityRoot $authorityBinding[2]
+            if ([string]$preparedToolchain.($authorityBinding[0]) -cne [string]$expectedAuthorityFile -or
+                [string]$preparedToolchain.($authorityBinding[1]) -cne (Get-FileSha256 -Path $expectedAuthorityFile)) {
+                throw 'Prepared source toolchain differs from the verified authority files.'
+            }
+        }
+    }
+    foreach ($binding in @(
+        @{ actualPath=$preparedToolchain.skillValidatorPath; actualSha=$preparedToolchain.skillValidatorSha256; expectedPath=$receipts.'skill-validator'.executablePath; expectedSha=$receipts.'skill-validator'.executableSha256; name='skill-validator' },
+        @{ actualPath=$preparedToolchain.skillToolsNodePath; actualSha=$preparedToolchain.skillToolsNodeSha256; expectedPath=$receipts.'skill-tools'.nodePath; expectedSha=$receipts.'skill-tools'.nodeSha256; name='skill-tools Node' },
+        @{ actualPath=$preparedToolchain.skillToolsEntryPointPath; actualSha=$preparedToolchain.skillToolsEntryPointSha256; expectedPath=$receipts.'skill-tools'.entryPointPath; expectedSha=$receipts.'skill-tools'.entryPointSha256; name='skill-tools entry point' },
+        @{ actualPath=$preparedToolchain.skillSpectorPath; actualSha=$preparedToolchain.skillSpectorSha256; expectedPath=$receipts.skillspector.executablePath; expectedSha=$receipts.skillspector.executableSha256; name='skillspector' }
+    )) {
+        if ([string]$binding.actualPath -cne [string]$binding.expectedPath -or [string]$binding.actualSha -cne [string]$binding.expectedSha) {
+            throw "Prepared source toolchain does not match the $($binding.name) resolver receipt."
+        }
+    }
+    $staticReceipt = @($prepared.sourceValidation.toolReceipts | Where-Object { [string]$_.path -ceq [string]$preparedToolchain.skillSpectorReceiptPath })
+    if ($staticReceipt.Count -ne 1 -or [string]$staticReceipt[0].sha256 -cne [string]$preparedToolchain.skillSpectorReceiptSha256 -or
+        (Read-JsonFile -Path $staticReceipt[0].path -Context 'Prepared Static receipt').toolName -cne 'skillspector') {
+        throw 'Prepared source Static receipt differs.'
+    }
+    $arguments = @('-NoProfile','-NonInteractive','-File',$wrapper,'-ToolchainPath',$toolchain,
+        '-ToolchainSha256',(Get-FileSha256 -Path $toolchain),'-SourceRepository',$script:SourceRepository,
+        '-SourceRevision',$SourceRevision,'-ArchiveSha256',(Get-FileSha256 -Path (Join-Path $expectedOwned 'candidate.zip')))
+    foreach ($entry in @(@('packageAdapter','package-adapter'),@('skillValidator','skill-validator'),@('skillTools','skill-tools'),@('staticAnalyzer','static'))) {
+        $command = $prepared.sourceValidation.($entry[0])
+        if ([string]$command.command -cne $PowerShell -or
+            (ConvertTo-Json -InputObject @($command.arguments) -Compress) -cne (ConvertTo-Json -InputObject @($arguments + @('-Mode',$entry[1])) -Compress)) {
+            throw 'Prepared source dispatch differs from the protected driver.'
+        }
+    }
+    return $prepared
+}
+
 function Get-StandardCoreRunPaths {
     param(
         [Parameter(Mandatory = $true)][string] $ArtifactsRoot,
         [Parameter(Mandatory = $true)][bool] $ArtifactsRootWasExplicit,
-        [string] $OutputPath
+        [string] $OutputPath,
+        [string] $PreparedRunId
     )
 
     $requestedRoot = [IO.Path]::GetFullPath($ArtifactsRoot)
-    $runId = [guid]::NewGuid().ToString('N')
+    $runId = if ([string]::IsNullOrWhiteSpace($PreparedRunId)) { [guid]::NewGuid().ToString('N') } else { $PreparedRunId }
+    if ($runId -cnotmatch '^[0-9a-f]{32}$') { throw 'Source setup run identity is invalid.' }
     if ($ArtifactsRootWasExplicit) {
         $coreArtifactsRoot = $requestedRoot
         $adapterParent = Split-Path -Parent $coreArtifactsRoot
@@ -826,6 +1027,7 @@ function Assert-AuthorityConfig {
             files = $script:MergedAuthorityFiles
         }
     }
+    if ($AllowNextAuthority) { $approvedPins += Get-ApprovedSourceAuthorityPin }
     foreach ($approved in $approvedPins) {
         if ([string]$Config.authority.repository -cne [string]$approved.repository -or
             [string]$Config.authority.commit -cne [string]$approved.commit -or
@@ -1019,6 +1221,11 @@ function New-Finding {
         skillId = $SkillId
     }
 }
+$script:NativeReports = @()
+function Add-NativeReport {
+    param([string] $Command, [string[]] $Arguments, [int] $ExitCode, [string] $Path, [string] $SkillId)
+    $script:NativeReports += [pscustomobject]@{skillId=$SkillId;command=$Command;commandSha256=(Get-FileSha256 -Path $Command);arguments=@($Arguments);exitCode=$ExitCode;path=[IO.Path]::GetFullPath($Path);sha256=(Get-FileSha256 -Path $Path)}
+}
 function New-Envelope {
     param(
         [Parameter(Mandatory = $true)][string[]] $ActiveSkills,
@@ -1033,6 +1240,7 @@ function New-Envelope {
         activeSkills = @($ActiveSkills)
         findings = @($Findings)
     }
+    if ($Mode -cin @('skill-validator','skill-tools','static')) { $value.nativeReports = @($script:NativeReports) }
     if ($null -ne $Additional) {
         foreach ($key in $Additional.Keys) { $value[$key] = $Additional[$key] }
     }
@@ -1046,8 +1254,11 @@ function Invoke-NativeJson {
         $lines = @(& $Command @Arguments 2> $stderrPath)
         $exitCode = $LASTEXITCODE
         $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
-        if ($exitCode -ne 0) { throw "$Context returned exit code $exitCode. $stderr" }
         $json = ($lines -join "`n").Trim()
+        $nativePath = Join-Path (Get-Location) ("native-$Mode-$($env:STANDARD_VALIDATION_SKILL_ID).json")
+        [IO.File]::WriteAllText($nativePath, $json, [Text.UTF8Encoding]::new($false))
+        Add-NativeReport -Command $Command -Arguments $Arguments -ExitCode $exitCode -Path $nativePath -SkillId $env:STANDARD_VALIDATION_SKILL_ID
+        if ($exitCode -ne 0) { throw "$Context returned exit code $exitCode. $stderr" }
         if ([string]::IsNullOrWhiteSpace($json)) { throw "$Context produced no JSON output." }
         return ($json | ConvertFrom-Json -Depth 100)
     }
@@ -1205,12 +1416,18 @@ try {
         }
         'static' {
             Assert-FileIdentity -Path ([string]$toolchain.skillSpectorPath) -Sha256 ([string]$toolchain.skillSpectorSha256) -Context 'SkillSpector executable'
+            # Keep Python import caches outside the frozen installed tool closure.
+            $env:PYTHONDONTWRITEBYTECODE = '1'
             $findings = @()
             foreach ($skillId in $activeSkills) {
                 $skillRoot = Get-SkillRoot -SkillId $skillId
                 $inventory = Get-InventoryPaths -SkillRoot $skillRoot
                 $reportPath = Join-Path (Get-Location) ("skillspector-$skillId.json")
-                & ([string]$toolchain.skillSpectorPath) scan $skillRoot --no-llm --format json --output $reportPath | Out-Null
+                $nativeArguments = @('scan', $skillRoot, '--no-llm', '--format', 'json', '--output', $reportPath)
+                & ([string]$toolchain.skillSpectorPath) @nativeArguments | Out-Null
+                $nativeExit = $LASTEXITCODE
+                if (Test-Path -LiteralPath $reportPath -PathType Leaf) { Add-NativeReport -Command ([string]$toolchain.skillSpectorPath) -Arguments $nativeArguments -ExitCode $nativeExit -Path $reportPath -SkillId $skillId }
+                if ($nativeExit -ne 0) { throw "SkillSpector scan for '$skillId' returned exit code $nativeExit." }
                 $report = Read-Json -Path $reportPath -Context "SkillSpector report for '$skillId'"
                 $findings += Assert-SkillSpectorReport -Report $report -SkillRoot $skillRoot -SkillId $skillId -Inventory $inventory
             }
@@ -1405,6 +1622,9 @@ try {
     }
     else { [IO.Path]::GetFullPath($RepositoryRoot) }
     if (-not (Test-Path -LiteralPath $repoRoot -PathType Container)) { throw "RepositoryRoot does not exist: $repoRoot" }
+    if ($ExecutionMode -ine 'Run' -and ($PrepareSourceTools -or $SourceValidation -or $PSBoundParameters.ContainsKey('SourceToolsPath'))) {
+        throw 'Source setup and validation are explicit Run purposes.'
+    }
     if ($ExecutionMode -ne 'Run' -and [string]::IsNullOrWhiteSpace($SemanticRunPlanPath)) {
         throw 'SemanticRunPlanPath is required for PrepareSemantic and ResumeSemantic.'
     }
@@ -1638,18 +1858,37 @@ try {
     $eventName = Get-EventName
     $coreRunSelected = $ExecutionMode -eq 'Run' -and
         [string]$candidateAuthority.repository -ceq $script:AuthorityRepository -and
-        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit)
+        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit)
     if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
         ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
         throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'
     }
     if ($coreRunSelected) {
         if ([string]::IsNullOrWhiteSpace($AuthorityRepositoryRoot)) { throw 'Core Run requires -AuthorityRepositoryRoot for the pinned real Git authority checkout.' }
-        $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $candidateAuthority
+        $executionAuthority = if ($PrepareSourceTools) { Get-ApprovedSourceAuthorityPin } else { $candidateAuthority }
+        $authorityCheckout = Assert-StandardCoreAuthorityCheckout -GitPath $gitPath -AuthorityRoot $AuthorityRepositoryRoot -AuthorityPin $executionAuthority
         $pwshPath = Get-ResolvedPowerShellPath
         $trustedRoot = if ([string]::IsNullOrWhiteSpace($TrustedToolRoot)) { Split-Path -Parent $pwshPath } else { [IO.Path]::GetFullPath($TrustedToolRoot) }
         if (-not (Test-Path -LiteralPath $trustedRoot -PathType Container)) { throw "Trusted PowerShell root is missing: $trustedRoot" }
         Assert-NoReparseAncestors -Path $trustedRoot -Context 'Trusted PowerShell root'
+        if ($PrepareSourceTools) {
+            $setupRoot = [IO.Path]::GetFullPath($ArtifactsRoot)
+            Assert-OutsideRoot -Path $setupRoot -Root $repoRoot -Context 'Source setup artifacts'
+            Assert-OutsideRoot -Path $setupRoot -Root $authorityCheckout.root -Context 'Source setup artifacts'
+            Assert-OutsideRoot -Path $setupRoot -Root $trustedRoot -Context 'Source setup artifacts'
+            [void](New-Item -ItemType Directory -Path $setupRoot -Force)
+            Assert-NoReparseAncestors -Path $setupRoot -Context 'Source setup artifacts'
+            $preparedPath = Assert-PathWithinRoot -Path $SourceToolsPath -Root $setupRoot -Context 'Source toolset output'
+            if (-not (Test-PathEqual -Left (Split-Path -Parent $preparedPath) -Right $setupRoot)) { throw 'Source toolset output must be directly within its setup root.' }
+            if (Test-Path -LiteralPath $preparedPath) { throw 'Source toolset output already exists.' }
+            New-SourceToolSetup -Root $setupRoot -AuthorityRoot $authorityCheckout.root -AuthorityPin $executionAuthority `
+                -PowerShell $pwshPath -CandidateRevision $candidateCommit -Git $gitPath -CandidateRoot $repoRoot `
+                -PreparedPath $preparedPath -GoVersion (Resolve-GoRuntimeVersion -Expected $ExpectedGoRuntimeVersion) -LimitSeconds $TimeoutSeconds
+            exit 0
+        }
+        $preparedSource = if ($SourceValidation) {
+            Read-SourceToolSetup -Path $SourceToolsPath -SourceRevision $candidateCommit -AuthorityRevision $candidateAuthority.commit -PowerShell $pwshPath -AuthorityRoot $authorityCheckout.root
+        } else { $null }
 
         $artifactsRootPath = [IO.Path]::GetFullPath($ArtifactsRoot)
         Assert-OutsideRoot -Path $artifactsRootPath -Root $repoRoot -Context 'Artifacts root'
@@ -1660,7 +1899,8 @@ try {
         Assert-OutsideRoot -Path $trustedRoot -Root $repoRoot -Context 'Trusted tool root'
         Assert-OutsideRoot -Path $trustedRoot -Root $authorityCheckout.root -Context 'Trusted tool root'
         $coreRunPaths = Get-StandardCoreRunPaths -ArtifactsRoot $artifactsRootPath `
-            -ArtifactsRootWasExplicit $PSBoundParameters.ContainsKey('ArtifactsRoot') -OutputPath $OutputPath
+            -ArtifactsRootWasExplicit $PSBoundParameters.ContainsKey('ArtifactsRoot') -OutputPath $OutputPath `
+            -PreparedRunId $(if ($SourceValidation) { [string]$preparedSource.runId } else { '' })
         $coreArtifactsRoot = [string]$coreRunPaths.artifactsRoot
         $adapterRoot = [string]$coreRunPaths.adapterRoot
         $adapterPath = [string]$coreRunPaths.adapterPath
@@ -1692,6 +1932,7 @@ try {
             $centralRunnerPath = [string]$authoritySnapshot.runnerPath
             $adapter = New-StandardCoreAdapterV2 -PowerShellPath $pwshPath -TrustedToolRoot $trustedRoot `
                 -CandidateAuthorityAdapterRunId $coreRunPaths.runId -ActiveSkillIds $activeSkillIds
+            if ($SourceValidation) { $adapter.sourceValidation = $preparedSource.sourceValidation }
             Write-Utf8NoBomCreateNew -Path $adapterPath -Text (($adapter | ConvertTo-Json -Depth 20) + [Environment]::NewLine)
             $coreRunnerArgs = @(
                 '-CandidateRoot', $repoRoot,
@@ -1706,6 +1947,7 @@ try {
                 '-TimeoutSeconds', [string]$TimeoutSeconds,
                 '-TrustedToolRoot', $trustedRoot
             )
+            if ($SourceValidation) { $coreRunnerArgs += @('-SourceValidation','-RunId',[string]$preparedSource.runId) }
             Assert-NoReparseAncestors -Path $centralRunnerPath -Context 'Pinned Core runner before execution'
             if (-not (Test-AuthorityWorktreeSha256 -Path $centralRunnerPath -ExpectedSha256 ([string]$candidateAuthority.files['scripts/Invoke-StandardValidation.ps1']))) {
                 throw 'Pinned Core runner worktree content changed before execution.'
