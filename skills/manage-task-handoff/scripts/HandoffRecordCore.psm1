@@ -820,9 +820,7 @@ function Test-HandoffArchiveCycleSourceResult {
         -not (Test-HandoffArchiveCycleCursor (Get-HandoffField $SourceResult 'Cursor'))) { return $false }
     $operationId = Get-HandoffField $SourceResult 'OperationId'
     if ($operationId -isnot [string] -or [string]::IsNullOrWhiteSpace($operationId) -or
-        -not (Test-HandoffArchiveCycleDecisionCursorEqual `
-            -LeftDecision (Get-HandoffField $SourceResult 'Decision') -LeftCursor (Get-HandoffField $SourceResult 'Cursor') `
-            -RightDecision (Get-HandoffField $PendingAction 'Decision') -RightCursor (Get-HandoffField $PendingAction 'Cursor')) -or
+        -not (Test-HandoffArchiveCycleDecisionCursorEqual -LeftDecision (Get-HandoffField $SourceResult 'Decision') -LeftCursor (Get-HandoffField $SourceResult 'Cursor') -RightDecision (Get-HandoffField $PendingAction 'Decision') -RightCursor (Get-HandoffField $PendingAction 'Cursor')) -or
         -not [StringComparer]::Ordinal.Equals($operationId,[string](Get-HandoffField $PendingAction 'OperationId'))) {
         return $false
     }
@@ -1041,32 +1039,28 @@ function Invoke-HandoffArchiveCycle {
     elseif (-not $InventoryComplete) { $gateReason = 'inventory-incomplete' }
     if ($null -ne $gateReason) {
         foreach ($item in $PendingActions) { $pending.Add($item) }
-        return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason `
-            -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+        return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason -Selected $selected -Protected $protected -Completed $completed -Pending $pending
     }
 
     if ($PendingActions.Count -gt 0) {
         foreach ($item in $PendingActions) {
             if (-not (Test-HandoffArchiveCyclePendingAction $item)) {
                 foreach ($saved in $PendingActions) { $pending.Add($saved) }
-                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-pending-action' `
-                    -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-pending-action' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
             }
             $decision = Get-HandoffField $item 'Decision'
             $recordIdentity = Get-HandoffArchiveCycleIdentityKey $decision
             if ($pendingByRecordIdentity.ContainsKey($recordIdentity)) {
                 if (-not (Test-HandoffArchiveCyclePendingActionEqual $pendingByRecordIdentity[$recordIdentity] $item)) {
                     foreach ($saved in $PendingActions) { $pending.Add($saved) }
-                    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' `
-                        -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+                    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
                 }
                 continue
             }
             $taskIdentity = Get-HandoffArchiveCycleIdentityKey $decision -TaskOnly
             if ($pendingTaskIdentities.Contains($taskIdentity)) {
                 foreach ($saved in $PendingActions) { $pending.Add($saved) }
-                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' `
-                    -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
             }
             $pendingByRecordIdentity.Add($recordIdentity,$item)
             [void]$pendingTaskIdentities.Add($taskIdentity)
@@ -1089,8 +1083,7 @@ function Invoke-HandoffArchiveCycle {
         }
         if ($null -eq $matchedPending -or $sourceResultsByRecordIdentity.ContainsKey($matchedIdentity)) {
             foreach ($saved in $PendingActions) { $pending.Add($saved) }
-            return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-source-result' `
-                -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+            return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-source-result' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
         }
         $sourceResultsByRecordIdentity.Add($matchedIdentity,$sourceResult)
     }
@@ -1209,8 +1202,7 @@ function Invoke-HandoffArchiveCycle {
         }
     }
 
-    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason `
-        -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason -Selected $selected -Protected $protected -Completed $completed -Pending $pending
 }
 
 Export-ModuleMember -Function Invoke-HandoffRecordCore, Get-HandoffArchiveSelection, Invoke-HandoffArchiveCycle
