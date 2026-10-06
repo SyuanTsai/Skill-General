@@ -89,6 +89,10 @@ if (-not (Test-Path -LiteralPath $testRoot -PathType Container)) {
     throw "Canonical Pester test root is missing: $testRoot"
 }
 $candidateSnapshotRoot = [IO.Path]::GetFullPath((Get-Location).Path)
+Remove-CorePesterConsumedBootstrapSignal -CandidateRoot $candidateSnapshotRoot `
+    -ReleasePath ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH', 'Process')) `
+    -BootstrapCommand ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_BOOTSTRAP_COMMAND', 'Process')) `
+    -VerifiedPowerShellExecutable $verifiedPowerShellExecutable
 $candidateSnapshotBefore = Get-CorePesterTreeSnapshot -Root $candidateSnapshotRoot
 if (-not $candidateSnapshotBefore.IsValid) { throw ('Core Pester candidate snapshot could not be bound: ' + (@($candidateSnapshotBefore.Errors) -join '; ')) }
 $previousErrorActionPreference = $ErrorActionPreference
