@@ -105,7 +105,8 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $script:Contract.adopterConfig.noTitleGuessing | Should -BeTrue
         $script:Contract.modes.structured.preservesContractVersion | Should -Be 3
         $script:Contract.modes.structured.mappingKind | Should -Be 'existing-properties'
-        $script:Contract.modes.structured.defaultWhenModeOmitted | Should -BeTrue
+        $structuredDefault = ConvertTo-Json -InputObject $script:Contract.modes.structured.defaultWhenModeOmitted -Depth 10 -Compress
+        $structuredDefault | Should -BeExactly '{"mode":"structured","onlyFor":"established-legacy-structured-mapping","requiresNoSuppliedAdopterFile":true}'
         $script:Contract.modes.structured.exactKeyField | Should -Be 'Memory Key'
         (@($script:Contract.modes.structured.requiredFields) -join ',') | Should -BeExactly 'Title,Type,Scope,Status,Content,Source,Memory Key,Confidence,Storage Type'
         (@($script:Contract.memory.requiredFields) -join ',') | Should -BeExactly 'Title,Type,Scope,Status,Content,Source,Memory Key,Confidence,Storage Type'
@@ -130,6 +131,9 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $script:Contract.workflow.unchangedAction | Should -Be 'skip-duplicate'
         $script:Contract.workflow.replacementAction | Should -Be 'preserve-old-as-Superseded'
         $script:Contract.workflow.archiveAction | Should -Be 'retain-body-mark-Archived'
+        $script:Contract.workflow.sameKeyAbsenceRequires | Should -Be 'verified-body-destination-result'
+        $script:Contract.workflow.replacementReadiness | Should -Be 'verified-new-body-before-retiring-old'
+        $script:Contract.workflow.indexReplacementAction | Should -Be 'retain-old-row-as-Superseded-add-new-Active-row'
         (@($script:Contract.workflow.confirmedRecallRequires) -join ',') | Should -BeExactly 'Active,Confirmed,matching-scope,verified-source'
         $script:Contract.workflow.partialIndexFailure.retainBody | Should -BeTrue
         (@($script:Contract.workflow.partialIndexFailure.reportFields) -join ',') | Should -BeExactly 'bodyLocator,missingIndexStep,actualError'
@@ -221,6 +225,9 @@ Describe 'manage-notion-ai-memory durable memory contract' {
             'lookup-tool-error-does-not-prove-absence',
             'body-saved-index-failed',
             'repair-index-only-after-readback',
+            'orphan-body-without-index-repairs-index-only',
+            'replacement-create-refused-retains-current',
+            'replacement-create-ambiguous-retains-current',
             'embedded-directive-does-not-authorize',
             'formal-adoption-of-new-context'
         )
@@ -260,7 +267,10 @@ Describe 'manage-notion-ai-memory durable memory contract' {
             'inferred-candidate-pending-inbox',
             'body-saved-index-failed',
             'repair-index-only-after-readback',
-            'formal-adoption-of-new-context'
+            'formal-adoption-of-new-context',
+            'orphan-body-without-index-repairs-index-only',
+            'replacement-create-refused-retains-current',
+            'replacement-create-ambiguous-retains-current'
         )
         foreach ($id in $writeScenarioIds) {
             $writeScenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
@@ -279,27 +289,37 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         }
 
         $prewriteStates = @(
-            [pscustomobject]@{ id = 'first-capture-absent-key'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
-            [pscustomobject]@{ id = 'replacement-preserves-superseded-body'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
-            [pscustomobject]@{ id = 'archive-retains-body'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
-            [pscustomobject]@{ id = 'inferred-candidate-pending-inbox'; key = 'project:example.project:release-note-length'; matchCount = 0; activeCount = 0 },
-            [pscustomobject]@{ id = 'body-saved-index-failed'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
-            [pscustomobject]@{ id = 'formal-adoption-of-new-context'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 0 }
+            [pscustomobject]@{ id = 'first-capture-absent-key'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'replacement-preserves-superseded-body'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'archive-retains-body'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'inferred-candidate-pending-inbox'; destination = 'inbox'; key = 'project:example.project:release-note-length'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'body-saved-index-failed'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'formal-adoption-of-new-context'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 0 },
+            [pscustomobject]@{ id = 'orphan-body-without-index-repairs-index-only'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'replacement-create-refused-retains-current'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'replacement-create-ambiguous-retains-current'; destination = 'memory'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 }
         )
         foreach ($expectedState in $prewriteStates) {
             $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $expectedState.id)[0]
+            $destination = $pages.PSObject.Properties[$expectedState.destination].Value
             $preflightIndex = -1
             $firstMutationIndex = -1
             for ($i = 0; $i -lt $scenario.connectorTranscript.Count; $i++) {
                 $call = $scenario.connectorTranscript[$i]
-                if ($preflightIndex -lt 0 -and $call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $pages.index.locator) {
+                if ($preflightIndex -lt 0 -and $call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $destination.locator) {
                     $callText = ($call.response.content | ForEach-Object text) -join "`n"
-                    if ($callText -match '(?m)^Exact key/scope match count:') {
+                    if ($callText -match '(?m)^Bounded exact key/scope result:') {
                         $preflightIndex = $i
                         $callText | Should -Match "(?m)^Scope: example\.project$"
                         $callText | Should -Match "(?m)^Memory Key: $([regex]::Escape($expectedState.key))$"
                         $callText | Should -Match "(?m)^Exact key/scope match count: $($expectedState.matchCount)$"
                         $callText | Should -Match "(?m)^Active count: $($expectedState.activeCount)$"
+                        if ($expectedState.matchCount -gt 0) {
+                            $callText | Should -Match '(?m)^Target: https://\S+$'
+                            foreach ($field in @('Status', 'Confidence', 'Source', 'Content')) {
+                                $callText | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+                            }
+                        }
                     }
                 }
                 if ($firstMutationIndex -lt 0 -and $call.tool -in @('mcp__codex_apps__notion_notion_create_pages', 'mcp__codex_apps__notion_notion_update_page')) {
@@ -333,7 +353,10 @@ Describe 'manage-notion-ai-memory durable memory contract' {
             'archive-retains-body',
             'inferred-candidate-pending-inbox',
             'repair-index-only-after-readback',
-            'formal-adoption-of-new-context'
+            'formal-adoption-of-new-context',
+            'orphan-body-without-index-repairs-index-only',
+            'replacement-create-refused-retains-current',
+            'replacement-create-ambiguous-retains-current'
         )
         foreach ($id in $indexReadbackScenarioIds) {
             $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
@@ -391,5 +414,139 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $denied = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'write-access-refused')[0]
         $denied.PSObject.Properties['roleEvidence'] | Should -Not -BeNullOrEmpty
         $denied.roleEvidence | Should -BeNullOrEmpty
+    }
+
+    # Scenario: A replacement body may succeed, be refused, or have an ambiguous tool result.
+    # Purpose: Require body-destination state evidence, retain index history, and never retire current memory before verified replacement.
+    It 'UnitT60_verifies_replacement_order_index_history_and_recovery_fixtures' {
+        $replacement = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'replacement-preserves-superseded-body')[0]
+        $memoryPageId = ($script:AgentEvaluation.adopterProfiles.pages.memory.locator -split '/')[-1]
+        $indexPageId = ($script:AgentEvaluation.adopterProfiles.pages.index.locator -split '/')[-1]
+        $replacementCalls = @($replacement.connectorTranscript)
+        $createIndex = -1
+        $newReadbackIndex = -1
+        $retirementIndex = -1
+        $newBodyLocator = $null
+        $oldBodyLocator = $null
+        $finalIndexText = $null
+        foreach ($call in $replacementCalls) {
+            if ($null -eq $oldBodyLocator -and $call.tool -EQ 'mcp__codex_apps__notion_fetch' -and ($call.response.content | ForEach-Object text) -match '(?m)^Bounded exact key/scope result:') {
+                $oldTargetMatch = [regex]::Match(($call.response.content | ForEach-Object text) -join "`n", '(?m)^Target: (?<target>https://\S+)$')
+                if ($oldTargetMatch.Success) { $oldBodyLocator = $oldTargetMatch.Groups['target'].Value }
+            }
+            if ($createIndex -lt 0 -and $call.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $call.arguments.parent.page_id -EQ $memoryPageId) {
+                $createIndex = [array]::IndexOf($replacementCalls, $call)
+                $createText = ($call.arguments.pages | ForEach-Object content) -join "`n"
+                foreach ($field in @('Memory Key', 'Scope', 'Status', 'Confidence', 'Source', 'Content')) {
+                    $createText | Should -Match "(?m)^##?\s*$([regex]::Escape($field))$|(?m)^$([regex]::Escape($field)):"
+                }
+                $createText | Should -Match '(?m)^Active$'
+                $createResponse = ($call.response.content | ForEach-Object text) -join ' '
+                $newBodyMatch = [regex]::Match($createResponse, '(?<locator>https://\S+)')
+                $newBodyMatch.Success | Should -BeTrue
+                $newBodyLocator = $newBodyMatch.Groups['locator'].Value
+            }
+            if ($null -ne $newBodyLocator -and $call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $newBodyLocator) {
+                $newReadbackIndex = [array]::IndexOf($replacementCalls, $call)
+                $newReadbackText = ($call.response.content | ForEach-Object text) -join "`n"
+                foreach ($field in @('Memory Key', 'Scope', 'Status', 'Confidence', 'Source', 'Content')) {
+                    $newReadbackText | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+                }
+                $newReadbackText | Should -Match '(?m)^Status: Active$'
+            }
+            if ($null -ne $oldBodyLocator -and $call.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $call.arguments.page_id -EQ (($oldBodyLocator -split '/')[-1]) -and ($call.arguments.content_updates | Where-Object new_str -Match 'Superseded')) {
+                $retirementIndex = [array]::IndexOf($replacementCalls, $call)
+            }
+            if ($call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.index.locator -and ($call.response.content | ForEach-Object text) -match '(?m)^Index rows after replacement:') {
+                $finalIndexText = ($call.response.content | ForEach-Object text) -join "`n"
+            }
+        }
+        $createIndex | Should -BeGreaterThan -1
+        $newReadbackIndex | Should -BeGreaterThan -1
+        $retirementIndex | Should -BeGreaterThan -1
+        $createIndex | Should -BeLessThan $newReadbackIndex
+        $newReadbackIndex | Should -BeLessThan $retirementIndex
+        $newBodyLocator | Should -Not -Be $oldBodyLocator
+        $finalIndexText | Should -Not -BeNullOrEmpty
+        $finalIndexText | Should -Match "(?s)$([regex]::Escape($oldBodyLocator)).*Status: Superseded.*$([regex]::Escape($newBodyLocator)).*Status: Active"
+
+        $orphan = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'orphan-body-without-index-repairs-index-only')[0]
+        $orphanMemoryScan = @($orphan.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.memory.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Bounded exact key/scope result:'
+        })[0]
+        $orphanMemoryScan | Should -Not -BeNullOrEmpty
+        $orphanTargetMatch = [regex]::Match(($orphanMemoryScan.response.content | ForEach-Object text) -join "`n", '(?m)^Target: (?<target>https://\S+)$')
+        $orphanTargetMatch.Success | Should -BeTrue
+        $orphanBodyLocator = $orphanTargetMatch.Groups['target'].Value
+        $orphanBody = @($orphan.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $orphanBodyLocator -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
+        })[0]
+        $orphanBody | Should -Not -BeNullOrEmpty
+        $orphanBodyText = ($orphanBody.response.content | ForEach-Object text) -join "`n"
+        foreach ($field in @('Memory Key', 'Scope', 'Status', 'Confidence', 'Source', 'Content')) {
+            $orphanBodyText | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+        }
+        $orphanBodyText | Should -Match '(?m)^Status: Active$'
+        @($orphan.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $_.arguments.parent.page_id -EQ $memoryPageId }).Count | Should -Be 0
+        @($orphan.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $_.arguments.page_id -EQ $memoryPageId }).Count | Should -Be 0
+        $orphanIndexWrite = @($orphan.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $_.arguments.parent.page_id -EQ $indexPageId })[0]
+        $orphanIndexWrite | Should -Not -BeNullOrEmpty
+        $orphanIndexWrite.arguments.pages[0].content | Should -Match ([regex]::Escape($orphanBodyLocator))
+
+        foreach ($id in @('replacement-create-refused-retains-current', 'replacement-create-ambiguous-retains-current')) {
+            $failedReplacement = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $failedCreateCalls = @($failedReplacement.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $_.arguments.parent.page_id -EQ $memoryPageId })
+            $failedCreateCalls.Count | Should -Be 1
+            $failedReplacement.oracle.expectedOutcome | Should -Match 'new body result is unverified'
+            @($failedReplacement.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and ($_.arguments.content_updates | Where-Object new_str -Match 'Superseded') }).Count | Should -Be 0
+            $retainedOldBody = @($failedReplacement.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and ($_.response.content | ForEach-Object text) -match '(?m)^Status: Active$'
+            })
+            $retainedOldBody.Count | Should -BeGreaterThan 0
+            $scan = @($failedReplacement.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.memory.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Bounded exact key/scope result:'
+            })[0]
+            $scan | Should -Not -BeNullOrEmpty
+            $oldTarget = [regex]::Match(($scan.response.content | ForEach-Object text) -join "`n", '(?m)^Target: (?<target>https://\S+)$').Groups['target'].Value
+            $oldTarget | Should -Not -BeNullOrEmpty
+            $oldBodyReadback = @($failedReplacement.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $oldTarget -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
+            })[-1]
+            $oldBodyText = ($oldBodyReadback.response.content | ForEach-Object text) -join "`n"
+            foreach ($field in @('Memory Key', 'Scope', 'Status', 'Confidence', 'Source', 'Content')) {
+                $oldBodyText | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+            }
+            $oldBodyText | Should -Match '(?m)^Status: Active$'
+            $indexReadback = @($failedReplacement.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.index.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Topic:'
+            })[-1]
+            $indexText = ($indexReadback.response.content | ForEach-Object text) -join "`n"
+            $indexText | Should -Match ([regex]::Escape($oldTarget))
+            $indexText | Should -Match '(?m)^Status: Active$'
+            foreach ($readback in $retainedOldBody) {
+                ($readback.response.content | ForEach-Object text) -join "`n" | Should -Match '(?m)^Scope: example\.project$'
+            }
+        }
+
+        $ambiguous = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'replacement-create-ambiguous-retains-current')[0]
+        $ambiguous.oracle.expectedOutcome | Should -Match 'unverified'
+        $ambiguous.oracle.requiredInvariants -join ' ' | Should -Match 'Do not infer whether creation succeeded or failed'
+        foreach ($id in @('replacement-preserves-superseded-body', 'archive-retains-body')) {
+            $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $lastFetchedTextByPageId = @{}
+            foreach ($call in $scenario.connectorTranscript) {
+                if ($call.tool -EQ 'mcp__codex_apps__notion_fetch') {
+                    $pageId = ($call.arguments.id -split '/')[-1]
+                    $lastFetchedTextByPageId[$pageId] = ($call.response.content | ForEach-Object text) -join "`n"
+                }
+                if ($call.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $call.arguments.command -EQ 'update_content') {
+                    $priorText = $lastFetchedTextByPageId[$call.arguments.page_id]
+                    $priorText | Should -Not -BeNullOrEmpty
+                    foreach ($change in @($call.arguments.content_updates)) {
+                        $priorText | Should -Match ([regex]::Escape($change.old_str))
+                    }
+                }
+            }
+        }
     }
 }

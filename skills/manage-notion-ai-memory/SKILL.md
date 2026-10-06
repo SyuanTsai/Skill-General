@@ -30,4 +30,6 @@ May read, create, or update safe individual records in the configured memory and
 
 ## Errors
 
+For same-key writes, verify body absence with a bounded lookup/read of the configured destination; an INDEX miss does not prove absence. For replacement, keep the old body current until the new body is saved and read back as verified, then mark the old body Superseded. If creation or retirement is refused or ambiguous, read current state before retrying; preserve both bodies and report incomplete work when retirement fails.
+
 Use a stable `Memory Key` derived from durable scope and subject identifiers. Before a write, check that exact key and scope. Skip unchanged content; preserve replaced bodies as `Superseded`; keep archived bodies and mark them `Archived`. Read back each completed body and any configured index write. If a write result is ambiguous or cannot be verified, report it as incomplete or unverified instead of retrying with a new key or claiming success. A missing connector, destination, mapping, property, or section does not authorize schema repair or a Task Handoff fallback.

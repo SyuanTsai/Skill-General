@@ -25,9 +25,13 @@ An explicit request to remember safe content is the user's confirmation. Write i
 
 Before creating a record, check the exact `Memory Key` and scope:
 
-- More than one `Active` record for that key is an integrity conflict. Stop the affected write. `Superseded` and `Archived` records with the same key are expected history.
+Confirm absence with a bounded exact-key/scope lookup and read against the configured body destination relevant to this write. An INDEX miss only says that the navigation row is missing; it is not evidence that a body is absent. If the destination cannot establish same-key state, stop that affected write as unknown and continue independent work without scanning the full collection. If the same effective body is already present but unindexed, skip body creation and repair only its index when one is configured; a legacy mapping without an index must not imply synchronization.
+
+- More than one pre-existing `Active` record for that key is an integrity conflict. Stop the affected write. The temporary two-`Active` state of a verified but incomplete replacement follows the recovery path in [the index workflow](index-workflow.md). `Superseded` and `Archived` records with the same key are expected history.
 - If effective content is unchanged, do not create a duplicate. Preserve the verified body and repair a missing or stale index entry only through the index recovery procedure.
 - If confirmed information replaces an old record, retain the old body as `Superseded` and create or update the current body as `Active`. If the key belongs to a different subject, choose a stable key that distinguishes scope or source; never overwrite the unrelated record.
+
+For replacement order, follow [the index workflow](index-workflow.md): verify the new body before retiring the old one. A failed or ambiguous retirement keeps both bodies and leaves the operation incomplete.
 
 Use Notion's native creation and last-edited metadata for chronology. Populate optional custom date fields only when they already exist and doing so does not change schema.
 

@@ -108,7 +108,11 @@
   "modes": {
     "structured": {
       "preservesContractVersion": 3,
-      "defaultWhenModeOmitted": true,
+      "defaultWhenModeOmitted": {
+        "mode": "structured",
+        "onlyFor": "established-legacy-structured-mapping",
+        "requiresNoSuppliedAdopterFile": true
+      },
       "mappingKind": "existing-properties",
       "requiredFields": [
         "Title",
@@ -197,6 +201,9 @@
       "transientRecallOptional": true,
       "boundedTopicLookup": true,
       "mutableFactsRevalidateFormalSource": true
-    }
+    },
+    "sameKeyAbsenceRequires": "verified-body-destination-result",
+    "replacementReadiness": "verified-new-body-before-retiring-old",
+    "indexReplacementAction": "retain-old-row-as-Superseded-add-new-Active-row"
   }
 }
