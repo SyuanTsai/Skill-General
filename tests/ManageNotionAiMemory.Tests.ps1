@@ -248,20 +248,148 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $missingScope = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'missing-required-config-scope')[0]
         $missingScope.configOverrides.scope | Should -Be ''
         $unmapped = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'unmapped-page-field-stops-write')[0]
-        $unmapped.configOverrides.memory.fieldMapping.Content | Should -Be 'Memory Summary'
-        $firstCapture = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'first-capture-absent-key')[0]
-        @('Owner', 'Member') | Should -Contain $firstCapture.roleEvidence.userConfirmedRole
-        $firstCapture.roleEvidence.connectorActorId | Should -Be $firstCapture.roleEvidence.activeActorId
-        $firstCapture.roleEvidence.configuredDestinationLocator | Should -Be $script:AgentEvaluation.adopterProfiles.pages.boundary.locator
-        $firstCapture.roleEvidence.connectorDestinationLocator | Should -Be $script:AgentEvaluation.adopterProfiles.pages.boundary.locator
-        $firstCapture.roleEvidence.actorAndDestinationMatch | Should -BeTrue
-        $actorCall = @($firstCapture.connectorTranscript | Where-Object tool -EQ 'mcp__codex_apps__notion_notion_get_users')[0]
-        $actorCall.arguments.user_id | Should -Be 'self'
-        $actorCall.response.structuredContent.results[0].id | Should -Be $firstCapture.roleEvidence.connectorActorId
-        $boundaryCall = @($firstCapture.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.boundary.locator })[0]
-        $boundaryCall.response.structuredContent.page_id | Should -Be '00000000-0000-4000-8000-000000000001'
+        $unmapped.configOverrides.memory.fieldMapping.Content | Should -BeExactly ''
+        $unmapped.scenario | Should -Match 'mapping is empty'
+        $unmapped.oracle.expectedOutcome | Should -Match 'empty required Content mapping'
+        @($unmapped.connectorTranscript | Where-Object { $_.tool -in @('mcp__codex_apps__notion_notion_create_pages', 'mcp__codex_apps__notion_notion_update_page') }).Count | Should -Be 0
+
+        $writeScenarioIds = @(
+            'first-capture-absent-key',
+            'replacement-preserves-superseded-body',
+            'archive-retains-body',
+            'inferred-candidate-pending-inbox',
+            'body-saved-index-failed',
+            'repair-index-only-after-readback',
+            'formal-adoption-of-new-context'
+        )
+        foreach ($id in $writeScenarioIds) {
+            $writeScenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $writeScenario.PSObject.Properties['roleEvidence'] | Should -Not -BeNullOrEmpty
+            @('Owner', 'Member') | Should -Contain $writeScenario.roleEvidence.userConfirmedRole
+            $writeScenario.userInput | Should -Match 'I confirm I am a Member'
+            $writeScenario.roleEvidence.connectorActorId | Should -Be $writeScenario.roleEvidence.activeActorId
+            $writeScenario.roleEvidence.configuredDestinationLocator | Should -Be $script:AgentEvaluation.adopterProfiles.pages.boundary.locator
+            $writeScenario.roleEvidence.connectorDestinationLocator | Should -Be $script:AgentEvaluation.adopterProfiles.pages.boundary.locator
+            $writeScenario.roleEvidence.actorAndDestinationMatch | Should -BeTrue
+            $actorCall = @($writeScenario.connectorTranscript | Where-Object tool -EQ 'mcp__codex_apps__notion_notion_get_users')[0]
+            $actorCall.arguments.user_id | Should -Be 'self'
+            $actorCall.response.structuredContent.results[0].id | Should -Be $writeScenario.roleEvidence.connectorActorId
+            $boundaryCall = @($writeScenario.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $script:AgentEvaluation.adopterProfiles.pages.boundary.locator })[0]
+            $boundaryCall.response.structuredContent.page_id | Should -Be '00000000-0000-4000-8000-000000000001'
+        }
+
+        $prewriteStates = @(
+            [pscustomobject]@{ id = 'first-capture-absent-key'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'replacement-preserves-superseded-body'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'archive-retains-body'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 1 },
+            [pscustomobject]@{ id = 'inferred-candidate-pending-inbox'; key = 'project:example.project:release-note-length'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'body-saved-index-failed'; key = 'project:example.project:release-language'; matchCount = 0; activeCount = 0 },
+            [pscustomobject]@{ id = 'formal-adoption-of-new-context'; key = 'project:example.project:release-language'; matchCount = 1; activeCount = 0 }
+        )
+        foreach ($expectedState in $prewriteStates) {
+            $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $expectedState.id)[0]
+            $preflightIndex = -1
+            $firstMutationIndex = -1
+            for ($i = 0; $i -lt $scenario.connectorTranscript.Count; $i++) {
+                $call = $scenario.connectorTranscript[$i]
+                if ($preflightIndex -lt 0 -and $call.tool -EQ 'mcp__codex_apps__notion_fetch' -and $call.arguments.id -EQ $pages.index.locator) {
+                    $callText = ($call.response.content | ForEach-Object text) -join "`n"
+                    if ($callText -match '(?m)^Exact key/scope match count:') {
+                        $preflightIndex = $i
+                        $callText | Should -Match "(?m)^Scope: example\.project$"
+                        $callText | Should -Match "(?m)^Memory Key: $([regex]::Escape($expectedState.key))$"
+                        $callText | Should -Match "(?m)^Exact key/scope match count: $($expectedState.matchCount)$"
+                        $callText | Should -Match "(?m)^Active count: $($expectedState.activeCount)$"
+                    }
+                }
+                if ($firstMutationIndex -lt 0 -and $call.tool -in @('mcp__codex_apps__notion_notion_create_pages', 'mcp__codex_apps__notion_notion_update_page')) {
+                    $firstMutationIndex = $i
+                }
+            }
+            $preflightIndex | Should -BeGreaterThan -1
+            $firstMutationIndex | Should -BeGreaterThan -1
+            $preflightIndex | Should -BeLessThan $firstMutationIndex
+        }
+
+        $bodyReadbackScenarioIds = $writeScenarioIds
+        foreach ($id in $bodyReadbackScenarioIds) {
+            $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $bodyReadbacks = @($scenario.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
+            })
+            $bodyReadbacks.Count | Should -BeGreaterThan 0
+            foreach ($readback in $bodyReadbacks) {
+                $text = ($readback.response.content | ForEach-Object text) -join "`n"
+                foreach ($field in @('Memory Key', 'Scope', 'Status', 'Confidence', 'Source', 'Content')) {
+                    $text | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+                }
+                $text | Should -Not -Match '\\n'
+            }
+        }
+
+        $indexReadbackScenarioIds = @(
+            'first-capture-absent-key',
+            'replacement-preserves-superseded-body',
+            'archive-retains-body',
+            'inferred-candidate-pending-inbox',
+            'repair-index-only-after-readback',
+            'formal-adoption-of-new-context'
+        )
+        foreach ($id in $indexReadbackScenarioIds) {
+            $scenario = @($script:AgentEvaluation.scenarios | Where-Object id -EQ $id)[0]
+            $indexReadbacks = @($scenario.connectorTranscript | Where-Object {
+                $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $pages.index.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Topic:'
+            })
+            $indexReadbacks.Count | Should -BeGreaterThan 0
+            foreach ($readback in $indexReadbacks) {
+                $text = ($readback.response.content | ForEach-Object text) -join "`n"
+                foreach ($field in @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')) {
+                    $text | Should -Match "(?m)^$([regex]::Escape($field)):\s*.+$"
+                }
+                $text | Should -Not -Match '\\n'
+            }
+        }
+
+        $repair = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'repair-index-only-after-readback')[0]
+        $repairBodyReadback = @($repair.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and ($_.response.content | ForEach-Object text) -match '(?m)^Confidence:'
+        })[0]
+        $repairBodyReadback | Should -Not -BeNullOrEmpty
+        $repairBodyLocator = $repairBodyReadback.arguments.id
+        $repairIndexWrite = @($repair.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $_.arguments.command -EQ 'insert_content'
+        })[0]
+        $repairIndexWrite.arguments.content | Should -Match "(?m)^## Target\s+$([regex]::Escape($repairBodyLocator))$"
+        $repairIndexReadback = @($repair.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $pages.index.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Topic:'
+        })[-1]
+        ($repairIndexReadback.response.content | ForEach-Object text) -join "`n" | Should -Match "(?m)^Target: $([regex]::Escape($repairBodyLocator))$"
+
+        $partial = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'body-saved-index-failed')[0]
+        $partialIndexErrors = @($partial.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' -and $_.response.isError -eq $true
+        })
+        $partialIndexErrors.Count | Should -Be 1
+        ($partialIndexErrors[0].response.content | ForEach-Object text) -join ' ' | Should -Match '503 Service Unavailable'
+        @($partial.connectorTranscript | Where-Object { $_.tool -EQ 'mcp__codex_apps__notion_notion_update_page' }).Count | Should -Be 1
+        $partial.oracle.expectedOutcome | Should -Match 'operation is incomplete'
+
+        $candidate = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'inferred-candidate-pending-inbox')[0]
+        $indexPageId = ($pages.index.locator -split '/')[-1]
+        $candidateIndexWrites = @($candidate.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_notion_create_pages' -and $_.arguments.parent.page_id -EQ $indexPageId
+        })
+        $candidateIndexWrites.Count | Should -Be 1
+        $candidateIndexWrites[0].arguments.pages[0].content | Should -Match '(?m)^## Status\s+Pending$'
+        $candidate.oracle.expectedOutcome | Should -Match 'matching Pending index row'
+        $candidateIndexReadback = @($candidate.connectorTranscript | Where-Object {
+            $_.tool -EQ 'mcp__codex_apps__notion_fetch' -and $_.arguments.id -EQ $pages.index.locator -and ($_.response.content | ForEach-Object text) -match '(?m)^Topic:'
+        })[-1]
+        ($candidateIndexReadback.response.content | ForEach-Object text) -join "`n" | Should -Match '(?m)^Status: Pending$'
+        ($candidateIndexReadback.response.content | ForEach-Object text) -join "`n" | Should -Not -Match '(?m)^Status: Active$'
+
         $denied = @($script:AgentEvaluation.scenarios | Where-Object id -EQ 'write-access-refused')[0]
+        $denied.PSObject.Properties['roleEvidence'] | Should -Not -BeNullOrEmpty
         $denied.roleEvidence | Should -BeNullOrEmpty
-        $firstCapture.userInput | Should -Match 'I confirm I am a Member'
     }
 }
