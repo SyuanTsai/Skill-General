@@ -94,6 +94,10 @@ exit $wrapperExitCode
         $startInfo.Environment['PSModulePath'] = $moduleRoot
         $startInfo.Environment['STANDARD_VALIDATION_CORE_RUN_ID'] = $coreRunId
         $startInfo.Environment['STANDARD_VALIDATION_CORE_CHECK_ID'] = 'repository-pester'
+        $releasePath = Join-Path $candidateRoot ("b-{0}.sig" -f [guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($releasePath, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $startInfo.Environment['STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH'] = $releasePath
+        $startInfo.Environment['STANDARD_VALIDATION_BOOTSTRAP_COMMAND'] = $pwsh
         $process = [Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         try {
@@ -169,6 +173,10 @@ exit $wrapperExitCode
         $failedStartInfo.Environment['PSModulePath'] = $moduleRoot
         $failedStartInfo.Environment['STANDARD_VALIDATION_CORE_RUN_ID'] = $failedCoreRunId
         $failedStartInfo.Environment['STANDARD_VALIDATION_CORE_CHECK_ID'] = 'repository-pester'
+        $failedReleasePath = Join-Path $failedCandidateRoot ("b-{0}.sig" -f [guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($failedReleasePath, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $failedStartInfo.Environment['STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH'] = $failedReleasePath
+        $failedStartInfo.Environment['STANDARD_VALIDATION_BOOTSTRAP_COMMAND'] = $pwsh
         $failedProcess = [Diagnostics.Process]::new()
         $failedProcess.StartInfo = $failedStartInfo
         try {

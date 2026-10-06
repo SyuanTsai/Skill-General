@@ -987,7 +987,9 @@ function Test-CoreRunSelected {
         $wrapper | Should -Match '\(\$passed \+ \$skipped\) -ne \$total'
     }
 
-    It 'rejects a Pester discovery failure even when its other test passes' {
+    # Scenario: A real wrapper child receives its own consumed bootstrap signal and a failed discovery container.
+    # Purpose: Keep discovery failure observable after transport cleanup rather than failing on parent metadata.
+    It 'InterT35_rejects_a_Pester_discovery_failure_even_when_its_other_test_passes' {
         $fixtureRoot = Join-Path $TestDrive 'core-pester-discovery-failure'
         $driverRunId = [guid]::NewGuid().ToString('N')
         $coreRunId = [guid]::NewGuid().ToString('N')
@@ -1007,6 +1009,12 @@ function Test-CoreRunSelected {
         $diagnostics = Join-Path $fixtureRoot 'diagnostics.err'
         $oldRunId = $env:STANDARD_VALIDATION_CORE_RUN_ID
         $oldCheckId = $env:STANDARD_VALIDATION_CORE_CHECK_ID
+        $oldReleasePath = $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH
+        $oldBootstrapCommand = $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND
+        $releasePath = Join-Path $candidateRoot ("b-{0}.sig" -f [guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($releasePath, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH = $releasePath
+        $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND = $pwsh
         $env:STANDARD_VALIDATION_CORE_RUN_ID = $coreRunId
         $env:STANDARD_VALIDATION_CORE_CHECK_ID = 'repository-pester'
         Push-Location $candidateRoot
@@ -1019,6 +1027,8 @@ function Test-CoreRunSelected {
             $env:PSModulePath = $oldPath
             $env:STANDARD_VALIDATION_CORE_RUN_ID = $oldRunId
             $env:STANDARD_VALIDATION_CORE_CHECK_ID = $oldCheckId
+            $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH = $oldReleasePath
+            $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND = $oldBootstrapCommand
         }
         $exitCode | Should -Be 1
         $output.Count | Should -Be 0 -Because 'a rejected discovery run must not emit a success-shaped machine report'
