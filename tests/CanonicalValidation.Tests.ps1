@@ -130,7 +130,22 @@ Describe 'Canonical Standard v1 validation adapter' {
             @{ authority = @{ commit = $DriverAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Encoding utf8
             @{ authority = @{ commit = $CandidateAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Encoding utf8
 
-            $names = @('GITHUB_WORKSPACE', 'EXPECTED_DRIVER_SHA', 'GITHUB_OUTPUT', 'SYP_FIXTURE_DRIVER_SHA')
+            # The workflow now rejects aliases/functions named git. Exercise the
+            # selector with an actual application command that returns fixture data.
+            $fixtureBin = Join-Path $workspace 'bin'
+            [void](New-Item -ItemType Directory -Path $fixtureBin)
+            $gitShim = Join-Path $fixtureBin 'git.cmd'
+            [IO.File]::WriteAllText($gitShim, @'
+@echo off
+if not "%~1"=="-C" exit /b 1
+if not "%~3"=="rev-parse" exit /b 1
+if not "%~4"=="HEAD" exit /b 1
+if not "%~5"=="" exit /b 1
+echo %SYP_FIXTURE_DRIVER_SHA%
+exit /b 0
+'@, [Text.Encoding]::ASCII)
+
+            $names = @('GITHUB_WORKSPACE', 'EXPECTED_DRIVER_SHA', 'GITHUB_OUTPUT', 'SYP_FIXTURE_DRIVER_SHA', 'PATH')
             $previous = @{}
             foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
             $priorLastExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
@@ -141,14 +156,7 @@ Describe 'Canonical Standard v1 validation adapter' {
                 [Environment]::SetEnvironmentVariable('EXPECTED_DRIVER_SHA', $ExpectedDriverSha, 'Process')
                 [Environment]::SetEnvironmentVariable('SYP_FIXTURE_DRIVER_SHA', $ActualDriverSha, 'Process')
                 [Environment]::SetEnvironmentVariable('GITHUB_OUTPUT', (Join-Path $workspace 'github-output.txt'), 'Process')
-                function git {
-                    $global:LASTEXITCODE = 0
-                    if ($args.Count -eq 4 -and $args[0] -ceq '-C' -and $args[2] -ceq 'rev-parse' -and $args[3] -ceq 'HEAD') {
-                        return $env:SYP_FIXTURE_DRIVER_SHA
-                    }
-                    $global:LASTEXITCODE = 1
-                    throw "Unexpected selector Git invocation: $($args -join ' ')"
-                }
+                [Environment]::SetEnvironmentVariable('PATH', "$fixtureBin$([IO.Path]::PathSeparator)$($previous.PATH)", 'Process')
                 & ([scriptblock]::Create($script:SelectorScript))
                 $outputLines = @([IO.File]::ReadAllLines($env:GITHUB_OUTPUT))
                 $modeLines = @($outputLines | Where-Object { $_ -match '^validation_mode=(legacy|core)$' })
@@ -163,7 +171,6 @@ Describe 'Canonical Standard v1 validation adapter' {
                 return $mode
             }
             finally {
-                Remove-Item Function:\git -ErrorAction SilentlyContinue
                 foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
                 if ($hadPriorLastExit) {
                     Set-Variable -Name LASTEXITCODE -Value $priorLastExitValue -Scope Global
@@ -1055,13 +1062,27 @@ function Test-CoreRunSelected {
         $mode | Should -BeExactly 'core'
     }
 
+    # Scenario: a function shadows the application command in protected authority selection.
+    # Purpose: prove that the selector fails closed before trusting a substituted Git result.
+    It 'UnitT39_rejects_a_shadowed_git_command_in_protected_authority_selection' {
+        try {
+            function git { return ('d' * 40) }
+            (Get-FixtureExceptionMessage -Action {
+                Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
+            }) | Should -Match 'Git command is shadowed in protected authority selection'
+        }
+        finally {
+            Remove-Item Function:\git -ErrorAction SilentlyContinue
+        }
+    }
+
     # Scenario: an operator manually starts the canonical workflow on its approved branch.
     # Purpose: retain the baseline workflow_dispatch entry point through the base migration.
     It 'UnitT27_preserves_manual_canonical_validation_dispatch' {
         $script:Workflow | Should -Match '(?m)^  workflow_dispatch:\s*$'
     }
 
-    # Scenario: the selector test substitutes Git for a fixture driver checkout.
+    # Scenario: the selector test uses a fixture application for the driver checkout.
     # Purpose: restore an existing native exit code so the fixture cannot contaminate later Pester cases.
     It 'UnitT28_restores_a_preexisting_native_exit_code_after_selector_fixtures' {
         $prior = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
@@ -1080,7 +1101,7 @@ function Test-CoreRunSelected {
     }
 
     # Scenario: the selector fixture runs in a process without any prior native command.
-    # Purpose: remove the mock's temporary LASTEXITCODE variable when the caller had none.
+    # Purpose: remove the shim's temporary LASTEXITCODE variable when the caller had none.
     It 'UnitT29_removes_the_native_exit_code_variable_when_it_was_previously_unset' {
         $prior = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
         $hadPrior = $null -ne $prior
