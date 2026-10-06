@@ -11,11 +11,18 @@ Describe 'Skill-General Standard v1 reference implementation' {
             'ea1d368ac7b36f838ce4c3af363972c90fa12930' = @{
                 archiveSha256 = 'c5a43ef70bf9ed813df2b8ae206b7c1b661caa013744e1098df87ccc3d274653'
                 filesSha256 = '617fad5eebb05fb27a8fa121aaada1950906cb6ddd45892dfa52102038622f1a'
+                fileCount = 26
             }
             '053b80143b5ef48b06a8c448d5ac1abaf9a49df8' = @{
                 archiveSha256 = 'cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9'
                 filesSha256 = '818098039a3a4612afef519cb72626da3a5b6176dfebf5ce2a56ec70c76a8b24'
+                fileCount = 26
             }
+        }
+        $script:ApprovedAuthoritySnapshots['d54ef2cc83a19fa58f62fdcc6fa290095355d03e'] = @{
+            archiveSha256 = '03a865e164cf4875dc8e6a12ed10c698db9d6e83cf1d0b6adbfe4e53b2396763'
+            filesSha256 = '4ce21109fa065ae4a0358bfe697d70a1a2f448a4e422058acbacef366218da7e'
+            fileCount = 29
         }
         $script:GetAuthorityInventorySha256 = {
             param([object[]] $Files)
@@ -54,7 +61,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         )
     }
 
-    # Scenario: the consumer config selects the active reviewed ea1 or merged 053 authority tuple.
+    # Scenario: the consumer config selects a complete reviewed immutable authority tuple, including source validation.
     # Purpose: bind the archive identity and every ordered path/hash pair to a fixed approved snapshot.
     It 'UnitT10_pins_one_exact_approved_authority_tuple_and_required_file_inventory' {
         Test-Path -LiteralPath $script:AdapterPath -PathType Leaf | Should -BeTrue
@@ -74,7 +81,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $adapter.authority.archiveSha256 | Should -Be $approved.archiveSha256
 
         $files = @($adapter.authority.files)
-        $files.Count | Should -Be 26
+        $files.Count | Should -Be $approved.fileCount
         @($files | ForEach-Object { @($_.PSObject.Properties.Name) -join ',' } | Where-Object { $_ -cne 'path,sha256' }).Count | Should -Be 0
         @($files | Where-Object { [string]$_.sha256 -cnotmatch '^[0-9a-f]{64}$' }).Count | Should -Be 0
         @($files.path | Select-Object -Unique).Count | Should -Be $files.Count
@@ -168,7 +175,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $authorityTransportStep.Groups['body'].Value | Should -Match '\$fileCursor = \$filePath'
         $authorityTransportStep.Groups['body'].Value | Should -Not -Match 'snapshotRoot|--local --no-hardlinks|SYP154_CANDIDATE_AUTHORITY_ROOT'
         $workflow | Should -Match '(?m)^\s*id:\s*canonical-source-report\s*$'
-        $workflow | Should -Not -Match 'actions/setup-go@|actions/setup-node@|APPROVED_NPM_PATH|NPM_CONFIG_PREFIX'
+        $workflow | Should -Match 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
+        $workflow | Should -Match 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020'
+        $workflow | Should -Match '''-PrepareSourceTools'', ''-SourceToolsPath'', \$preparedPath'
+        $workflow | Should -Match '''-SourceValidation'', ''-SourceToolsPath'', \$env:SOURCE_TOOLS_PATH'
+        $workflow | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
         $workflow | Should -Match '(?ms)- name: Install and verify Microsoft''s latest stable PowerShell\s+shell: pwsh'
         $workflow | Should -Match '\$channel = Invoke-WebRequest -Uri \(''https://aka\.ms/powershell-'' \+ ''release\?tag=stable''\)'
         $workflow | Should -Match '\$channelUrl -cnotmatch \(''\^https://github\\\.com/PowerShell/PowerShell/'' \+ ''releases/tag/'
@@ -195,7 +206,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Not -Match '(?m)^\s*id:\s*source-conformance\s*$'
         $workflow | Should -Not -Match 'steps\.source-conformance\.outputs\.status'
         $workflow | Should -Not -Match '(?m)^\s*if \[\['
-        ([regex]::Matches($workflow, '(?m)^\s*pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs\s*$')).Count | Should -Be 1
+        ([regex]::Matches($workflow, '(?m)^\s*pwsh -NoProfile -NonInteractive -File \./scripts/Validate\.ps1 @driverArgs\s*$')).Count | Should -Be 2 -Because 'one explicit setup invocation precedes one canonical validation invocation'
         $workflow | Should -Match '\$validatorExitCode = \[int\]\$LASTEXITCODE'
         $workflow | Should -Match 'if \(\$validatorExitCode -ne 0\)'
         $workflow | Should -Match 'Assert-CoreSourceCheckReport -Report \$report -ProcessExitCode \$validatorExitCode -ExpectedSourceRevision \$env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision \$baseCommit -ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION -ExpectedEventName \$env:GITHUB_EVENT_NAME -ArtifactsRoot \$artifactsRoot -OutputPath \$outputPath'
@@ -208,6 +219,13 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$report\.releaseEligible -ne \$false'
         $workflow | Should -Match '\$checks\[1\]\.id -cne ''repository-pester'''
         $workflow | Should -Match 'source_conformance=passed'
+        $sourceSetup = $workflow.IndexOf('Explicitly acquire and freeze source tools', [StringComparison]::Ordinal)
+        $sourceGate = $workflow.IndexOf('Assert-StandardCoreSourceCheckReport -Report $SourceReport', [StringComparison]::Ordinal)
+        $publish = $workflow.IndexOf('Publish protected validation result', [StringComparison]::Ordinal)
+        $sourceSetup | Should -BeGreaterThan $setupIndex
+        $validateIndex | Should -BeGreaterThan $sourceSetup
+        $sourceGate | Should -BeGreaterThan $validateIndex
+        $publish | Should -BeGreaterThan $sourceGate
         $workflow | Should -Match 'if: \$\{\{ always\(\) \}\}'
         $inventoryStep = [regex]::Match($workflow, '(?ms)- name: Preserve complete Core Pester case inventory(?<body>.*?)(?=^      - name:|\z)')
         $inventoryStep.Success | Should -BeTrue
@@ -275,13 +293,15 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$checkoutHead -cne \$env:EXPECTED_SOURCE_SHA'
         $workflow | Should -Match '\$commonBase\.Count -ne 1'
         $workflow | Should -Match '\$driverHead -cne \$env:EXPECTED_DRIVER_SHA'
-        $workflow | Should -Match '\$nextAuthority = ''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
-        $workflow | Should -Match '\$mergedAuthority = ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'''
-        $workflow | Should -Match '\$coreAuthorities = @\(\$nextAuthority, \$mergedAuthority\)'
-        $workflow | Should -Match '\$candidatePin\.authority\.commit -cnotin \$coreAuthorities'
-        $workflow | Should -Match 'A protected Core driver cannot downgrade an unapproved or baseline candidate\.'
+        $workflow | Should -Match '\$sourceAuthority = ''d54ef2cc83a19fa58f62fdcc6fa290095355d03e'''
+        $workflow | Should -Match '\$coreAuthorities = @\(''ea1d368ac7b36f838ce4c3af363972c90fa12930'', ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'', \$sourceAuthority\)'
+        $workflow | Should -Match '\$candidatePin\.authority\.commit -cne \$sourceAuthority'
+        $workflow | Should -Match 'Source validation cannot accept a Core-only candidate authority\.'
+        $workflow | Should -Match '\$sourcePins\.Count -ne 1'
+        $workflow | Should -Match '\$sourcePins\[0\]\.Groups\[''sha''\]\.Value -cne \$sourceAuthority'
+
         $workflow | Should -Not -Match '\$baselineAuthority|\$mode = ''legacy'''
-        $workflow | Should -Match '\$driverAuthority -cin \$coreAuthorities'
+        $workflow | Should -Match '\$driverAuthority -cnotin \$coreAuthorities'
         $workflow | Should -Match 'scripts/Invoke-Core.*Pester\.ps1'
         $workflow | Should -Match 'authority_revision=\$\(\[string\]\$candidatePin\.authority\.commit\)'
         $workflow | Should -Match 'ref:\s*\$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}'
@@ -298,10 +318,15 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match 'persist-credentials:\s*false'
     }
 
-    It 'keeps public validation documentation on the canonical entry point' {
+    # Scenario: public source validation documentation explains the explicit setup and canonical validation entries.
+    # Purpose: tool identity descriptions remain useful while executable instructions use the reviewed adapter (V4).
+    It 'UnitT50_documents_source_setup_and_validation_on_the_canonical_entry_point' {
         $readme = Get-Content -LiteralPath (Join-Path $script:RepositoryRoot 'README.md') -Raw
         $readme | Should -Match 'scripts/Validate\.ps1'
         $readme | Should -Not -Match 'scripts/(?:Invoke-StandardValidation|Test-SkillGeneral)\.ps1'
-        $readme | Should -Not -Match '(?i)\b(?:Invoke-Pester|pytest|skill-validator|skill-tools|skillspector)\b'
+        $readme | Should -Match '-PrepareSourceTools'
+        $readme | Should -Match '-SourceValidation'
+        $readme | Should -Not -Match '(?im)^\s*(?:Invoke-Pester|pytest|skill-validator|skill-tools|skillspector)(?:\s|$)'
+
     }
 }

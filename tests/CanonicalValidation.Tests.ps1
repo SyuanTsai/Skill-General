@@ -385,6 +385,8 @@ Describe 'Canonical Standard v1 validation adapter' {
                 [Parameter(Mandatory)][string] $ExpectedDriverSha,
                 [Parameter(Mandatory)][string] $ActualDriverSha,
                 [bool] $IncludeCoreWrapper = $true,
+                [bool] $IncludeSourceDriver = $true,
+                [string] $DriverSourceAuthority = $script:ExpectedSourceAuthorityCommit,
                 [switch] $ReturnSelection
             )
             $workspace = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
@@ -392,6 +394,8 @@ Describe 'Canonical Standard v1 validation adapter' {
             $candidate = Join-Path $workspace 'candidate'
             [void](New-Item -ItemType Directory -Force -Path (Join-Path $driver 'config'), (Join-Path $candidate 'config'), (Join-Path $driver 'scripts'))
             if ($IncludeCoreWrapper) { [IO.File]::WriteAllText((Join-Path $driver 'scripts/Invoke-CorePester.ps1'), '# fixture') }
+            $driverSource = if ($IncludeSourceDriver) { "`$script:SourceAuthorityCommit = '$DriverSourceAuthority'`n" } else { '# source driver preparation absent' }
+            [IO.File]::WriteAllText((Join-Path $driver 'scripts/Validate.ps1'), $driverSource)
             @{ authority = @{ commit = $DriverAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Encoding utf8
             @{ authority = @{ commit = $CandidateAuthority } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Encoding utf8
 
@@ -680,6 +684,12 @@ function Test-CoreRunSelected {
             $expectedArchiveSha256 = $script:ExpectedMergedAuthorityArchiveSha256
             $expectedFiles = $script:ExpectedMergedAuthorityFiles
         }
+        elseif ($script:Adapter.authority.commit -ceq $script:ExpectedSourceAuthorityCommit) {
+            $expectedCommit = $script:ExpectedSourceAuthorityCommit
+            $expectedArchiveSha256 = $script:ExpectedSourceAuthorityArchiveSha256
+            $verifier = New-AuthorityVerifierModule
+            $expectedFiles = (& $verifier { Get-ApprovedSourceAuthorityPin }).files
+        }
         $script:Adapter.authority.commit | Should -Be $expectedCommit
         $script:Adapter.authority.archiveUrl | Should -Be "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$expectedCommit"
         $script:Adapter.authority.archiveSha256 | Should -Be $expectedArchiveSha256
@@ -885,11 +895,12 @@ function Test-CoreRunSelected {
         $obsolete = $script:Adapter | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $obsolete.authority.commit = '7c65254d96bd21083ae827e54b9e51afee8ce304'
         { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $obsolete } | Should -Throw
+        { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $script:Adapter } | Should -Not -Throw
         foreach ($path in @('scripts/Resolve-PythonWheelClosure.py', 'scripts/Resolve-StandardValidationTool.ps1',
             'docs/standards/standard-validation-contract-v1.json', 'scripts/Invoke-StandardValidation.ps1')) {
             $forged = $script:Adapter | ConvertTo-Json -Depth 20 | ConvertFrom-Json
             ($forged.authority.files | Where-Object { $_.path -ceq $path }).sha256 = '0' * 64
-            { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $forged } | Should -Throw
+            { & $verifier { param($config) Assert-AuthorityConfig -Config $config -AllowNextAuthority } $forged } | Should -Throw
         }
     }
 
@@ -1363,10 +1374,28 @@ function Test-CoreRunSelected {
         $result.sentinel | Should -BeExactly 'preserve-me'
     }
 
-    # Scenario: the accepted Core driver no longer needs legacy runtime acquisition or its token route.
-    # Purpose: keep ordinary CI Core-only while preserving explicit Semantic outside this workflow.
+    # Scenario: source CI explicitly prepares tools, then runs the complete canonical candidate gate.
+    # Purpose: required contexts depend on full source evidence, and raw events survive owned cleanup (V2/V4/V7/V8).
     It 'UnitT22_has_no_legacy_runtime_or_credential_workflow_route' {
-        $script:Workflow | Should -Not -Match 'actions/setup-go@|actions/setup-node@|APPROVED_NPM_PATH|NPM_CONFIG_PREFIX'
+        $script:Workflow | Should -Match 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
+        $script:Workflow | Should -Match 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020'
+        $script:Workflow | Should -Match '''-PrepareSourceTools'', ''-SourceToolsPath'', \$preparedPath'
+        $script:Workflow | Should -Match '''-SourceValidation'', ''-SourceToolsPath'', \$env:SOURCE_TOOLS_PATH'
+        $script:Workflow | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
+        $setup = $script:Workflow.IndexOf('Explicitly acquire and freeze source tools', [StringComparison]::Ordinal)
+        $run = $script:Workflow.IndexOf('Validate exact candidate with the verified runtime', [StringComparison]::Ordinal)
+        $gate = $script:Workflow.IndexOf('Assert-StandardCoreSourceCheckReport -Report $SourceReport', [StringComparison]::Ordinal)
+        $publish = $script:Workflow.IndexOf('Publish protected validation result', [StringComparison]::Ordinal)
+        $upload = $script:Workflow.IndexOf('Preserve raw source validation evidence', [StringComparison]::Ordinal)
+        $cleanup = $script:Workflow.IndexOf("Clean only this run's temporary files", [StringComparison]::Ordinal)
+        $script:Workflow | Should -Match 'package-validation/event-\*\.json'
+        $script:Workflow | Should -Match 'skillspector-static/event-\*\.json'
+        $setup | Should -BeGreaterThan -1
+        $run | Should -BeGreaterThan $setup
+        $gate | Should -BeGreaterThan $run
+        $publish | Should -BeGreaterThan $gate
+        $upload | Should -BeGreaterThan $gate
+        $cleanup | Should -BeGreaterThan $upload
         $script:Workflow | Should -Not -Match '\$mode = ''legacy''|Assert-LegacySourceCheckProjection|syp154-authority-'
         $script:Workflow | Should -Match 'Assert-CoreSourceCheckReport'
     }
@@ -1386,21 +1415,25 @@ function Test-CoreRunSelected {
     It 'UnitT24_rejects_a_baseline_candidate_under_the_protected_core_driver' {
         (Get-FixtureExceptionMessage -Action {
             Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedAuthorityCommit -ExpectedDriverSha ('b' * 40) -ActualDriverSha ('b' * 40)
-        }) | Should -Match 'cannot downgrade'
+        }) | Should -Match 'cannot accept a Core-only candidate authority'
     }
 
     # Scenario: the protected base claims the ea1 Core pin but lacks its reviewed Pester wrapper.
     # Purpose: fail closed rather than choosing legacy validation when the trusted Core implementation is incomplete.
     It 'UnitT25_rejects_a_protected_core_driver_without_its_trusted_wrapper' {
         (Get-FixtureExceptionMessage -Action {
-            Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) -IncludeCoreWrapper:$false
-        }) | Should -Match 'missing the trusted Pester wrapper'
+            Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) -IncludeCoreWrapper:$false
+        }) | Should -Match 'not prepared for the approved source authority'
+        foreach ($fixture in @(@{ IncludeSourceDriver = $false }, @{ DriverSourceAuthority = ('9' * 40) })) {
+            { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) @fixture } |
+                Should -Throw -ExpectedMessage '*not prepared for the approved source authority*'
+        }
     }
 
-    # Scenario: protected main and immutable candidate both use ea1 with the exact Core wrapper available.
-    # Purpose: select ordinary Core only for the fully bound protected tuple.
-    It 'UnitT26_selects_core_for_the_exact_protected_ea1_tuple' {
-        $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
+    # Scenario: a prepared ea1 protected driver validates the exact approved source candidate.
+    # Purpose: select the canonical source authority only after protected driver preparation is bound.
+    It 'UnitT26_selects_source_candidate_with_the_prepared_protected_ea1_driver' {
+        $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
         $mode | Should -BeExactly 'core'
     }
 
@@ -1410,7 +1443,7 @@ function Test-CoreRunSelected {
         try {
             function git { return ('d' * 40) }
             (Get-FixtureExceptionMessage -Action {
-                Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
+                Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40)
             }) | Should -Match 'Git command is shadowed in protected authority selection'
         }
         finally {
@@ -1432,7 +1465,7 @@ function Test-CoreRunSelected {
         $priorValue = if ($hadPrior) { $prior.Value } else { $null }
         try {
             $global:LASTEXITCODE = 239
-            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('e' * 40) -ActualDriverSha ('e' * 40)
+            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('e' * 40) -ActualDriverSha ('e' * 40)
             $mode | Should -BeExactly 'core'
             (Get-Variable -Name LASTEXITCODE -Scope Global).Value | Should -Be 239
         }
@@ -1450,7 +1483,7 @@ function Test-CoreRunSelected {
         $priorValue = if ($hadPrior) { $prior.Value } else { $null }
         try {
             Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue
-            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedNextAuthorityCommit -ExpectedDriverSha ('f' * 40) -ActualDriverSha ('f' * 40)
+            $mode = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit -ExpectedDriverSha ('f' * 40) -ActualDriverSha ('f' * 40)
             $mode | Should -BeExactly 'core'
             (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue) | Should -BeNullOrEmpty
         }
@@ -1507,14 +1540,14 @@ function Test-CoreRunSelected {
         { & $verifier { param($config) Assert-AuthorityConfig -Config $config } $candidate } | Should -Throw
     }
 
-    # Scenario: an ea1 or 053 protected driver validates a candidate pinned to the merged 053 authority.
-    # Purpose: select Core and carry the candidate's exact approved revision through the protected selector output.
-    It 'UnitT33_selects_053_for_either_supported_protected_core_driver' {
-        foreach ($driverCommit in @($script:ExpectedNextAuthorityCommit, $script:ExpectedMergedAuthorityCommit)) {
-            $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $driverCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+    # Scenario: each prepared protected Core driver validates a candidate pinned to the accepted source authority.
+    # Purpose: carry that exact source revision through the protected selector output without Core-only downgrade.
+    It 'UnitT33_selects_source_for_each_prepared_protected_Core_driver' {
+        foreach ($driverCommit in @($script:ExpectedNextAuthorityCommit, $script:ExpectedMergedAuthorityCommit, $script:ExpectedSourceAuthorityCommit)) {
+            $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $driverCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit `
                 -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40) -ReturnSelection
             $selection.mode | Should -BeExactly 'core'
-            $selection.authorityRevision | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+            $selection.authorityRevision | Should -BeExactly $script:ExpectedSourceAuthorityCommit
         }
     }
 
@@ -1525,16 +1558,16 @@ function Test-CoreRunSelected {
             -ExpectedDriverSha ('b' * 40) -ActualDriverSha ('b' * 40) } | Should -Throw
         { Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority ('9' * 40) `
             -ExpectedDriverSha ('c' * 40) -ActualDriverSha ('c' * 40) } | Should -Throw
-        { Invoke-WorkflowSelectorFixture -DriverAuthority ('8' * 40) -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+        { Invoke-WorkflowSelectorFixture -DriverAuthority ('8' * 40) -CandidateAuthority $script:ExpectedSourceAuthorityCommit `
             -ExpectedDriverSha ('d' * 40) -ActualDriverSha ('d' * 40) } | Should -Throw
     }
 
-    # Scenario: the protected selector chooses 053 for an immutable candidate.
+    # Scenario: the protected selector chooses the accepted source authority for an immutable candidate.
     # Purpose: bind the authority checkout and report verifier to the exact same selector output.
     It 'UnitT35_binds_dynamic_core_checkout_and_report_to_one_selected_revision' {
-        $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+        $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedNextAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit `
             -ExpectedDriverSha ('e' * 40) -ActualDriverSha ('e' * 40) -ReturnSelection
-        $selection.authorityRevision | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+        $selection.authorityRevision | Should -BeExactly $script:ExpectedSourceAuthorityCommit
 
         $checkout = [regex]::Match($script:Workflow, '(?ms)^      - name: Checkout candidate-pinned authority for validation tests\r?\n(?<body>.*?)(?=^      - name: |\z)')
         $checkout.Success | Should -BeTrue
@@ -1545,6 +1578,7 @@ function Test-CoreRunSelected {
         $validateStep.Groups['body'].Value | Should -Match '(?m)^          APPROVED_AUTHORITY_REVISION: \$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}\r?$'
         $validateStep.Groups['body'].Value | Should -Match '\$Report\.authority\.revision\s+-cne\s+\$ExpectedAuthorityRevision'
         $validateStep.Groups['body'].Value | Should -Match 'Assert-CoreSourceCheckReport .*?-ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION'
+        $validateStep.Groups['body'].Value | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
         $validateStep.Groups['body'].Value | Should -Not -Match '\$report\.authority\.revision\s+-cne\s+''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
     }
 
@@ -1552,7 +1586,7 @@ function Test-CoreRunSelected {
     # Purpose: refuse the authority selection before trusting driver configuration or candidate pins.
     It 'UnitT36_rejects_a_driver_checkout_that_differs_from_the_exact_event_base' {
         (Get-FixtureExceptionMessage -Action {
-            Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority $script:ExpectedMergedAuthorityCommit `
+            Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedMergedAuthorityCommit -CandidateAuthority $script:ExpectedSourceAuthorityCommit `
                 -ExpectedDriverSha ('f' * 40) -ActualDriverSha ('0' * 40) -ReturnSelection
         }) | Should -Match 'exact event base SHA'
     }
@@ -1595,8 +1629,8 @@ function Test-CoreRunSelected {
             Should -Throw
     }
 
-    # Scenario: a complete trusted Core process/report binds exact candidate, authority and two successful repository checks.
-    # Purpose: exercise actual workflow acceptance offline while preserving false release eligibility and report bytes.
+    # Scenario: the preliminary Core report binds exact candidate, authority and two successful repository checks.
+    # Purpose: retain its structural gate; source CI also requires the separate full source gate before publication.
     It 'UnitT40_accepts_complete_exact_Core_source_report_without_mutation' {
      $f=New-CoreReportFixture
      $before=$f.report|ConvertTo-Json -Depth 100 -Compress

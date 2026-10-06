@@ -3,9 +3,9 @@
   "standardVersion": "v1",
   "authority": {
     "repository": "https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git",
-    "commit": "053b80143b5ef48b06a8c448d5ac1abaf9a49df8",
-    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/053b80143b5ef48b06a8c448d5ac1abaf9a49df8",
-    "archiveSha256": "cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9",
+    "commit": "d54ef2cc83a19fa58f62fdcc6fa290095355d03e",
+    "archiveUrl": "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/d54ef2cc83a19fa58f62fdcc6fa290095355d03e",
+    "archiveSha256": "03a865e164cf4875dc8e6a12ed10c698db9d6e83cf1d0b6adbfe4e53b2396763",
     "files": [
       {
         "path": "docs/standards/README.md",
@@ -37,7 +37,7 @@
       },
       {
         "path": "docs/standards/skill-repository-standard.md",
-        "sha256": "4eaf26afb98bbc42e9d1ddd51cf3d375958a37068998beda5c0f62471e64cbe9"
+        "sha256": "24a1223415cb3f72ea87b87fcd597bd3e2df32168e003690d695bccddc7b67b8"
       },
       {
         "path": "docs/standards/upstream-interoperability.md",
@@ -89,7 +89,7 @@
       },
       {
         "path": "scripts/Invoke-StandardValidation.ps1",
-        "sha256": "fd60e3f7552d5b4b1fc5837a195fb8f8abff8444e8c1a9ff621ea14cb575b525"
+        "sha256": "923cd136dec2624945f4440aa13a608d19baf3d0f5b8b286c7230fe3453bb37b"
       },
       {
         "path": "docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json",
@@ -110,6 +110,18 @@
       {
         "path": "scripts/Validate-UpstreamAdapter.ps1",
         "sha256": "3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b"
+      },
+      {
+        "path": "docs/standards/standard-core-validation-v2.json",
+        "sha256": "ade6b78ecc6e2fcfc5fd47cbe91e9e822182c7014501fb8a82be7c5e9f9a5c9e"
+      },
+      {
+        "path": "docs/standards/schemas/standard-core-adapter-v2.schema.json",
+        "sha256": "3e45c69ec64e6dc39dd39f1cb44c35bdcb7f04f8228b09c0a0f3dd32724fce6a"
+      },
+      {
+        "path": "docs/standards/schemas/standard-core-evidence-v2.schema.json",
+        "sha256": "340f5952a1bbfcb58301fd03cd111ca7de1f2092ff8de71ab6a7010cae4070e5"
       }
     ]
   }

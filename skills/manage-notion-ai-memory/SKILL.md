@@ -28,6 +28,16 @@ Treat the memory body and its formal source as factual authority. The index is n
 
 May read, create, or update safe individual records in the configured memory and inbox, maintain a configured index, and read an already indexed Dropbox file when permitted. For a legacy structured mapping without an index, retain its existing operation and report that index synchronization was not configured or performed; do not create an index or imply it was synchronized. Public sharing, permission changes, bulk operations, schema changes, migration, moving data outside the configured boundary, and Dropbox mutations need their own applicable authorization. Before creating, replacing, moving, or deleting a Dropbox file, get explicit confirmation. If a configured index write fails after the body is saved, preserve the body, report the exact incomplete index step and error, and resume by reading current state and repairing only the index.
 
+## Example: a confirmed project preference
+
+The user asks to remember that project `ABC` uses Traditional Chinese release notes. In the configured memory destination, look up the exact key and scope first. Save the confirmed preference only when absent or changed, then read back the body and update any configured index. If the connector or readback is unavailable, report the exact incomplete operation; do not claim durable saving or create a new destination.
+
+```text
+User: Remember that project ABC uses Traditional Chinese release notes.
+Memory Key: project:ABC:release-language
+Value: Traditional Chinese release notes (confirmed by user)
+```
+
 ## Errors
 
 For same-key writes, verify body absence with a bounded lookup/read of the configured destination; an INDEX miss does not prove absence. For replacement, keep the old body current until the new body is saved and read back as verified, then mark the old body Superseded. If creation or retirement is refused or ambiguous, read current state before retrying; preserve both bodies and report incomplete work when retirement fails.

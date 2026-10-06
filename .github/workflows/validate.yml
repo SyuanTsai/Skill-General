@@ -59,22 +59,20 @@ jobs:
           $pin = Get-Content -LiteralPath (Join-Path $driver 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
-          $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
-          $mergedAuthority = '053b80143b5ef48b06a8c448d5ac1abaf9a49df8'
-          $coreAuthorities = @($nextAuthority, $mergedAuthority)
-          if ([string]$candidatePin.authority.commit -cnotin $coreAuthorities) {
-            throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
+          $sourceAuthority = 'd54ef2cc83a19fa58f62fdcc6fa290095355d03e'
+          $coreAuthorities = @('ea1d368ac7b36f838ce4c3af363972c90fa12930', '053b80143b5ef48b06a8c448d5ac1abaf9a49df8', $sourceAuthority)
+          if ([string]$candidatePin.authority.commit -cne $sourceAuthority) {
+            throw 'Source validation cannot accept a Core-only candidate authority.'
           }
           $driverAuthority = [string]$pin.authority.commit
-          if ($driverAuthority -cin $coreAuthorities) {
-            if (-not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
-              throw 'Protected Core driver is missing the trusted Pester wrapper.'
-            }
-            $mode = 'core'
+          $driverText = Get-Content -LiteralPath (Join-Path $driver 'scripts/Validate.ps1') -Raw -Encoding utf8
+          $sourcePins = [regex]::Matches($driverText, '(?m)^\$script:SourceAuthorityCommit = ''(?<sha>[0-9a-f]{40})''\r?$')
+          if ($driverAuthority -cnotin $coreAuthorities -or $sourcePins.Count -ne 1 -or
+              $sourcePins[0].Groups['sha'].Value -cne $sourceAuthority -or
+              -not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
+            throw 'The exact protected driver is not prepared for the approved source authority.'
           }
-          else {
-            throw 'Protected driver has an unapproved Core authority pin.'
-          }
+          $mode = 'core'
           "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -248,6 +246,37 @@ jobs:
           }
           $receiptSha = (Get-FileHash -LiteralPath $receipt -Algorithm SHA256).Hash.ToLowerInvariant()
           "Pester setup receipt: $receipt (sha256 $receiptSha); observed archive SHA $($setupResult.observedArchiveSha256)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Prepare latest stable Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Prepare Node for the approved skill-tools package
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Explicitly acquire and freeze source tools
+        shell: pwsh
+        working-directory: driver
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
+          $setupRoot = Join-Path $env:RUN_OWNED_ROOT 't'
+          if (Test-Path -LiteralPath $setupRoot) { throw 'Source setup root already exists.' }
+          $preparedPath = Join-Path $setupRoot 'source-tools.json'
+          $driverArgs = @('-RepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'candidate'),
+            '-PrepareSourceTools', '-SourceToolsPath', $preparedPath, '-ArtifactsRoot', $setupRoot,
+            '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
+            '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME), '-TimeoutSeconds', '900')
+          pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
+          $setupExit = [int]$LASTEXITCODE
+          if ($setupExit -ne 0 -or -not (Test-Path -LiteralPath $preparedPath -PathType Leaf)) {
+            throw "Source tool setup failed with true exit $setupExit."
+          }
+          "SOURCE_TOOLS_PATH=$preparedPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Validate exact candidate with the verified runtime
         id: validate-candidate-report
@@ -433,6 +462,7 @@ jobs:
           New-Item -ItemType Directory -Path $artifactsRoot -ErrorAction Stop | Out-Null
           $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
           $driverArgs = @('-RepositoryRoot', $candidate,
+            '-SourceValidation', '-SourceToolsPath', $env:SOURCE_TOOLS_PATH,
             '-ArtifactsRoot', $artifactsRoot,
             '-BaseCommit', $baseCommit,
             '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
@@ -450,6 +480,19 @@ jobs:
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
           [void](Assert-CoreSourceCheckReport -Report $report -ProcessExitCode $validatorExitCode -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision $baseCommit -ExpectedAuthorityRevision $env:APPROVED_AUTHORITY_REVISION -ExpectedEventName $env:GITHUB_EVENT_NAME -ArtifactsRoot $artifactsRoot -OutputPath $outputPath)
+          & {
+            param($Runner, $SourceReport, $SourceSha, $BaseSha, $AuthoritySha, $Event,
+              $Candidate, $Prepared, $Artifacts, $Output, $ActualExit)
+            . $Runner -DefineFunctionsOnly -CandidateRoot $Candidate -AdapterPath $Prepared -ArtifactsRoot $Artifacts `
+              -SourceRepository 'https://github.com/SyuanTsai/Skill-General.git' -SourceRevision $SourceSha `
+              -BaseRevision $BaseSha -AuthorityRevision $AuthoritySha -EventName $Event -OutputPath $Output
+            [void](Assert-StandardCoreSourceCheckReport -Report $SourceReport -ExpectedSourceRevision $SourceSha `
+              -ExpectedBaseRevision $BaseSha -ExpectedAuthorityRevision $AuthoritySha -ExpectedEventName $Event `
+              -ArtifactsRoot $Artifacts -OutputPath $Output -ProcessExitCode $ActualExit)
+          } (Join-Path $env:GITHUB_WORKSPACE 'authority/scripts/Invoke-StandardValidation.ps1') $report `
+            $env:EXPECTED_SOURCE_SHA $baseCommit $env:APPROVED_AUTHORITY_REVISION $env:GITHUB_EVENT_NAME `
+            $candidate $env:SOURCE_TOOLS_PATH $artifactsRoot $outputPath $validatorExitCode
+
       - name: Preserve complete Core Pester case inventory
         id: preserve-core-pester-inventory
         if: ${{ always() && steps.authority-mode.outputs.validation_mode == 'core' }}
@@ -617,6 +660,27 @@ jobs:
             $summary = ($summaryLines -join "`n") + "`n"
             Add-VerifiedInventoryStatusToSummary -Text $summary
           }
+
+      - name: Preserve raw source validation evidence
+        if: ${{ always() && env.RUN_OWNED_ROOT != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: source-validation-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/*.json
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/raw/**
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/package-validation/event-*.json
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/skillspector-static/event-*.json
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/source-children/**
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/source-core-adapter.json
+            ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/repository-pester-case-inventory-v1.json
+            ${{ env.RUN_OWNED_ROOT }}/t/source-tools.json
+            ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/receipt-*.json
+            ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/setup-*-process.json
+            ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/toolchain.json
+            ${{ env.RUN_OWNED_ROOT }}/pester-setup/setup-receipt.json
 
       - name: Publish protected validation result
         id: canonical-source-report
