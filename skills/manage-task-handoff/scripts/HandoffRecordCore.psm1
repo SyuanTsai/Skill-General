@@ -55,6 +55,8 @@ function Test-HandoffIdentity {
     return ($null -eq $branch)
 }
 
+$script:HandoffOrderedHashtableType = 'System.Management.Automation.OrderedHashtable' -as [type]
+
 function Test-HandoffPlainData {
     param($Value, [int]$Depth = 0)
     if ($Depth -gt 16) { return $false }
@@ -63,7 +65,10 @@ function Test-HandoffPlainData {
         foreach ($item in $Value) { if (-not (Test-HandoffPlainData $item ($Depth + 1))) { return $false } }
         return $true
     }
-    if ($Value.GetType() -eq [hashtable] -or $Value.GetType() -eq [System.Collections.Specialized.OrderedDictionary]) {
+    $valueType = $Value.GetType()
+    if ($valueType -eq [hashtable] -or
+        $valueType -eq [System.Collections.Specialized.OrderedDictionary] -or
+        ($null -ne $script:HandoffOrderedHashtableType -and $valueType -eq $script:HandoffOrderedHashtableType)) {
         foreach ($key in $Value.Keys) {
             if ($key -isnot [string] -or -not (Test-HandoffPlainData $Value[$key] ($Depth + 1))) { return $false }
         }
@@ -422,4 +427,782 @@ function Invoke-HandoffRecordCore {
     return New-HandoffRecordResponse 'Accepted' $null $Record $events $callerOutcome $callerSnapshot
 }
 
-Export-ModuleMember -Function Invoke-HandoffRecordCore
+function Test-HandoffHasField {
+    param($Value, [string]$Name)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [System.Collections.IDictionary]) { return $Value.Contains($Name) }
+    return ($null -ne $Value.PSObject.Properties[$Name])
+}
+
+function Get-HandoffArchiveRecordProblem {
+    param($Record, [ValidateSet('Common','Branch')][string]$Kind)
+    if (-not (Test-HandoffPlainData $Record) -or
+        ($Record -isnot [System.Collections.IDictionary] -and $Record -isnot [pscustomobject])) {
+        return 'invalid-record-shape'
+    }
+    $required = if ($Kind -ceq 'Common') {
+        @('Authority Scope','Task Key','Intent','Scope','Current','Source','Lifecycle','Work State')
+    } else {
+        @('Authority Scope','Task Key','Branch ID','Fork Point','Continuation Generation','Current','Source','Lifecycle','Work State')
+    }
+    foreach ($field in $required) {
+        if (-not (Test-HandoffHasField $Record $field)) { return 'missing-required-field' }
+        $value = Get-HandoffField $Record $field
+        if ($null -eq $value -or ($value -is [string] -and [string]::IsNullOrWhiteSpace($value))) {
+            return 'missing-required-field'
+        }
+    }
+    $scope = Get-HandoffField $Record 'Authority Scope'
+    $task = Get-HandoffField $Record 'Task Key'
+    if ($scope -isnot [string] -or [string]::IsNullOrWhiteSpace($scope) -or
+        $task -isnot [string] -or [string]::IsNullOrWhiteSpace($task)) { return 'invalid-identity' }
+    $branchId = Get-HandoffField $Record 'Branch ID'
+    if (($Kind -ceq 'Branch' -and ($branchId -isnot [string] -or [string]::IsNullOrWhiteSpace($branchId))) -or
+        ($Kind -ceq 'Common' -and $null -ne $branchId)) {
+        return 'invalid-identity'
+    }
+    $revision = Get-HandoffField $Record 'Revision'
+    if ($revision -isnot [string] -or [string]::IsNullOrWhiteSpace($revision)) { return 'invalid-revision' }
+    $lifecycle = Get-HandoffField $Record 'Lifecycle'
+    if ($lifecycle -isnot [string] -or $lifecycle -cnotin @('Active','Archived')) { return 'invalid-lifecycle' }
+    $workState = Get-HandoffField $Record 'Work State'
+    if ($workState -isnot [string] -or
+        $workState -cnotin @('Running','Awaiting Review','Interrupted','Blocked','Failed')) { return 'invalid-work-state' }
+    if ($Kind -ceq 'Branch') {
+        $generation = Get-HandoffField $Record 'Continuation Generation'
+        if (($generation -isnot [int] -and $generation -isnot [long]) -or $generation -lt 0) {
+            return 'invalid-generation'
+        }
+    }
+    return $null
+}
+
+function Get-HandoffArchiveParsedTime {
+    param($Value, [switch]$AllowDateOnly)
+    if ($Value -isnot [string] -or [string]::IsNullOrWhiteSpace($Value)) {
+        return [pscustomobject]@{ Valid = $false; Value = $null }
+    }
+    if ($AllowDateOnly -and $Value -cmatch '^\d{4}-\d{2}-\d{2}$') {
+        $date = [datetime]::MinValue
+        if ([datetime]::TryParseExact($Value, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]$date)) {
+            $endOfDay = if ($date.Date -eq [datetime]::MaxValue.Date) {
+                [datetime]::MaxValue
+            } else {
+                $date.Date.AddDays(1).AddTicks(-1)
+            }
+            return [pscustomobject]@{ Valid = $true; Value = [DateTimeOffset]::new($endOfDay, [TimeSpan]::Zero) }
+        }
+        return [pscustomobject]@{ Valid = $false; Value = $null }
+    }
+    if ($Value -cnotmatch '(?:Z|[+-]\d{2}:\d{2})$') {
+        return [pscustomobject]@{ Valid = $false; Value = $null }
+    }
+    $parsed = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($Value, [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+        return [pscustomobject]@{ Valid = $false; Value = $null }
+    }
+    return [pscustomobject]@{ Valid = $true; Value = $parsed }
+}
+
+function Get-HandoffArchiveTimeProblem {
+    param($Record, [DateTimeOffset]$Now)
+    $activity = Get-HandoffArchiveParsedTime (Get-HandoffField $Record 'Last Activity At')
+    if (-not $activity.Valid) { return 'invalid-last-activity' }
+    if ($activity.Value -gt $Now) { return 'future-last-activity' }
+    $keepUntil = Get-HandoffField $Record 'Keep Active Until'
+    if ($null -ne $keepUntil) {
+        $keep = Get-HandoffArchiveParsedTime $keepUntil -AllowDateOnly
+        if (-not $keep.Valid) { return 'invalid-keep-active-until' }
+        if ($keep.Value -gt $Now) { return 'future-keep-active-until' }
+    }
+    if (($Now - $activity.Value) -lt [TimeSpan]::FromDays(7)) {
+        return 'inactivity-period-not-reached'
+    }
+    return $null
+}
+
+function Get-HandoffArchiveActiveIndex {
+    param($Common)
+    $index = Get-HandoffField $Common 'Active Branches'
+    if (-not (Test-HandoffHasField $Common 'Active Branches') -or $null -eq $index) {
+        return [pscustomobject]@{ Valid = $false; Ids = [string[]]@(); Reason = 'invalid-active-branch-index' }
+    }
+    if ($index -isnot [array]) { return [pscustomobject]@{ Valid = $false; Ids = [string[]]@(); Reason = 'invalid-active-branch-index' } }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $ids = [System.Collections.Generic.List[string]]::new()
+    foreach ($branchId in $index) {
+        if ($branchId -isnot [string] -or [string]::IsNullOrWhiteSpace($branchId) -or -not $seen.Add($branchId)) {
+            return [pscustomobject]@{ Valid = $false; Ids = [string[]]@(); Reason = 'invalid-active-branch-index' }
+        }
+        $ids.Add($branchId)
+    }
+    return [pscustomobject]@{ Valid = $true; Ids = [string[]]$ids.ToArray(); Reason = $null }
+}
+
+function Get-HandoffArchiveReviewedBranchContentSha256 {
+    param($Branch)
+    try {
+        $entries = @(Get-HandoffMapEntries $Branch)
+        $names = [string[]]@($entries | ForEach-Object { [string]$_.Name } |
+            Where-Object { $_ -cnotin @('Lifecycle','Branch Outcome','Last Activity At','Revision') })
+        [Array]::Sort($names, [StringComparer]::Ordinal)
+        $fields = [ordered]@{}
+        foreach ($name in $names) {
+            $match = @($entries | Where-Object { [string]::Equals($_.Name, $name, [StringComparison]::Ordinal) })
+            if ($match.Count -ne 1) { return $null }
+            $fields[$name] = $match[0].Data
+        }
+        $identity = [ordered]@{
+            taskKey = [string](Get-HandoffField $Branch 'Task Key')
+            branchId = [string](Get-HandoffField $Branch 'Branch ID')
+            forkPoint = [string](Get-HandoffField $Branch 'Fork Point')
+            fields = $fields
+        }
+        $json = ConvertTo-Json -InputObject $identity -Compress -Depth 50
+        $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { return [Convert]::ToHexString($sha.ComputeHash($strictUtf8.GetBytes($json))).ToLowerInvariant() }
+        finally { $sha.Dispose() }
+    } catch {
+        return $null
+    }
+}
+
+function Get-HandoffArchiveDecisionBindingProblem {
+    param($Common, $Branch)
+    $branchId = [string](Get-HandoffField $Branch 'Branch ID')
+    $bindings = Get-HandoffField $Common 'Decision Branch Bindings'
+    if ($bindings -isnot [array]) { return 'decision-binding-missing' }
+    $matches = @($bindings | Where-Object {
+        [string](Get-HandoffField $_ 'branchId') -ceq $branchId
+    })
+    if ($matches.Count -ne 1) { return 'decision-binding-missing' }
+    $binding = $matches[0]
+    $entries = @(Get-HandoffMapEntries $binding)
+    $required = @('branchId','reviewedRevision','reviewedContentSha256','continuationGeneration','outcome')
+    if (($binding -isnot [System.Collections.IDictionary] -and $binding -isnot [pscustomobject]) -or
+        $entries.Count -ne $required.Count -or
+        @($entries | Where-Object { $_.Name -cnotin $required }).Count -gt 0) { return 'invalid-decision-binding' }
+    foreach ($name in $required) {
+        if (@($entries | Where-Object Name -ceq $name).Count -ne 1) { return 'invalid-decision-binding' }
+    }
+    if ((Get-HandoffField $binding 'branchId') -isnot [string] -or
+        (Get-HandoffField $binding 'branchId') -cne $branchId -or
+        (Get-HandoffField $binding 'reviewedRevision') -isnot [string] -or
+        [string]::IsNullOrWhiteSpace([string](Get-HandoffField $binding 'reviewedRevision')) -or
+        (Get-HandoffField $binding 'reviewedContentSha256') -isnot [string] -or
+        [string](Get-HandoffField $binding 'reviewedContentSha256') -cnotmatch '^[0-9a-fA-F]{64}$' -or
+        (Get-HandoffField $binding 'outcome') -isnot [string] -or
+        (Get-HandoffField $binding 'outcome') -cnotin @('Selected','Partially Selected','Superseded')) {
+        return 'invalid-decision-binding'
+    }
+    if ((Get-HandoffField $binding 'reviewedRevision') -cne (Get-HandoffField $Branch 'Revision')) {
+        return 'decision-revision-mismatch'
+    }
+    $boundGeneration = Get-HandoffField $binding 'continuationGeneration'
+    $generation = Get-HandoffField $Branch 'Continuation Generation'
+    if (($boundGeneration -isnot [int] -and $boundGeneration -isnot [long]) -or
+        $boundGeneration -lt 0 -or $boundGeneration -ne $generation) { return 'decision-generation-mismatch' }
+    $outcome = Get-HandoffField $Branch 'Branch Outcome'
+    if ($outcome -isnot [string] -or $outcome -cne (Get-HandoffField $binding 'outcome')) {
+        return 'decision-outcome-mismatch'
+    }
+    $actualIdentity = Get-HandoffArchiveReviewedBranchContentSha256 $Branch
+    if ($null -eq $actualIdentity -or
+        $actualIdentity -cne ([string](Get-HandoffField $binding 'reviewedContentSha256')).ToLowerInvariant()) {
+        return 'decision-content-mismatch'
+    }
+    return $null
+}
+
+function New-HandoffArchiveDecision {
+    param($Record, [string]$Kind, [string]$Reason, $Parent)
+    $generation = if ($Kind -ceq 'Branch') { Get-HandoffField $Record 'Continuation Generation' } else { $null }
+    $parentRevision = if ($Kind -ceq 'Branch' -and $null -ne $Parent) { Get-HandoffField $Parent 'Revision' } else { $null }
+    return [pscustomobject]@{
+        Kind = $Kind
+        AuthorityScope = Get-HandoffField $Record 'Authority Scope'
+        TaskKey = Get-HandoffField $Record 'Task Key'
+        BranchId = Get-HandoffField $Record 'Branch ID'
+        Revision = Get-HandoffField $Record 'Revision'
+        ParentRevision = $parentRevision
+        ContinuationGeneration = $generation
+        BranchOutcome = Get-HandoffField $Record 'Branch Outcome'
+        Reason = $Reason
+    }
+}
+
+function Get-HandoffArchiveSelection {
+    [CmdletBinding()]
+    param(
+        [object[]]$CommonRecords = @(),
+        [object[]]$BranchRecords = @(),
+        [Parameter(Mandatory)][scriptblock]$Clock,
+        [Parameter(Mandatory)][bool]$InventoryComplete
+    )
+
+    $now = $null
+    try {
+        $clockValues = @(& $Clock 2>$null)
+        if ($clockValues.Count -eq 1 -and $clockValues[0] -is [DateTimeOffset]) {
+            $now = $clockValues[0].ToUniversalTime()
+        }
+    } catch { }
+    $selected = [System.Collections.Generic.List[object]]::new()
+    $protected = [System.Collections.Generic.List[object]]::new()
+    foreach ($common in $CommonRecords) {
+        $reason = if ($null -eq $now) { 'invalid-clock' }
+            elseif (-not $InventoryComplete) { 'inventory-incomplete' }
+            else { Get-HandoffArchiveRecordProblem $common 'Common' }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $scope = Get-HandoffField $common 'Authority Scope'
+            $task = Get-HandoffField $common 'Task Key'
+            $duplicates = @($CommonRecords | Where-Object {
+                [string](Get-HandoffField $_ 'Authority Scope') -ceq $scope -and
+                [string](Get-HandoffField $_ 'Task Key') -ceq $task
+            })
+            if ($duplicates.Count -ne 1) { $reason = 'duplicate-common-identity' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            if ((Get-HandoffField $common 'Lifecycle') -ceq 'Archived') { $reason = 'already-archived' }
+            elseif ((Get-HandoffField $common 'Work State') -cin @('Running','Blocked')) { $reason = 'active-work' }
+            elseif ((Get-HandoffField $common 'Conflict') -ceq 'Conflict') { $reason = 'unresolved-conflict' }
+            elseif ($null -ne (Get-HandoffField $common 'Conflict')) { $reason = 'invalid-conflict-state' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $index = Get-HandoffArchiveActiveIndex $common
+            if (-not $index.Valid) { $reason = $index.Reason }
+            elseif ($index.Ids.Count -gt 0) { $reason = 'active-branch-index' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $scope = Get-HandoffField $common 'Authority Scope'
+            $task = Get-HandoffField $common 'Task Key'
+            $livePeers = @($BranchRecords | Where-Object {
+                [string](Get-HandoffField $_ 'Authority Scope') -ceq $scope -and
+                [string](Get-HandoffField $_ 'Task Key') -ceq $task -and
+                (Get-HandoffField $_ 'Lifecycle') -cne 'Archived'
+            })
+            if ($livePeers.Count -gt 0) { $reason = 'active-branch-missing-from-index' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $reason = Get-HandoffArchiveTimeProblem $common $now
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $selected.Add((New-HandoffArchiveDecision $common 'Common' 'inactivity-expired' $null))
+        } else {
+            $protected.Add((New-HandoffArchiveDecision $common 'Common' $reason $null))
+        }
+    }
+
+    foreach ($branch in $BranchRecords) {
+        $reason = if ($null -eq $now) { 'invalid-clock' }
+            elseif (-not $InventoryComplete) { 'inventory-incomplete' }
+            else { Get-HandoffArchiveRecordProblem $branch 'Branch' }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $scope = Get-HandoffField $branch 'Authority Scope'
+            $task = Get-HandoffField $branch 'Task Key'
+            $branchId = Get-HandoffField $branch 'Branch ID'
+            $duplicates = @($BranchRecords | Where-Object {
+                [string](Get-HandoffField $_ 'Authority Scope') -ceq $scope -and
+                [string](Get-HandoffField $_ 'Task Key') -ceq $task -and
+                [string](Get-HandoffField $_ 'Branch ID') -ceq $branchId
+            })
+            if ($duplicates.Count -ne 1) { $reason = 'duplicate-branch-identity' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            if ((Get-HandoffField $branch 'Lifecycle') -ceq 'Archived') { $reason = 'already-archived' }
+            elseif ((Get-HandoffField $branch 'Work State') -cin @('Running','Blocked')) { $reason = 'active-work' }
+        }
+        $parent = $null
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $scope = Get-HandoffField $branch 'Authority Scope'
+            $task = Get-HandoffField $branch 'Task Key'
+            $parents = @($CommonRecords | Where-Object {
+                [string](Get-HandoffField $_ 'Authority Scope') -ceq $scope -and
+                [string](Get-HandoffField $_ 'Task Key') -ceq $task
+            })
+            if ($parents.Count -ne 1) { $reason = 'missing-or-ambiguous-common' }
+            else { $parent = $parents[0] }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $parentProblem = Get-HandoffArchiveRecordProblem $parent 'Common'
+            if (-not [string]::IsNullOrWhiteSpace($parentProblem)) { $reason = 'invalid-common-parent' }
+            elseif ((Get-HandoffField $parent 'Lifecycle') -cne 'Active') { $reason = 'common-not-active' }
+            elseif ((Get-HandoffField $parent 'Work State') -cin @('Running','Blocked')) { $reason = 'common-active-work' }
+            elseif ((Get-HandoffField $parent 'Conflict') -ceq 'Conflict') { $reason = 'common-unresolved-conflict' }
+            elseif ($null -ne (Get-HandoffField $parent 'Conflict')) { $reason = 'common-invalid-conflict-state' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $index = Get-HandoffArchiveActiveIndex $parent
+            if (-not $index.Valid) { $reason = 'invalid-common-index' }
+            elseif ($index.Ids -cnotcontains [string](Get-HandoffField $branch 'Branch ID')) { $reason = 'branch-not-indexed' }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $parentTimeProblem = Get-HandoffArchiveTimeProblem $parent $now
+            if ($parentTimeProblem -cin @('future-keep-active-until','invalid-keep-active-until')) {
+                $reason = "common-$parentTimeProblem"
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $reason = Get-HandoffArchiveDecisionBindingProblem $parent $branch
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $reason = Get-HandoffArchiveTimeProblem $branch $now
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            $selected.Add((New-HandoffArchiveDecision $branch 'Branch' 'inactivity-expired' $parent))
+        } else {
+            $protected.Add((New-HandoffArchiveDecision $branch 'Branch' $reason $parent))
+        }
+    }
+    return [pscustomobject]@{
+        AsOfUtc = $now
+        ClockValid = ($null -ne $now)
+        Selected = [object[]]$selected.ToArray()
+        Protected = [object[]]$protected.ToArray()
+        Durable = $false
+    }
+}
+
+function New-HandoffArchiveCycleCursor {
+    param($Decision)
+    return [pscustomobject]@{
+        Kind = Get-HandoffField $Decision 'Kind'
+        AuthorityScope = Get-HandoffField $Decision 'AuthorityScope'
+        TaskKey = Get-HandoffField $Decision 'TaskKey'
+        BranchId = Get-HandoffField $Decision 'BranchId'
+        Revision = Get-HandoffField $Decision 'Revision'
+        ParentRevision = Get-HandoffField $Decision 'ParentRevision'
+        ContinuationGeneration = Get-HandoffField $Decision 'ContinuationGeneration'
+        BranchOutcome = Get-HandoffField $Decision 'BranchOutcome'
+    }
+}
+
+function Get-HandoffArchiveCycleOperationId {
+    param([string]$CycleOperationId, $Cursor)
+    $identity = [ordered]@{ CycleOperationId = $CycleOperationId; Cursor = $Cursor }
+    $json = ConvertTo-Json -InputObject $identity -Compress -Depth 8
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($json))).ToLowerInvariant()
+    } finally { $sha.Dispose() }
+    return "${CycleOperationId}:archive:${digest}"
+}
+
+function Test-HandoffArchiveCycleCallerResult {
+    param($CallerResult, [string]$OperationId)
+    if (($CallerResult -isnot [System.Collections.IDictionary] -and $CallerResult -isnot [pscustomobject]) -or
+        -not (Test-HandoffPlainData $CallerResult) -or
+        -not (Test-HandoffCallerResult -Value $CallerResult -OperationId $OperationId)) { return $false }
+    $fields = @('SchemaVersion','Operation','OperationId','Status','Capability','Identity','Permission',
+        'AdapterVersion','Revision','Readback','ReadbackRevision','Retryable','PendingActions')
+    $entries = @(Get-HandoffMapEntries $CallerResult)
+    if ($entries.Count -ne $fields.Count) { return $false }
+    foreach ($field in $fields) {
+        if (@($entries | Where-Object Name -ceq $field).Count -ne 1) { return $false }
+    }
+    return $true
+}
+
+function Test-HandoffArchiveCycleSourceResult {
+    param($SourceResult, $PendingAction)
+    if (($SourceResult -isnot [System.Collections.IDictionary] -and $SourceResult -isnot [pscustomobject]) -or
+        -not (Test-HandoffPlainData $SourceResult)) { return $false }
+    $fields = @('Decision','Cursor','OperationId','CallerResult')
+    $entries = @(Get-HandoffMapEntries $SourceResult)
+    if ($entries.Count -ne $fields.Count) { return $false }
+    foreach ($field in $fields) {
+        if (@($entries | Where-Object Name -ceq $field).Count -ne 1) { return $false }
+    }
+    if (-not (Test-HandoffArchiveCycleDecision (Get-HandoffField $SourceResult 'Decision')) -or
+        -not (Test-HandoffArchiveCycleCursor (Get-HandoffField $SourceResult 'Cursor'))) { return $false }
+    $operationId = Get-HandoffField $SourceResult 'OperationId'
+    if ($operationId -isnot [string] -or [string]::IsNullOrWhiteSpace($operationId) -or
+        -not (Test-HandoffArchiveCycleDecisionCursorEqual -LeftDecision (Get-HandoffField $SourceResult 'Decision') -LeftCursor (Get-HandoffField $SourceResult 'Cursor') -RightDecision (Get-HandoffField $PendingAction 'Decision') -RightCursor (Get-HandoffField $PendingAction 'Cursor')) -or
+        -not [StringComparer]::Ordinal.Equals($operationId,[string](Get-HandoffField $PendingAction 'OperationId'))) {
+        return $false
+    }
+    return (Test-HandoffArchiveCycleCallerResult -CallerResult (Get-HandoffField $SourceResult 'CallerResult') -OperationId $operationId)
+}
+
+function Test-HandoffArchiveCycleDecision {
+    param($Decision)
+    if (($Decision -isnot [System.Collections.IDictionary] -and $Decision -isnot [pscustomobject]) -or
+        -not (Test-HandoffPlainData $Decision)) { return $false }
+    $fields = @('Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision',
+        'ContinuationGeneration','BranchOutcome','Reason')
+    $entries = @(Get-HandoffMapEntries $Decision)
+    if ($entries.Count -ne $fields.Count) { return $false }
+    foreach ($field in $fields) {
+        if (@($entries | Where-Object Name -ceq $field).Count -ne 1) { return $false }
+    }
+    $kind = Get-HandoffField $Decision 'Kind'
+    $scope = Get-HandoffField $Decision 'AuthorityScope'
+    $task = Get-HandoffField $Decision 'TaskKey'
+    $revision = Get-HandoffField $Decision 'Revision'
+    $reason = Get-HandoffField $Decision 'Reason'
+    if ($kind -isnot [string] -or $kind -cnotin @('Common','Branch') -or
+        $scope -isnot [string] -or [string]::IsNullOrWhiteSpace($scope) -or
+        $task -isnot [string] -or [string]::IsNullOrWhiteSpace($task) -or
+        $revision -isnot [string] -or [string]::IsNullOrWhiteSpace($revision) -or
+        $reason -isnot [string] -or $reason -cne 'inactivity-expired') { return $false }
+    if ($kind -ceq 'Common') {
+        return ($null -eq (Get-HandoffField $Decision 'BranchId') -and
+            $null -eq (Get-HandoffField $Decision 'ParentRevision') -and
+            $null -eq (Get-HandoffField $Decision 'ContinuationGeneration') -and
+            $null -eq (Get-HandoffField $Decision 'BranchOutcome'))
+    }
+    $branchId = Get-HandoffField $Decision 'BranchId'
+    $parentRevision = Get-HandoffField $Decision 'ParentRevision'
+    $generation = Get-HandoffField $Decision 'ContinuationGeneration'
+    $outcome = Get-HandoffField $Decision 'BranchOutcome'
+    return ($branchId -is [string] -and -not [string]::IsNullOrWhiteSpace($branchId) -and
+        $parentRevision -is [string] -and -not [string]::IsNullOrWhiteSpace($parentRevision) -and
+        ($generation -is [int] -or $generation -is [long]) -and $generation -ge 0 -and
+        $outcome -is [string] -and $outcome -cin @('Selected','Partially Selected','Superseded'))
+}
+
+function Test-HandoffArchiveCycleCursor {
+    param($Cursor)
+    if (($Cursor -isnot [System.Collections.IDictionary] -and $Cursor -isnot [pscustomobject]) -or
+        -not (Test-HandoffPlainData $Cursor)) { return $false }
+    $fields = @('Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision','ContinuationGeneration','BranchOutcome')
+    $entries = @(Get-HandoffMapEntries $Cursor)
+    if ($entries.Count -ne $fields.Count) { return $false }
+    foreach ($field in $fields) {
+        if (@($entries | Where-Object Name -ceq $field).Count -ne 1) { return $false }
+    }
+    $kind = Get-HandoffField $Cursor 'Kind'
+    $scope = Get-HandoffField $Cursor 'AuthorityScope'
+    $task = Get-HandoffField $Cursor 'TaskKey'
+    $revision = Get-HandoffField $Cursor 'Revision'
+    if ($kind -isnot [string] -or $kind -cnotin @('Common','Branch') -or
+        $scope -isnot [string] -or [string]::IsNullOrWhiteSpace($scope) -or
+        $task -isnot [string] -or [string]::IsNullOrWhiteSpace($task) -or
+        $revision -isnot [string] -or [string]::IsNullOrWhiteSpace($revision)) { return $false }
+    if ($kind -ceq 'Common') {
+        return ($null -eq (Get-HandoffField $Cursor 'BranchId') -and
+            $null -eq (Get-HandoffField $Cursor 'ParentRevision') -and
+            $null -eq (Get-HandoffField $Cursor 'ContinuationGeneration') -and
+            $null -eq (Get-HandoffField $Cursor 'BranchOutcome'))
+    }
+    $branchId = Get-HandoffField $Cursor 'BranchId'
+    $parentRevision = Get-HandoffField $Cursor 'ParentRevision'
+    $generation = Get-HandoffField $Cursor 'ContinuationGeneration'
+    $outcome = Get-HandoffField $Cursor 'BranchOutcome'
+    return ($branchId -is [string] -and -not [string]::IsNullOrWhiteSpace($branchId) -and
+        $parentRevision -is [string] -and -not [string]::IsNullOrWhiteSpace($parentRevision) -and
+        ($generation -is [int] -or $generation -is [long]) -and $generation -ge 0 -and
+        $outcome -is [string] -and $outcome -cin @('Selected','Partially Selected','Superseded'))
+}
+
+function Test-HandoffArchiveCyclePendingAction {
+    param($PendingAction)
+    if (($PendingAction -isnot [System.Collections.IDictionary] -and $PendingAction -isnot [pscustomobject]) -or
+        -not (Test-HandoffPlainData $PendingAction)) { return $false }
+    $decision = Get-HandoffField $PendingAction 'Decision'
+    $cursor = Get-HandoffField $PendingAction 'Cursor'
+    $operationId = Get-HandoffField $PendingAction 'OperationId'
+    if (-not (Test-HandoffArchiveCycleDecision $decision) -or
+        -not (Test-HandoffArchiveCycleCursor $cursor) -or
+        $operationId -isnot [string] -or [string]::IsNullOrWhiteSpace($operationId)) {
+        return $false
+    }
+    $kind = Get-HandoffField $decision 'Kind'
+    $scope = Get-HandoffField $decision 'AuthorityScope'
+    $task = Get-HandoffField $decision 'TaskKey'
+    $revision = Get-HandoffField $decision 'Revision'
+    $reason = Get-HandoffField $decision 'Reason'
+    if ($kind -cne (Get-HandoffField $cursor 'Kind') -or
+        $scope -cne (Get-HandoffField $cursor 'AuthorityScope') -or
+        $task -cne (Get-HandoffField $cursor 'TaskKey') -or
+        $revision -cne (Get-HandoffField $cursor 'Revision')) { return $false }
+    $expected = New-HandoffArchiveCycleCursor $decision
+    foreach ($field in @('Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision','ContinuationGeneration','BranchOutcome')) {
+        if ((Get-HandoffField $cursor $field) -cne (Get-HandoffField $expected $field)) { return $false }
+    }
+    $separator = $operationId.LastIndexOf(':archive:', [StringComparison]::Ordinal)
+    if ($separator -le 0) { return $false }
+    $cycleOperationId = $operationId.Substring(0, $separator)
+    $digest = $operationId.Substring($separator + ':archive:'.Length)
+    if ($digest -cnotmatch '\A[0-9a-f]{64}\z') { return $false }
+    $expectedOperationId = Get-HandoffArchiveCycleOperationId -CycleOperationId $cycleOperationId -Cursor $cursor
+    if ($operationId -cne $expectedOperationId) { return $false }
+    $callerResult = Get-HandoffField $PendingAction 'CallerResult'
+    if ($null -ne $callerResult -and
+        -not (Test-HandoffArchiveCycleCallerResult -CallerResult $callerResult -OperationId $operationId)) { return $false }
+    return $true
+}
+
+function Get-HandoffArchiveCycleIdentityKey {
+    param($Decision, [switch]$TaskOnly)
+    $fields = if ($TaskOnly) { @('AuthorityScope','TaskKey') } else { @('Kind','AuthorityScope','TaskKey') }
+    if (-not $TaskOnly -and (Get-HandoffField $Decision 'Kind') -ceq 'Branch') { $fields += 'BranchId' }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($field in $fields) {
+        $value = Get-HandoffField $Decision $field
+        $text = if ($null -eq $value) { '' } else { [string]$value }
+        $parts.Add(('{0}:{1}' -f $text.Length,$text))
+    }
+    return [string]::Join('|',$parts.ToArray())
+}
+
+function Test-HandoffArchiveCycleValueEqual {
+    param($Left, $Right)
+    if ($Left -is [int] -or $Left -is [long]) {
+        if ($Right -isnot [int] -and $Right -isnot [long]) { return $false }
+        return ([long]$Left -eq [long]$Right)
+    }
+    return [object]::Equals($Left,$Right)
+}
+
+function Test-HandoffArchiveCycleDecisionCursorEqual {
+    param($LeftDecision, $LeftCursor, $RightDecision, $RightCursor)
+    foreach ($field in @('Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision','ContinuationGeneration','BranchOutcome','Reason')) {
+        $leftValue = Get-HandoffField $LeftDecision $field
+        $rightValue = Get-HandoffField $RightDecision $field
+        if (-not (Test-HandoffArchiveCycleValueEqual $leftValue $rightValue)) { return $false }
+    }
+    foreach ($field in @('Kind','AuthorityScope','TaskKey','BranchId','Revision','ParentRevision','ContinuationGeneration','BranchOutcome')) {
+        $leftValue = Get-HandoffField $LeftCursor $field
+        $rightValue = Get-HandoffField $RightCursor $field
+        if (-not (Test-HandoffArchiveCycleValueEqual $leftValue $rightValue)) { return $false }
+    }
+    return $true
+}
+
+function Test-HandoffArchiveCyclePendingActionEqual {
+    param($Left, $Right)
+    if (-not (Test-HandoffArchiveCycleDecisionCursorEqual -LeftDecision (Get-HandoffField $Left 'Decision') -LeftCursor (Get-HandoffField $Left 'Cursor') -RightDecision (Get-HandoffField $Right 'Decision') -RightCursor (Get-HandoffField $Right 'Cursor'))) {
+        return $false
+    }
+    $leftOperationId = Get-HandoffField $Left 'OperationId'
+    $rightOperationId = Get-HandoffField $Right 'OperationId'
+    return [StringComparer]::Ordinal.Equals([string]$leftOperationId,[string]$rightOperationId)
+}
+
+function Copy-HandoffArchiveCyclePlainShape {
+    param($Value)
+    $snapshot = [ordered]@{}
+    foreach ($entry in @(Get-HandoffMapEntries $Value)) {
+        # Validated Decision and Cursor schemas contain scalar fields only.
+        $snapshot[$entry.Name] = $entry.Data
+    }
+    return [pscustomobject]$snapshot
+}
+
+function New-HandoffArchiveCycleResult {
+    param($AsOfUtc, [bool]$ClockValid, [string]$GateReason, $Selected, $Protected, $Completed, $Pending)
+    $sourceCompleted = [object[]]$Completed.ToArray()
+    return [pscustomobject]@{
+        AsOfUtc = $AsOfUtc; ClockValid = $ClockValid; GateReason = $GateReason
+        Selected = [object[]]$Selected.ToArray(); Protected = [object[]]$Protected.ToArray()
+        Completed = $sourceCompleted; SourceReportedCompleted = $sourceCompleted
+        Pending = [object[]]$Pending.ToArray(); Durable = $false
+        SourceReportedDurable = ($Selected.Count -gt 0 -and $sourceCompleted.Count -eq $Selected.Count -and $Pending.Count -eq 0)
+    }
+}
+
+function Invoke-HandoffArchiveCycle {
+    [CmdletBinding()]
+    param(
+        [object[]]$CommonRecords = @(),
+        [object[]]$BranchRecords = @(),
+        [Parameter(Mandatory)][scriptblock]$Clock,
+        [Parameter(Mandatory)][bool]$InventoryComplete,
+        [Parameter(Mandatory)][bool]$CandidateBatchAuthorized,
+        [object[]]$PendingActions = @(),
+        [object[]]$SourceResults = @(),
+        [string]$OperationId,
+        [scriptblock]$ArchiveAction
+    )
+
+    $selected = [System.Collections.Generic.List[object]]::new()
+    $protected = [System.Collections.Generic.List[object]]::new()
+    $completed = [System.Collections.Generic.List[object]]::new()
+    $pending = [System.Collections.Generic.List[object]]::new()
+    $actions = [System.Collections.Generic.List[object]]::new()
+    $pendingByRecordIdentity = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    $pendingTaskIdentities = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $queuedTaskIdentities = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $sourceResultsByRecordIdentity = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    $asOfUtc = $null
+    $clockValid = $false
+    $gateReason = $null
+    $freshCandidatesDeferred = $false
+    $sameTaskDeferred = $false
+    $cycleOperationId = $OperationId
+
+    if (-not $CandidateBatchAuthorized) { $gateReason = 'candidate-batch-unauthorized' }
+    elseif (-not $InventoryComplete) { $gateReason = 'inventory-incomplete' }
+    if ($null -ne $gateReason) {
+        foreach ($item in $PendingActions) { $pending.Add($item) }
+        return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+    }
+
+    if ($PendingActions.Count -gt 0) {
+        foreach ($item in $PendingActions) {
+            if (-not (Test-HandoffArchiveCyclePendingAction $item)) {
+                foreach ($saved in $PendingActions) { $pending.Add($saved) }
+                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-pending-action' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+            }
+            $decision = Get-HandoffField $item 'Decision'
+            $recordIdentity = Get-HandoffArchiveCycleIdentityKey $decision
+            if ($pendingByRecordIdentity.ContainsKey($recordIdentity)) {
+                if (-not (Test-HandoffArchiveCyclePendingActionEqual $pendingByRecordIdentity[$recordIdentity] $item)) {
+                    foreach ($saved in $PendingActions) { $pending.Add($saved) }
+                    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+                }
+                continue
+            }
+            $taskIdentity = Get-HandoffArchiveCycleIdentityKey $decision -TaskOnly
+            if ($pendingTaskIdentities.Contains($taskIdentity)) {
+                foreach ($saved in $PendingActions) { $pending.Add($saved) }
+                return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'conflicting-pending-actions' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+            }
+            $pendingByRecordIdentity.Add($recordIdentity,$item)
+            [void]$pendingTaskIdentities.Add($taskIdentity)
+            $selected.Add($decision)
+        }
+    }
+
+    foreach ($sourceResult in $SourceResults) {
+        $matchedIdentity = $null
+        $matchedPending = $null
+        foreach ($entry in $pendingByRecordIdentity.GetEnumerator()) {
+            if (Test-HandoffArchiveCycleSourceResult -SourceResult $sourceResult -PendingAction $entry.Value) {
+                if ($null -ne $matchedPending) {
+                    $matchedPending = $null
+                    break
+                }
+                $matchedIdentity = $entry.Key
+                $matchedPending = $entry.Value
+            }
+        }
+        if ($null -eq $matchedPending -or $sourceResultsByRecordIdentity.ContainsKey($matchedIdentity)) {
+            foreach ($saved in $PendingActions) { $pending.Add($saved) }
+            return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason 'invalid-source-result' -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+        }
+        $sourceResultsByRecordIdentity.Add($matchedIdentity,$sourceResult)
+    }
+
+    foreach ($entry in $pendingByRecordIdentity.GetEnumerator()) {
+        $item = $entry.Value
+        if (-not $sourceResultsByRecordIdentity.ContainsKey($entry.Key)) {
+            $pending.Add($item)
+            continue
+        }
+        $sourceResult = $sourceResultsByRecordIdentity[$entry.Key]
+        $callerResult = Copy-HandoffCallerResult (Get-HandoffField $sourceResult 'CallerResult')
+        if ([string](Get-HandoffField $callerResult 'Status') -ceq 'readback-matched') {
+            $completed.Add([pscustomobject]@{
+                Decision = Get-HandoffField $item 'Decision'; Cursor = Get-HandoffField $item 'Cursor'
+                OperationId = Get-HandoffField $item 'OperationId'; CallerResult = $callerResult
+                SourceReportedDurable = $true
+            })
+        } else {
+            $status = [string](Get-HandoffField $callerResult 'Status')
+            $pending.Add([pscustomobject]@{
+                Decision = Get-HandoffField $item 'Decision'; Cursor = Get-HandoffField $item 'Cursor'
+                OperationId = Get-HandoffField $item 'OperationId'; CallerResult = $callerResult
+                Reason = "source-$status"
+            })
+        }
+    }
+
+    $hasFreshCandidates = $CommonRecords.Count -gt 0 -or $BranchRecords.Count -gt 0
+    if ($PendingActions.Count -eq 0 -or $hasFreshCandidates) {
+        $selection = Get-HandoffArchiveSelection -CommonRecords $CommonRecords -BranchRecords $BranchRecords -Clock $Clock -InventoryComplete $InventoryComplete
+        $asOfUtc = $selection.AsOfUtc
+        $clockValid = $selection.ClockValid
+        foreach ($decision in $selection.Protected) { $protected.Add($decision) }
+        $freshOperationIdRequired = $false
+        foreach ($decision in $selection.Selected) {
+            $recordIdentity = Get-HandoffArchiveCycleIdentityKey $decision
+            if ($pendingByRecordIdentity.ContainsKey($recordIdentity)) {
+                $pendingAction = $pendingByRecordIdentity[$recordIdentity]
+                $freshCursor = New-HandoffArchiveCycleCursor $decision
+                if (Test-HandoffArchiveCycleDecisionCursorEqual -LeftDecision $decision -LeftCursor $freshCursor -RightDecision (Get-HandoffField $pendingAction 'Decision') -RightCursor (Get-HandoffField $pendingAction 'Cursor')) {
+                    continue
+                }
+                $selected.Add($decision)
+                $freshCandidatesDeferred = $true
+                if ([string]::IsNullOrWhiteSpace($cycleOperationId)) { $freshOperationIdRequired = $true }
+                continue
+            }
+            $taskIdentity = Get-HandoffArchiveCycleIdentityKey $decision -TaskOnly
+            if ($pendingTaskIdentities.Contains($taskIdentity)) {
+                $selected.Add($decision)
+                $freshCandidatesDeferred = $true
+                if ([string]::IsNullOrWhiteSpace($cycleOperationId)) { $freshOperationIdRequired = $true }
+                continue
+            }
+            if ($queuedTaskIdentities.Contains($taskIdentity)) {
+                $selected.Add($decision)
+                $sameTaskDeferred = $true
+                continue
+            }
+            $selected.Add($decision)
+            if ([string]::IsNullOrWhiteSpace($cycleOperationId)) {
+                $freshOperationIdRequired = $true
+                continue
+            }
+            $cursor = New-HandoffArchiveCycleCursor $decision
+            [void]$queuedTaskIdentities.Add($taskIdentity)
+            $actions.Add([pscustomobject]@{
+                Decision = $decision
+                Cursor = $cursor
+                OperationId = Get-HandoffArchiveCycleOperationId -CycleOperationId $cycleOperationId -Cursor $cursor
+            })
+        }
+        if ($freshOperationIdRequired) { $gateReason = 'stable-operation-id-required' }
+        elseif ($freshCandidatesDeferred) { $gateReason = 'pending-task-cursor-in-flight' }
+        elseif ($sameTaskDeferred) { $gateReason = 'same-task-cursor-in-flight' }
+    }
+
+    foreach ($action in $actions) {
+        $decision = $action.Decision
+        $cursor = $action.Cursor
+        $operationId = [string]$action.OperationId
+        if ($null -eq $ArchiveAction) {
+            $pending.Add([pscustomobject]@{
+                Decision = $decision; Cursor = $cursor; OperationId = $operationId
+                CallerResult = $null; Reason = 'source-not-configured'
+            })
+            if ($null -eq $gateReason) { $gateReason = 'source-not-configured' }
+            continue
+        }
+        $acknowledgements = @()
+        $actionError = $false
+        $callbackDecision = Copy-HandoffArchiveCyclePlainShape $decision
+        $callbackCursor = Copy-HandoffArchiveCyclePlainShape $cursor
+        try { $acknowledgements = @(& $ArchiveAction $callbackDecision $callbackCursor $operationId 2>$null) }
+        catch { $actionError = $true }
+        $ack = if (-not $actionError -and $acknowledgements.Count -eq 1 -and
+            (Test-HandoffArchiveCycleCallerResult -CallerResult $acknowledgements[0] -OperationId $operationId)) {
+            $acknowledgements[0]
+        } else { $null }
+        if ($null -ne $ack -and [string](Get-HandoffField $ack 'Status') -ceq 'readback-matched') {
+            $callerResult = Copy-HandoffCallerResult $ack
+            $completed.Add([pscustomobject]@{
+                Decision = $decision; Cursor = $cursor; OperationId = $operationId; CallerResult = $callerResult
+                SourceReportedDurable = $true
+            })
+        } else {
+            $callerResult = if ($null -ne $ack) { Copy-HandoffCallerResult $ack } else { $null }
+            $reason = if ($actionError) { 'archive-action-error' }
+                elseif ($null -eq $ack) { 'invalid-source-result' }
+                else { "source-$([string](Get-HandoffField $ack 'Status'))" }
+            $pending.Add([pscustomobject]@{
+                Decision = $decision; Cursor = $cursor; OperationId = $operationId
+                CallerResult = $callerResult; Reason = $reason
+            })
+        }
+    }
+
+    return New-HandoffArchiveCycleResult -AsOfUtc $asOfUtc -ClockValid $clockValid -GateReason $gateReason -Selected $selected -Protected $protected -Completed $completed -Pending $pending
+}
+
+Export-ModuleMember -Function Invoke-HandoffRecordCore, Get-HandoffArchiveSelection, Invoke-HandoffArchiveCycle

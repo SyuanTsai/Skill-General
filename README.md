@@ -50,51 +50,35 @@ tests/
 | `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
 | `review-agent-skills` | Agent Skill package review |
 
-`manage-task-handoff` is platform-neutral: its core receives, validates and returns caller-supplied records and proposed change intents without selecting storage or making external calls. The caller owns source acquisition, identity, storage and external processing. When the caller separately requests adapter I/O, a selected opaque target is bound by trusted adopter configuration; only that adapter validates its activation and capabilities before content reads or writes. Missing or unverified activation fails closed, and durability requires matching readback. The package retains exact legacy Notion read-only continuation; Git-ref remains an optional configured adapter. No provider or local backend is mandatory for core recording.
+`manage-task-handoff` is platform-neutral: its core receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
 
 ## Canonical validation
 
-Run the single local/CI entry point against a clean immutable candidate commit:
+Run the single local/CI entry point against a clean immutable candidate commit with a trusted PowerShell 7 runtime, the reviewed Pester 6.2.0 payload staged under that runtime, and a clean checkout of the authority commit pinned in `config/standard-v1.json`:
 
 ```powershell
-pwsh -NoProfile -File ./scripts/Validate.ps1 -BaseCommit HEAD^
+pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -BaseCommit HEAD^
 ```
 
-`scripts/Validate.ps1` binds the exact P02 authority archive and frozen tool receipts, creates a declarative development-harness adapter, and invokes the central validation runner from that authority snapshot. Local, pre-push, and CI execution use this same entry point and the same pass/block semantics. It:
+Ordinary `Run` accepts only the exact approved Core authority tuple and verified tool paths. It rejects the baseline pin and legacy resolver or development-harness arguments before tool resolution, then inventories tracked regular files and invokes the central Core v2 runner. It never downloads, installs, or falls back to a legacy tool resolver. Its adapter declares two repository checks: the read-only source diagnostic and the complete Pester suite. The JSON report records candidate and authority revisions, check results, test counts, and cleanup status. A Core `PASS` is source validation evidence with `releaseEligible: false`.
 
-1. performs Controlled Acquisition and binds one clean immutable candidate;
-2. performs Integrity Verification for the candidate, authority archive, and pinned authority files;
-3. performs the optional upstream package-adapter check, then runs both approved package tools for every active source-inventory Skill before any static security scan;
-4. runs the static security scan once against every active Skill in the same read-only candidate snapshot;
-5. runs Repository Tests, the repository component diagnostic, Pester, conformance, and domain regressions only after Static passes;
-6. deterministically triggers a fail-closed semantic security scan for security-relevant Skill changes or static findings;
-7. records the required AI Review and Human Approval boundaries before Publish / Install;
-8. records Post-install Verification as required evidence after an approved install;
-9. emits the central machine-readable authority, candidate, tool, inventory, security disposition, stage, and review-boundary evidence in a temporary artifacts directory. A development-harness PASS is validation evidence only; it is not release eligibility or Human Release Approval.
+The repository Pester check runs one unfiltered invocation over the full `tests` tree; it has no shard selector, so that single invocation is the complete `core-full` shard. Before returning success, the wrapper binds the actual PowerShell executable to its sibling `Modules/Pester/6.2.0` directory, verifies every locked payload path and hash before and after import/run, and rejects ambient or duplicate same-version modules. It compares every discovered case with the union of passed, failed, skipped, inconclusive, and not-run outcomes using the source-relative file, AST offset, and complete expanded case path. It also matches Pester containers to every candidate `*.Tests.ps1` file and records the immutable candidate tree digest. The run-owned sidecar retains the full case/container/shard inventory, tool closure identity, and terminal gate; the child binds its path and SHA-256 on stderr. The six-field stdout JSON remains the machine summary; missing, ambiguous, incomplete, or failed case evidence makes the child exit nonzero.
 
-The canonical security disposition is also central: scanner failure, incomplete analysis, unparsable results, unknown severity, Critical, and High block; Medium requires Human Review and blocks release/install until disposition; Low and Informational findings are recorded and tracked.
+The Windows CI workflow obtains Microsoft's latest stable PowerShell ZIP and verifies its published SHA-256 and executable version. A separate, run-owned setup step fetches the exact Pester 6.2.0 package from the official PSGallery endpoint, records the observed archive SHA-256 without claiming it is an official published digest, compares all 17 module payload files with `config/pester-6.2.0-closure.lock.json`, and stages only those files under the verified runtime. The installer-generated `PSGetModuleInfo.xml` is excluded because it is absent from the official package. During the protected-base transition, this remains an explicit nested-runner test prerequisite; the old trusted validator still uses its own Pester 4.10.1 resolver, while candidate ordinary `Run` remains Core-only. Once the protected Core driver is on main, CI selects Core, and the follow-up 053 pin adoption can remove the temporary legacy setup. During this temporary transition, the three required source status contexts accept only the approved candidate-bound source-stages-1-5 projection after complete package, Static, and repository test validation. A missing Semantic consent remains canonical `BLOCKED` with exit code 10, stage 6 blocked, and `releaseEligible: false`; the workflow preserves that report and publishes only its passed source checks. Core mode requires `PASS` with exit code 0. The repository component diagnostic is used internally by the canonical validator.
 
-The repository component diagnostic is used internally by the canonical validator. It is not a standalone release gate.
+Semantic preparation and continuation remain explicit through `PrepareSemantic` and `ResumeSemantic`. They retain the existing consent, evidence, resolver-receipt, and replay protections; passing a legacy resolver flag to ordinary `Run` no longer selects that path. A prepared plan's create-only consumption claim is derived from its full run identity under the run-owned root, not its filename. Plans created with the earlier per-plan claim path fail closed and must be explicitly prepared again; the consumer never rewrites an old plan in place.
+
+`tests/OfflineSemanticConsumer.Tests.ps1` is a consumer-contract fixture: it uses a temporary copy of `Validate.ps1` with test-owned synthetic authority constants, a minimal local Git candidate, and prebuilt offline consent/evidence signed by an in-memory test key. Its callback runner validates the fixture bindings and signature without acquiring tools or making network calls. It verifies the consumer's inventory binding and replay claim, but it is not a real Semantic analyzer run and does not validate production authority trust anchors.
 
 ## Development and release flow
 
-The repository follows the Standard v1 ordering defined by the central runner:
+For an ordinary source change:
 
-```text
-Controlled Acquisition
-→ Integrity Verification
-→ Package Adapter
-→ approved package validator + approved package quality tool for every active Skill
-→ static security scan
-→ Repository Tests
-→ Conditional semantic security scan
-→ AI Review
-→ Human Approval
-→ Publish / Install
-→ Post-install Verification
-```
+1. Commit the candidate and run `scripts/Validate.ps1` locally with the pinned authority checkout.
+2. Inspect the Core report and obtain the required Windows CI contexts for the exact commit.
+3. Follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
 
-AI review cannot replace Human Release Approval. Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence.
+Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence. Core `PASS` does not grant Human Release Approval.
 
 ## Adding or changing a Skill
 

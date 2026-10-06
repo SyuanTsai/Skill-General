@@ -300,50 +300,17 @@ Describe 'Handoff receive and record core' {
         }
     }
 
-    It 'CoreT46 makes the conflicting writer reread Source and Gate before deciding against replay' {
-        Import-Module (Join-Path $PSScriptRoot '../skills/manage-task-handoff/scripts/GitRefHandoffAdapter.psm1') -Force
-        $root=Join-Path $TestDrive 'source-gate'; [void](New-Item -ItemType Directory -Path $root)
-        $remote=Join-Path $root 'remote.git'
-        & git init --bare --quiet $remote
-        if ($LASTEXITCODE) { throw 'Could not create isolated Source/Gate fixture.' }
-        $writers=@(foreach ($name in @('a','b')) {
-            $local=Join-Path $root $name
-            & git clone --quiet $remote $local 2>$null
-            if ($LASTEXITCODE) { throw 'Could not create isolated writer.' }
-            & git -C $local config user.name "Fixture $name"
-            & git -C $local config user.email "$name@example.invalid"
-            New-GitHandoffAdapter -RepositoryRoot $local -RemoteName origin -AuthorityScope 'source-gate-fixture' `
-                -GetVerifiedPrincipal { 'synthetic-principal' } -Authorize { param($request) $true }
-        })
-        $source=@{Revision='formal-r1';Reads=0;GateChecks=0}
-        $fields=[ordered]@{Intent='verify';Scope='fixture';Current='shared';Source='formal-r1';Lifecycle='Active';'Work State'='Running'}
-        New-GitHandoffCommon -Adapter $writers[0] -TaskKey 'task-exact' -Fields $fields -OperationId 'create' -Actor 'fixture-a' | Out-Null
-        $beforeA=Get-GitHandoffCommon -Adapter $writers[0] -TaskKey 'task-exact'
-        $beforeB=Get-GitHandoffCommon -Adapter $writers[1] -TaskKey 'task-exact'
-        $beforeA.Revision | Should -Be $beforeB.Revision
-        $candidateB=[ordered]@{Current='stale candidate';Source='formal-r1'}
-        $source.Revision='formal-r2'
-        $winner=Set-GitHandoffFields -Adapter $writers[0] -RecordKind common -TaskKey 'task-exact' `
-            -ExpectedRevision $beforeA.Revision -Changes ([ordered]@{Current='winner';Source='formal-r2'}) -OperationId 'writer-a' -Actor 'fixture-a'
-        { Set-GitHandoffFields -Adapter $writers[1] -RecordKind common -TaskKey 'task-exact' `
-            -ExpectedRevision $beforeB.Revision -Changes $candidateB -OperationId 'writer-b' -Actor 'fixture-b' } | Should -Throw
-        # Source acquisition and the domain Gate belong to the caller, not storage CAS.
-        $readSource={ $source.Reads++; [pscustomobject]@{Revision=$source.Revision} }.GetNewClosure()
-        $applyGate={ param($candidate,$freshSource,$freshRecord)
-            $source.GateChecks++
-            $candidate.Source -ceq $freshSource.Revision -and $freshRecord.Fields.Source -ceq $freshSource.Revision
-        }.GetNewClosure()
-        $freshSource=& $readSource
-        $freshRecord=Get-GitHandoffCommon -Adapter $writers[1] -TaskKey 'task-exact'
-        $mayRetry=& $applyGate $candidateB $freshSource $freshRecord
-        $source.Reads | Should -Be 1
-        $source.GateChecks | Should -Be 1
-        $mayRetry | Should -BeFalse
-        $freshRecord.Revision | Should -Be $winner.Revision
-        $freshRecord.Fields.Current | Should -Be 'winner'
-        $freshRecord.Fields.Source | Should -Be 'formal-r2'
-        Get-GitHandoffEvent -Adapter $writers[1] -TaskKey 'task-exact' -RecordKind common -OperationId 'writer-b' -Field 'Current' |
-            Should -BeNullOrEmpty
+    It 'CoreT46 treats Source as caller-owned domain data without performing storage calls' {
+        $record=New-TestCommon
+        $record.Source='retired-source-id'
+        $actual=Invoke-HandoffRecordCore -Kind Common -Record $record -OperationId 'source-free-core' `
+            -CallerResult ([pscustomobject]@{ Status='unavailable' })
+
+        $actual.Status | Should -Be 'Accepted'
+        $actual.Record.Source | Should -Be 'retired-source-id'
+        $actual.CallerOutcome | Should -Be 'unavailable'
+        $actual.ExternalCalls | Should -Be 0
+        $actual.Durable | Should -BeFalse
     }
 
     It 'CoreT47 snapshots mutable caller evidence from <Shape> reports' -ForEach @(
