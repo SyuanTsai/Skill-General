@@ -277,42 +277,83 @@ function Test-CoreRunSelected {
             catch { return [string]$_.Exception.Message }
         }
 
-        function New-WorkflowLegacySourceProjectionModule {
-            $match = [regex]::Match($script:Workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
-            $header = [regex]::Match($match.Groups['body'].Value, '(?m)^        run: \|\r?\n')
-            if (-not $match.Success -or -not $header.Success) { throw 'Workflow validation run block is missing.' }
-            $lines = $match.Groups['body'].Value.Substring($header.Index + $header.Length) -split '\r?\n'
-            $code = (@($lines | ForEach-Object { if ($_.Length -eq 0) { '' } else { $_.Substring(10) } }) -join "`n")
-            $tokens=$null; $errors=$null
-            $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
-            if (@($errors).Count) { throw 'Workflow validation run block does not parse.' }
-            $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-LegacySourceCheckProjection'},$true))
-            if ($functions.Count -ne 1) { throw 'Actual workflow source-check projection helper is missing.' }
-            return New-Module -ScriptBlock ([scriptblock]::Create($functions[0].Extent.Text + "`nExport-ModuleMember -Function Assert-LegacySourceCheckProjection"))
+        function New-WorkflowCoreReportModule {
+         $step=[regex]::Match($script:Workflow,'(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
+         if(-not $step.Success){throw 'Core workflow validation step missing.'}
+         $body=$step.Groups['body'].Value
+         $header=[regex]::Match($body,'(?m)^        run: \|\r?\n')
+         if(-not $header.Success){throw 'Core workflow validation run block missing.'}
+         $run=(@($body.Substring($header.Index+$header.Length) -split '\r?\n'|ForEach-Object{if($_.Length){$_.Substring(10)}else{''}})-join "`n")
+         $tokens=$null;$errors=$null
+         $ast=[Management.Automation.Language.Parser]::ParseInput($run,[ref]$tokens,[ref]$errors)
+         if(@($errors).Count){throw 'Actual Core workflow run block does not parse.'}
+         $functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Assert-CoreSourceCheckReport'},$true))
+         if($functions.Count -ne 1){throw 'Actual Core helper missing or duplicated.'}
+         return New-Module -ScriptBlock ([scriptblock]::Create($functions[0].Extent.Text))
+        }
+        function New-CoreReportFixture {
+         $root=Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+         $artifact=Join-Path $root 'artifacts'
+         $output=Join-Path $artifact 'standard-core-validation-v2-report.json'
+         $report=[pscustomobject]@{
+          schemaVersion=2;evidence='standard-core-validation-evidence-v2';state='PASS';exitCode=0;releaseEligible=$false;contentMode='immutable-source';failure=$null
+          candidate=[pscustomobject]@{repository='https://github.com/SyuanTsai/Skill-General.git';sourceRevision=('a'*40);baseRevision=('b'*40);eventName='pull_request';contentMode='immutable-source'}
+          authority=[pscustomobject]@{revision=('c'*40);contentMode='source'}
+          adapter=[pscustomobject]@{identity='standard-core-adapter-v2'}
+          artifacts=[pscustomobject]@{root=$artifact;outputPath=$output}
+          checks=@(
+           [pscustomobject]@{id='repository-general';kind='general';status='passed';exitCode=0;cleanedUp=$true},
+           [pscustomobject]@{id='repository-pester';kind='pester';status='passed';exitCode=0;cleanedUp=$true;testCounts=[pscustomobject]@{total=7;passed=7;skipped=0;failed=0}}
+          )
+         }
+         return [pscustomobject]@{report=$report;artifactRoot=$artifact;outputPath=$output;ownedRoot=$root}
+        }
+        function Invoke-CoreReportFixture {
+         param($Fixture,[int]$ProcessExitCode=0)
+         $module=New-WorkflowCoreReportModule
+         try{& $module {param($f,$exit) Assert-CoreSourceCheckReport -Report $f.report -ProcessExitCode $exit -ExpectedSourceRevision ('a'*40) -ExpectedBaseRevision ('b'*40) -ExpectedAuthorityRevision ('c'*40) -ExpectedEventName 'pull_request' -ArtifactsRoot $f.artifactRoot -OutputPath $f.outputPath} $Fixture $ProcessExitCode}
+         finally{Remove-Module $module -Force}
         }
 
-        function New-LegacySourceProjectionFixture {
-            $candidate=[pscustomobject]@{sourceRepository='https://github.com/SyuanTsai/Skill-General.git';sourceRevision=('a'*40);baseRevision=('b'*40);candidateId=('c'*64);contentSha256=('d'*64)}
-            $ids=@('controlled-acquisition','integrity-verification','package-validation','skillspector-static','repository-tests','conditional-semantic-scan','ai-review','human-approval','publish-or-install','post-install-verification')
-            $stages=@(for($i=0;$i -lt $ids.Count;$i++){[pscustomobject]@{order=($i+1);id=$ids[$i];status=$(if($i -lt 5){'passed'}elseif($i -eq 5){'blocked'}else{'not-applicable'});events=@()}})
-            $general=[pscustomobject]@{eventId='00000000-0000-4000-8000-000000000001';stageId='repository-tests';toolId='repository-test-general';candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true;outputSha256=('e'*64)}
-            $pester=[pscustomobject]@{eventId='00000000-0000-4000-8000-000000000002';stageId='repository-tests';toolId='repository-test-pester';candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true;outputSha256=('f'*64)}
-            $stages[2].events=@([pscustomobject]@{candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true})
-            $stages[3].events=@([pscustomobject]@{candidateId=$candidate.candidateId;status='passed';exitCode=0;cleanedUp=$true})
-            $stages[4].events=@($general,$pester)
-            $typed=[pscustomobject]@{eventId=$pester.eventId;toolId=$pester.toolId;outputSha256=$pester.outputSha256;testInventoryCount=2;testInventorySha256=('e'*64);total=7;passed=7;skipped=0;failed=0}
-            return [pscustomobject]@{schemaVersion=1;evidence='standard-validation-evidence-v1';contract='standard-validation-contract-v1';state='BLOCKED';exitCode=10;releaseEligible=$false;candidate=$candidate;authority=[pscustomobject]@{repository='https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git';runnerSha256=('e'*64)};failure=[pscustomobject]@{state='BLOCKED';message='Semantic scan was triggered without explicit consent.'};stages=$stages;sourceConformance=[pscustomobject]@{schemaVersion=1;contract='standard-source-conformance-v1';status='passed';scope='source-stages-1-5';sourceRevision=$candidate.sourceRevision;candidateId=$candidate.candidateId;contentSha256=$candidate.contentSha256;checkedStages=@($stages[0..4] | ForEach-Object {[pscustomobject]@{order=$_.order;id=$_.id;status=$_.status}});pester=[pscustomobject]@{eventCount=1;events=@($typed);total=7;passed=7;skipped=0;failed=0};canonicalValidation=[pscustomobject]@{state='BLOCKED';exitCode=10;stage6Status='blocked';releaseEligible=$false};releaseEligible=$false;failureReasons=@()}}
+        function New-WorkflowCoreDiagnosticModule {
+         $step=[regex]::Match($script:Workflow,'(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
+         if(-not $step.Success){throw 'Core workflow validation step missing.'}
+         $body=$step.Groups['body'].Value
+         $header=[regex]::Match($body,'(?m)^        run: \|\r?\n')
+         if(-not $header.Success){throw 'Core workflow validation run block missing.'}
+         $run=(@($body.Substring($header.Index+$header.Length) -split '\r?\n'|ForEach-Object{if($_.Length){$_.Substring(10)}else{''}})-join "`n")
+         $tokens=$null;$errors=$null
+         $ast=[Management.Automation.Language.Parser]::ParseInput($run,[ref]$tokens,[ref]$errors)
+         if(@($errors).Count){throw 'Actual Core workflow run block does not parse.'}
+         $functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Write-CorePesterDiagnostics'},$true))
+         if($functions.Count -ne 1){throw 'Actual Core helper missing or duplicated.'}
+         return New-Module -ScriptBlock ([scriptblock]::Create($functions[0].Extent.Text))
         }
-
-        function Invoke-LegacySourceProjectionFixture {
-            param($Report,[int]$ExitCode=10)
-            $module=New-WorkflowLegacySourceProjectionModule
-            try { & $module {param($r,$exit) Assert-LegacySourceCheckProjection -Report $r -ProcessExitCode $exit -ExpectedSourceRevision ('a'*40) -ExpectedBaseRevision ('b'*40) -ExpectedAuthorityRunnerSha256 ('e'*64)} $Report $ExitCode }
-            finally { Remove-Module $module -Force }
+        function New-CoreDiagnosticFixture {
+         $f=New-CoreReportFixture
+         $run=Join-Path (Join-Path $f.artifactRoot 'runs') ([guid]::NewGuid().ToString('N'))
+         $raw=Join-Path $run 'raw';$snapshot=Join-Path $run 'candidate'
+         [void](New-Item -ItemType Directory -Path $raw,$snapshot -Force)
+         $stderr=Join-Path $raw '002-repository-pester.stderr.txt'
+         [IO.File]::WriteAllText($stderr,'fixture-owned-diagnostic-marker',[Text.UTF8Encoding]::new($false))
+         $f.report.artifacts|Add-Member -NotePropertyName runRoot -NotePropertyValue $run
+         $f.report.artifacts|Add-Member -NotePropertyName snapshotRoot -NotePropertyValue $snapshot
+         $f.report.checks[1]|Add-Member -NotePropertyName stderrPath -NotePropertyValue $stderr
+         $f.report.checks[1]|Add-Member -NotePropertyName stderrSha256 -NotePropertyValue ((Get-FileHash -LiteralPath $stderr).Hash.ToLowerInvariant())
+         $f|Add-Member -NotePropertyName stderrPath -NotePropertyValue $stderr
+         $f|Add-Member -NotePropertyName snapshotRoot -NotePropertyValue $snapshot
+         return $f
+        }
+        function Invoke-CoreDiagnosticFixture {
+         param($Fixture)
+         $Fixture.report|ConvertTo-Json -Depth 100|Set-Content -LiteralPath $Fixture.outputPath -Encoding utf8
+         $module=New-WorkflowCoreDiagnosticModule
+         try{& $module {param($f) Write-CorePesterDiagnostics -ReportPath $f.outputPath -RunOwnedRoot $f.ownedRoot -ArtifactsRoot $f.artifactRoot -ExpectedSourceRevision ('a'*40)} $Fixture}
+         finally{Remove-Module $module -Force}
         }
 
         function Invoke-WorkflowCredentialFixture {
-            param([Parameter(Mandatory)][ValidateSet('core', 'legacy')][string] $Mode)
+            param([Parameter(Mandatory)][ValidateSet('core')][string] $Mode)
             $stepPattern = '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)'
             $stepMatch = [regex]::Match($script:Workflow, $stepPattern)
             if (-not $stepMatch.Success) { throw 'Canonical workflow validation step is missing.' }
@@ -1052,24 +1093,21 @@ function Test-CoreRunSelected {
         $result.sentinel | Should -BeExactly 'preserve-me'
     }
 
-    # Scenario: the legacy resolver still needs its explicitly scoped read-only GitHub token.
-    # Purpose: keep token isolation limited to ordinary Core while preserving unrelated process environment.
-    It 'UnitT22_preserves_legacy_workflow_tokens_and_unrelated_environment' {
-        $result = Invoke-WorkflowCredentialFixture -Mode 'legacy'
-        $result.guardBeforeChild | Should -BeTrue
-        $result.githubToken | Should -BeExactly 'fixture-github-token'
-        $result.ghToken | Should -BeExactly 'fixture-gh-token'
-        $result.sentinel | Should -BeExactly 'preserve-me'
+    # Scenario: the accepted Core driver no longer needs legacy runtime acquisition or its token route.
+    # Purpose: keep ordinary CI Core-only while preserving explicit Semantic outside this workflow.
+    It 'UnitT22_has_no_legacy_runtime_or_credential_workflow_route' {
+        $script:Workflow | Should -Not -Match 'actions/setup-go@|actions/setup-node@|APPROVED_NPM_PATH|NPM_CONFIG_PREFIX'
+        $script:Workflow | Should -Not -Match '\$mode = ''legacy''|Assert-LegacySourceCheckProjection|syp154-authority-'
+        $script:Workflow | Should -Match 'Assert-CoreSourceCheckReport'
     }
 
-    # Scenario: a baseline-pinned protected driver evaluates a candidate using either approved Core authority tuple.
-    # Purpose: preserve the legacy route until a Core-compatible protected driver is active, without binding a Core checkout revision.
-    It 'UnitT23_keeps_baseline_protected_driver_on_legacy_for_approved_Core_candidates' {
+    # Scenario: a baseline-pinned protected driver evaluates either approved Core candidate.
+    # Purpose: reject the retired baseline driver rather than selecting a legacy validation route.
+    It 'UnitT23_rejects_baseline_protected_driver_for_approved_Core_candidates' {
         foreach ($candidateCommit in @($script:ExpectedNextAuthorityCommit, $script:ExpectedMergedAuthorityCommit)) {
-            $selection = Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedAuthorityCommit -CandidateAuthority $candidateCommit `
-                -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40) -ReturnSelection
-            $selection.mode | Should -BeExactly 'legacy'
-            $selection.authorityRevision | Should -BeExactly $candidateCommit
+            {
+                Invoke-WorkflowSelectorFixture -DriverAuthority $script:ExpectedAuthorityCommit -CandidateAuthority $candidateCommit -ExpectedDriverSha ('a' * 40) -ActualDriverSha ('a' * 40) -ReturnSelection
+            } | Should -Throw
         }
     }
 
@@ -1235,7 +1273,8 @@ function Test-CoreRunSelected {
         $validateStep = [regex]::Match($script:Workflow, '(?ms)^      - name: Validate exact candidate with the verified runtime\r?\n(?<body>.*?)(?=^      - name: |\z)')
         $validateStep.Success | Should -BeTrue
         $validateStep.Groups['body'].Value | Should -Match '(?m)^          APPROVED_AUTHORITY_REVISION: \$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}\r?$'
-        $validateStep.Groups['body'].Value | Should -Match '\$report\.authority\.revision\s+-cne\s+\$env:APPROVED_AUTHORITY_REVISION'
+        $validateStep.Groups['body'].Value | Should -Match '\$Report\.authority\.revision\s+-cne\s+\$ExpectedAuthorityRevision'
+        $validateStep.Groups['body'].Value | Should -Match 'Assert-CoreSourceCheckReport .*?-ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION'
         $validateStep.Groups['body'].Value | Should -Not -Match '\$report\.authority\.revision\s+-cne\s+''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
     }
 
@@ -1286,56 +1325,86 @@ function Test-CoreRunSelected {
             Should -Throw
     }
 
-    # Scenario: the protected legacy driver fully validates source stages but retains missing Semantic consent as BLOCKED/10.
-    # Purpose: permit only the existing source-check projection without rewriting canonical state or claiming release eligibility.
-    It 'UnitT40_accepts_complete_legacy_source_projection_without_masking_canonical_state' {
-        $report=New-LegacySourceProjectionFixture
-        $before=$report | ConvertTo-Json -Depth 100 -Compress
-        Invoke-LegacySourceProjectionFixture -Report $report | Should -BeTrue
-        ($report | ConvertTo-Json -Depth 100 -Compress) | Should -BeExactly $before
-        $report.state | Should -BeExactly 'BLOCKED'
-        $report.exitCode | Should -Be 10
-        $report.releaseEligible | Should -BeFalse
-        $report.state='PASS';$report.exitCode=0;$report.failure=$null;$report.stages[5].status='not-applicable'
-        $report.sourceConformance.canonicalValidation.state='PASS';$report.sourceConformance.canonicalValidation.exitCode=0;$report.sourceConformance.canonicalValidation.stage6Status='not-applicable'
-        Invoke-LegacySourceProjectionFixture -Report $report -ExitCode 0 | Should -BeTrue
+    # Scenario: a complete trusted Core process/report binds exact candidate, authority and two successful repository checks.
+    # Purpose: exercise actual workflow acceptance offline while preserving false release eligibility and report bytes.
+    It 'UnitT40_accepts_complete_exact_Core_source_report_without_mutation' {
+     $f=New-CoreReportFixture
+     $before=$f.report|ConvertTo-Json -Depth 100 -Compress
+     Invoke-CoreReportFixture -Fixture $f|Should -BeTrue
+     ($f.report|ConvertTo-Json -Depth 100 -Compress)|Should -BeExactly $before
+     $f.report.releaseEligible|Should -BeFalse
+    }
+    # Scenario: a Core report changes identity, source scope, artifact ownership, process status or fixed check roles.
+    # Purpose: reject malformed or unrelated reports and native failures before source contexts publish.
+    It 'UnitT41_rejects_invalid_Core_report_identity_process_and_ownership' {
+     $mutations=@(
+      {param($r) $r.schemaVersion=1},{param($r) $r.evidence='unknown'},{param($r) $r.state='BLOCKED'},
+      {param($r) $r.exitCode=10},{param($r) $r.releaseEligible=$true},{param($r) $r.contentMode='mutable'},
+      {param($r) $r.candidate.repository='https://example.test/other.git'},{param($r) $r.candidate.sourceRevision=('9'*40)},
+      {param($r) $r.candidate.baseRevision=('9'*40)},{param($r) $r.candidate.eventName='push'},
+      {param($r) $r.candidate.contentMode='mutable'},{param($r) $r.authority.revision=('9'*40)},
+      {param($r) $r.authority.contentMode='unverified'},{param($r) $r.adapter.identity='unknown'},
+      {param($r) $r.failure=[pscustomobject]@{message='failed'}},{param($r) $r.artifacts.root=Join-Path $r.artifacts.root 'other'},
+      {param($r) $r.artifacts.outputPath=Join-Path $r.artifacts.root 'other.json'},
+      {param($r) $r.checks=@($r.checks[0])},{param($r) $r.checks[0].id='unknown'},
+      {param($r) $r.checks[1].kind='general'},{param($r) $r.checks[1].status='timeout'},
+      {param($r) $r.checks[1].exitCode=20},{param($r) $r.checks[1].cleanedUp=$false}
+     )
+     foreach($mutate in $mutations){$f=New-CoreReportFixture;& $mutate $f.report;{Invoke-CoreReportFixture -Fixture $f}|Should -Throw}
+     {Invoke-CoreReportFixture -Fixture (New-CoreReportFixture) -ProcessExitCode 20}|Should -Throw
+    }
+    # Scenario: a Core report asserts passing tests with missing, empty, failed, all-skipped or inconsistent counts.
+    # Purpose: require positive complete test evidence in the actual report gate.
+    It 'UnitT42_rejects_incomplete_Core_test_counts' {
+     $mutations=@(
+      {param($r) $r.checks[1].testCounts=$null},{param($r) $r.checks[1].testCounts.total=0},
+      {param($r) $r.checks[1].testCounts.passed=0},{param($r) $r.checks[1].testCounts.failed=1},
+      {param($r) $r.checks[1].testCounts.skipped=-1},{param($r) $r.checks[1].testCounts.skipped=1}
+     )
+     foreach($mutate in $mutations){$f=New-CoreReportFixture;& $mutate $f.report;{Invoke-CoreReportFixture -Fixture $f}|Should -Throw}
     }
 
-    # Scenario: report identity, source-stage completion, cleanup, scope or canonical exit disagrees with the protected run.
-    # Purpose: fail the source check instead of promoting an unrelated, incomplete or failed report.
-    It 'UnitT41_rejects_invalid_legacy_source_projection_and_canonical_failures' {
-        $mutations=@(
-            {param($r) $r.schemaVersion=2}, {param($r) $r.evidence='unknown'},
-            {param($r) $r.candidate.sourceRevision=('9'*40)}, {param($r) $r.candidate.baseRevision=('9'*40)},
-            {param($r) $r.authority.runnerSha256=('9'*64)}, {param($r) $r.sourceConformance.sourceRevision=('9'*40)},
-            {param($r) $r.sourceConformance.candidateId=('9'*64)}, {param($r) $r.sourceConformance.contentSha256=('9'*64)},
-            {param($r) $r.releaseEligible=$true}, {param($r) $r.sourceConformance.releaseEligible=$true},
-            {param($r) $r.sourceConformance.scope='release'}, {param($r) $r.sourceConformance.status='failed'},
-            {param($r) $r.sourceConformance.failureReasons=@('raw event mismatch')},
-            {param($r) $r.stages[3].status='partial'}, {param($r) $r.sourceConformance.checkedStages[3].status='partial'},
-            {param($r) $r.stages[4].events[1].exitCode=20}, {param($r) $r.stages[4].events[1].cleanedUp=$false},
-            {param($r) $r.stages[4].events[1].candidateId=('9'*64)}, {param($r) $r.stages[5].status='failed'},
-            {param($r) $r.stages[6].status='blocked'}, {param($r) $r.failure.message='unrelated failure'},
-            {param($r) $r.sourceConformance.canonicalValidation.exitCode=0}
-        )
-        foreach($mutate in $mutations){$r=New-LegacySourceProjectionFixture;& $mutate $r;{Invoke-LegacySourceProjectionFixture -Report $r}|Should -Throw}
-        {Invoke-LegacySourceProjectionFixture -Report (New-LegacySourceProjectionFixture) -ExitCode 20}|Should -Throw
-        {Invoke-LegacySourceProjectionFixture -Report (New-LegacySourceProjectionFixture) -ExitCode 0}|Should -Throw
+    # Scenario: actual Core diagnostic output comes from its exact owned report, source and hashed raw file.
+    # Purpose: retain usable failure details while refusing unrelated or tampered payloads.
+    It 'UnitT43_binds_Core_diagnostics_to_exact_owned_report_and_stderr_hash' {
+     $f=New-CoreDiagnosticFixture
+     (@(Invoke-CoreDiagnosticFixture -Fixture $f)-join "`n")|Should -Match 'Pester diagnostic: fixture-owned-diagnostic-marker'
+     $mutations=@(
+      {param($r) $r.schemaVersion=1},{param($r) $r.evidence='unknown'},
+      {param($r) $r.candidate.sourceRevision=('9'*40)},
+      {param($r) $r.artifacts.root=Join-Path $r.artifacts.root 'other'},
+      {param($r) $r.artifacts.outputPath=Join-Path $r.artifacts.root 'other.json'},
+      {param($r) $r.artifacts.runRoot=Split-Path -Parent $r.artifacts.root},
+      {param($r) $r.checks[1].kind='general'},
+      {param($r) $r.checks[1].stderrSha256=('9'*64)},
+      {param($r) $r.checks[1].stderrPath=Join-Path $r.artifacts.root 'outside-raw.stderr.txt'}
+     )
+     foreach($mutate in $mutations){
+      $f=New-CoreDiagnosticFixture;& $mutate $f.report
+      (@(Invoke-CoreDiagnosticFixture -Fixture $f)-join "`n")|Should -Not -Match 'fixture-owned-diagnostic-marker'
+     }
+    }
+    # Scenario: verbose stderr or timeout progress exceeds existing diagnostic slice limits.
+    # Purpose: preserve the original head/tail truncation marker and 24-line/300-character progress bounds.
+    It 'UnitT44_keeps_Core_stderr_and_timeout_progress_bounded' {
+     $f=New-CoreDiagnosticFixture
+     $large=('A'*1000)+('M'*15000)+('Z'*11000)
+     [IO.File]::WriteAllText($f.stderrPath,$large,[Text.UTF8Encoding]::new($false))
+     $f.report.checks[1].stderrSha256=(Get-FileHash -LiteralPath $f.stderrPath).Hash.ToLowerInvariant()
+     $f.report.checks[1].status='timeout'
+     $progress=Join-Path $f.snapshotRoot 'repository-pester-progress.log'
+     $lines=@(1..30|ForEach-Object{('{0:D2}:' -f $_)+('P'*500)})
+     [IO.File]::WriteAllLines($progress,$lines,[Text.UTF8Encoding]::new($false))
+     $actual=@(Invoke-CoreDiagnosticFixture -Fixture $f)
+     $diagnostic=@($actual|Where-Object{$_ -like 'Pester diagnostic:*'})
+     $diagnostic.Count|Should -Be 1
+     $diagnostic[0]|Should -BeExactly ('Pester diagnostic: '+('A'*1000)+'[middle truncated]'+('Z'*11000))
+     $shown=@($actual|Where-Object{$_ -like 'Pester progress:*'})
+     $shown.Count|Should -Be 24
+     $shown[0]|Should -BeExactly ('Pester progress: '+$lines[6].Substring(0,300)+'[truncated]')
+     $shown[-1]|Should -BeExactly ('Pester progress: '+$lines[-1].Substring(0,300)+'[truncated]')
+     $f.report.artifacts.snapshotRoot=Join-Path $f.artifactRoot 'other'
+     @(@(Invoke-CoreDiagnosticFixture -Fixture $f)|Where-Object{$_ -like 'Pester progress:*'}).Count|Should -Be 0
     }
 
-    # Scenario: a source projection asserts passed tests without a matching positive typed Pester inventory and process event.
-    # Purpose: reject empty/all-skipped/failed or mismatched test evidence before source-context publication.
-    It 'UnitT42_rejects_incomplete_or_mismatched_legacy_pester_projection' {
-        $mutations=@(
-            {param($r) $r.sourceConformance.pester.total=0}, {param($r) $r.sourceConformance.pester.passed=0},
-            {param($r) $r.sourceConformance.pester.failed=1}, {param($r) $r.sourceConformance.pester.skipped=1},
-            {param($r) $r.sourceConformance.pester.events=@()}, {param($r) $r.sourceConformance.pester.eventCount=2},
-            {param($r) $r.sourceConformance.pester.events[0].eventId='00000000-0000-4000-8000-000000000009'},
-            {param($r) $r.sourceConformance.pester.events[0].outputSha256=('9'*64)},
-            {param($r) $r.sourceConformance.pester.events[0].testInventoryCount=0},
-            {param($r) $r.sourceConformance.pester.events[0].failed=1},
-            {param($r) $r.sourceConformance.pester.events[0].total=8}
-        )
-        foreach($mutate in $mutations){$r=New-LegacySourceProjectionFixture;& $mutate $r;{Invoke-LegacySourceProjectionFixture -Report $r}|Should -Throw}
-    }
 }

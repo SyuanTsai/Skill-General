@@ -61,26 +61,19 @@ jobs:
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $nextAuthority = 'ea1d368ac7b36f838ce4c3af363972c90fa12930'
           $mergedAuthority = '053b80143b5ef48b06a8c448d5ac1abaf9a49df8'
-          $baselineAuthority = '51399617ddebe21656fe4265a8d9ad116a943583'
           $coreAuthorities = @($nextAuthority, $mergedAuthority)
-          if ([string]$candidatePin.authority.commit -cnotin (@($baselineAuthority) + $coreAuthorities)) {
-            throw 'Candidate has an unapproved authority pin.'
+          if ([string]$candidatePin.authority.commit -cnotin $coreAuthorities) {
+            throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
           }
           $driverAuthority = [string]$pin.authority.commit
-          if ($driverAuthority -ceq $baselineAuthority) {
-            $mode = 'legacy'
-          }
-          elseif ($driverAuthority -cin $coreAuthorities) {
-            if ([string]$candidatePin.authority.commit -cnotin $coreAuthorities) {
-              throw 'A protected Core driver cannot downgrade an unapproved or baseline candidate.'
-            }
+          if ($driverAuthority -cin $coreAuthorities) {
             if (-not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
               throw 'Protected Core driver is missing the trusted Pester wrapper.'
             }
             $mode = 'core'
           }
           else {
-            throw 'Protected driver has an unapproved authority pin.'
+            throw 'Protected driver has an unapproved Core authority pin.'
           }
           "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -159,99 +152,6 @@ jobs:
               throw "Candidate-pinned authority file identity mismatch: $relativePath"
             }
           }
-          if ($env:VALIDATION_MODE -ceq 'legacy') {
-            if ([string]$pin.commit -cnotmatch '^[0-9a-f]{40}$') { throw 'Legacy authority transport requires an exact commit pin.' }
-            $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
-            $cursor = $tempRoot
-            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-              $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-              if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Legacy TEMP transport parent contains a reparse ancestor.' }
-              $parent = Split-Path -Parent $cursor
-              if ($parent -ceq $cursor) { break }
-              $cursor = $parent
-            }
-            $snapshotRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot ('syp154-authority-' + [string]$pin.commit)))
-            if (-not $snapshotRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-              throw 'Legacy authority snapshot escaped the runner TEMP root.'
-            }
-            if (-not (Test-Path -LiteralPath $snapshotRoot)) {
-              git clone --config core.autocrlf=false --local --no-hardlinks $authorityRoot $snapshotRoot
-              if ($LASTEXITCODE -ne 0) { throw 'Could not create the missing local legacy authority snapshot.' }
-              git -C $snapshotRoot remote set-url origin ([string]$pin.repository)
-              if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its pinned origin.' }
-              git -C $snapshotRoot checkout --detach ([string]$pin.commit)
-              if ($LASTEXITCODE -ne 0) { throw 'Could not bind the new local authority snapshot to its exact commit.' }
-            }
-            if (-not (Test-Path -LiteralPath $snapshotRoot -PathType Container)) { throw 'Legacy authority snapshot path is not a directory.' }
-            $cursor = $snapshotRoot
-            while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-              $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-              if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Legacy authority snapshot contains a reparse ancestor.' }
-              $parent = Split-Path -Parent $cursor
-              if ($parent -ceq $cursor) { break }
-              $cursor = $parent
-            }
-            $snapshotTop = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --show-toplevel)
-            $snapshotHead = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot rev-parse --verify HEAD)
-            if ($LASTEXITCODE -ne 0 -or $snapshotTop.Count -ne 1 -or
-                -not [IO.Path]::GetFullPath([string]$snapshotTop[0]).Equals($snapshotRoot, [StringComparison]::OrdinalIgnoreCase) -or
-                $snapshotHead.Count -ne 1 -or [string]$snapshotHead[0] -cne [string]$pin.commit) {
-              throw 'Legacy authority snapshot does not match its exact immutable pin.'
-            }
-            $snapshotOrigins = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot config --local --get-all remote.origin.url)
-            if ($LASTEXITCODE -ne 0 -or $snapshotOrigins.Count -ne 1 -or
-                -not ((([string]$snapshotOrigins[0]).Trim().TrimEnd('/') -replace '\.git$', '').Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase))) {
-              throw 'Legacy authority snapshot origin differs from its immutable pin.'
-            }
-            $snapshotDirty = @(git -c ("safe.directory=" + $snapshotRoot) -C $snapshotRoot status --porcelain=v1 --untracked-files=all)
-            if ($LASTEXITCODE -ne 0 -or $snapshotDirty.Count -ne 0) { throw 'Legacy authority snapshot must be clean; existing cache was not modified.' }
-            foreach ($entry in @($pin.files)) {
-              $relativePath = [string]$entry.path
-              $filePath = [IO.Path]::GetFullPath((Join-Path $snapshotRoot ($relativePath -replace '/', [IO.Path]::DirectorySeparatorChar)))
-              if (-not $filePath.StartsWith($snapshotRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-                  -not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
-                throw "Legacy authority snapshot is missing a pinned file: $relativePath"
-              }
-              $fileCursor = $filePath
-              while ($fileCursor -ine $snapshotRoot) {
-                $fileEntry = Get-Item -LiteralPath $fileCursor -Force -ErrorAction Stop
-                if ($fileEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Legacy authority inventory traverses a reparse point: $relativePath" }
-                $fileCursor = Split-Path -Parent $fileCursor
-              }
-              if ((Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
-                throw "Legacy authority snapshot file differs from its immutable pin: $relativePath"
-              }
-            }
-            Write-Host 'Legacy driver authority transport is a verified local snapshot; runtime acquisition remains disabled.'
-          }
-
-      - name: Set up approved Go runtime
-        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: 'stable'
-          check-latest: true
-          cache: false
-
-      - name: Set up Node for central npm lock resolution
-        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '24'
-          check-latest: true
-
-      - name: Bind npm 11 executable
-        if: ${{ steps.authority-mode.outputs.validation_mode == 'legacy' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          $npmVersion = ([string](npm.cmd --version)).Trim()
-          if ($LASTEXITCODE -ne 0 -or $npmVersion -cnotmatch '^11\.[0-9]+\.[0-9]+$') {
-            throw "Expected npm 11 lockfile semantics; executable '$npmPath' reported '$npmVersion'."
-          }
-          "APPROVED_NPM_PATH=$npmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Using npm $npmVersion from $npmPath"
 
       - name: Install and verify Microsoft's latest stable PowerShell
         shell: pwsh
@@ -318,7 +218,7 @@ jobs:
           "POWERSHELL_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "PowerShell $tag from $assetName; sha256:$expectedSha; executable $runtimePath"
 
-      - name: Acquire and bind exact Pester 6.2.0 for Core and legacy-driver regressions
+      - name: Acquire and bind exact Pester 6.2.0 for Core validation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -354,144 +254,147 @@ jobs:
         shell: pwsh
         working-directory: driver
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           VALIDATION_MODE: ${{ steps.authority-mode.outputs.validation_mode }}
           APPROVED_AUTHORITY_REVISION: ${{ steps.authority-mode.outputs.authority_revision }}
         run: |
-          function Assert-LegacySourceCheckProjection {
+          function Assert-CoreSourceCheckReport {
             param(
               [Parameter(Mandatory)] $Report,
               [Parameter(Mandatory)][int] $ProcessExitCode,
               [Parameter(Mandatory)][string] $ExpectedSourceRevision,
               [Parameter(Mandatory)][string] $ExpectedBaseRevision,
-              [Parameter(Mandatory)][string] $ExpectedAuthorityRunnerSha256
+              [Parameter(Mandatory)][string] $ExpectedAuthorityRevision,
+              [Parameter(Mandatory)][string] $ExpectedEventName,
+              [Parameter(Mandatory)][string] $ArtifactsRoot,
+              [Parameter(Mandatory)][string] $OutputPath
             )
-            # Standard 8.1.2 permits this source-only projection while canonical BLOCKED/10 remains unchanged.
-            $source = $Report.sourceConformance
-            if ($Report.schemaVersion -ne 1 -or
-                $Report.evidence -cne 'standard-validation-evidence-v1' -or
-                $Report.contract -cne 'standard-validation-contract-v1' -or
-                $Report.releaseEligible -cne $false -or
-                $Report.candidate.sourceRepository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
-                $Report.candidate.sourceRevision -cne $ExpectedSourceRevision -or
+            if ($ProcessExitCode -ne 0 -or $Report.exitCode -ne $ProcessExitCode) {
+              throw 'Core report disagrees with the actual validator process exit.'
+            }
+            if ($Report.candidate.sourceRevision -cne $ExpectedSourceRevision -or
+                $Report.state -cne 'PASS' -or $Report.exitCode -ne 0) {
+              throw 'Canonical report does not prove full exact-head source validation.'
+            }
+            $checks = @($Report.checks)
+            if ($Report.schemaVersion -ne 2 -or
+                $Report.evidence -cne 'standard-core-validation-evidence-v2' -or
+                $Report.releaseEligible -ne $false -or
+                $Report.contentMode -cne 'immutable-source' -or
+                $Report.candidate.repository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
                 $Report.candidate.baseRevision -cne $ExpectedBaseRevision -or
-                [string]$Report.candidate.candidateId -cnotmatch '^[0-9a-f]{64}$' -or
-                [string]$Report.candidate.contentSha256 -cnotmatch '^[0-9a-f]{64}$' -or
-                $Report.authority.repository -cne 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git' -or
-                $Report.authority.runnerSha256 -cne $ExpectedAuthorityRunnerSha256 -or
-                $source.schemaVersion -ne 1 -or $source.contract -cne 'standard-source-conformance-v1' -or
-                $source.status -cne 'passed' -or $source.scope -cne 'source-stages-1-5' -or
-                $source.sourceRevision -cne $ExpectedSourceRevision -or
-                $source.candidateId -cne $Report.candidate.candidateId -or
-                $source.contentSha256 -cne $Report.candidate.contentSha256 -or
-                $source.releaseEligible -cne $false -or @($source.failureReasons).Count -ne 0) {
-              throw 'Legacy report lacks the exact approved source-check projection.'
+                $Report.candidate.eventName -cne $ExpectedEventName -or
+                $Report.candidate.contentMode -cne 'immutable-source' -or
+                $Report.authority.revision -cne $ExpectedAuthorityRevision -or
+                $Report.authority.contentMode -cne 'source' -or
+                $Report.adapter.identity -cne 'standard-core-adapter-v2' -or
+                $Report.failure -ne $null -or $checks.Count -ne 2 -or
+                [IO.Path]::GetFullPath([string]$Report.artifacts.root) -ine [IO.Path]::GetFullPath($artifactsRoot) -or
+                [IO.Path]::GetFullPath([string]$Report.artifacts.outputPath) -ine [IO.Path]::GetFullPath($outputPath)) {
+              throw 'Core report lacks exact immutable candidate and authority evidence.'
             }
-            $ids = @('controlled-acquisition', 'integrity-verification', 'package-validation',
-              'skillspector-static', 'repository-tests', 'conditional-semantic-scan',
-              'ai-review', 'human-approval', 'publish-or-install', 'post-install-verification')
-            $stages = @($Report.stages)
-            $checked = @($source.checkedStages)
-            if ($stages.Count -ne 10 -or $checked.Count -ne 5) { throw 'Legacy source stage inventory is incomplete.' }
-            for ($i = 0; $i -lt $ids.Count; $i++) {
-              if ($stages[$i].order -ne ($i + 1) -or $stages[$i].id -cne $ids[$i]) {
-                throw 'Legacy canonical stage identity or order differs.'
-              }
-              if ($i -lt 5 -and ($stages[$i].status -cne 'passed' -or
-                  $checked[$i].order -ne ($i + 1) -or $checked[$i].id -cne $ids[$i] -or
-                  $checked[$i].status -cne 'passed')) { throw 'Legacy source stage did not fully pass.' }
-              if ($i -ge 6 -and $stages[$i].status -cne 'not-applicable') {
-                throw 'Legacy source projection includes an unexpected later-stage result.'
+            if ($checks[0].id -cne 'repository-general' -or $checks[0].kind -cne 'general' -or
+                $checks[1].id -cne 'repository-pester' -or $checks[1].kind -cne 'pester') {
+              throw 'Core report does not contain the two reviewed repository checks.'
+            }
+            foreach ($check in $checks) {
+              if ($check.status -cne 'passed' -or $check.exitCode -ne 0 -or $check.cleanedUp -ne $true) {
+                throw "Core check '$($check.id)' did not finish successfully and cleanly."
               }
             }
-            foreach ($stage in $stages[2..4]) {
-              $events = @($stage.events)
-              if ($events.Count -le 0) { throw 'Legacy source stage has no validated process events.' }
-              foreach ($event in $events) {
-                if ($event.candidateId -cne $Report.candidate.candidateId -or
-                    $event.status -cne 'passed' -or $event.exitCode -ne 0 -or $event.cleanedUp -cne $true) {
-                  throw 'Legacy source process evidence failed, changed candidate, or did not clean up.'
-                }
-              }
-            }
-            $canonical = $source.canonicalValidation
-            if ($Report.exitCode -ne $ProcessExitCode -or
-                $canonical.state -cne $Report.state -or $canonical.exitCode -ne $ProcessExitCode -or
-                $canonical.stage6Status -cne $stages[5].status -or $canonical.releaseEligible -cne $false) {
-              throw 'Legacy projection disagrees with the original canonical process result.'
-            }
-            if ($Report.state -ceq 'PASS' -and $ProcessExitCode -eq 0) {
-              if ($null -ne $Report.failure -or $stages[5].status -cne 'not-applicable') {
-                throw 'Legacy PASS has unexpected failure or Semantic evidence.'
-              }
-            }
-            elseif ($Report.state -ceq 'BLOCKED' -and $ProcessExitCode -eq 10) {
-              if ($stages[5].status -cne 'blocked' -or $Report.failure.state -cne 'BLOCKED' -or
-                  $Report.failure.message -cne 'Semantic scan was triggered without explicit consent.') {
-                throw 'Legacy BLOCKED is not the permitted missing-consent source projection.'
-              }
-            }
-            else { throw 'Legacy canonical failure cannot be projected as a passed source check.' }
-            $repositoryEvents = @($stages[4].events)
-            $generalEvents = @($repositoryEvents | Where-Object { $_.toolId -ceq 'repository-test-general' })
-            $pesterEvents = @($repositoryEvents | Where-Object { $_.toolId -ceq 'repository-test-pester' })
-            $typedEvents = @($source.pester.events)
-            if ($repositoryEvents.Count -ne 2 -or $generalEvents.Count -ne 1 -or $pesterEvents.Count -ne 1 -or
-                $typedEvents.Count -ne 1 -or $source.pester.eventCount -ne 1) {
-              throw 'Legacy report lacks the two reviewed repository checks and typed Pester event.'
-            }
-            foreach ($event in $repositoryEvents) {
-              if ($event.stageId -cne 'repository-tests' -or
-                  [string]$event.eventId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
-                  [string]$event.outputSha256 -cnotmatch '^[0-9a-f]{64}$') {
-                throw 'Legacy repository process identity is incomplete.'
-              }
-            }
-            if ($generalEvents[0].eventId -ceq $pesterEvents[0].eventId) { throw 'Legacy repository event identity is duplicated.' }
-            $typed = $typedEvents[0]
-            if ($typed.eventId -cne $pesterEvents[0].eventId -or $typed.toolId -cne 'repository-test-pester' -or
-                $typed.outputSha256 -cne $pesterEvents[0].outputSha256 -or $typed.testInventoryCount -le 0 -or
-                [string]$typed.testInventorySha256 -cnotmatch '^[0-9a-f]{64}$') {
-              throw 'Legacy typed Pester evidence does not match its validated process and inventory.'
-            }
-            foreach ($counts in @($source.pester, $typed)) {
-              foreach ($name in @('total', 'passed', 'skipped', 'failed')) {
-                $value = $counts.$name
-                if ($null -eq $value -or $value -is [bool] -or [string]$value -cnotmatch '^(0|[1-9][0-9]*)$') {
-                  throw 'Legacy Pester count is missing or invalid.'
-                }
-              }
-              if ($counts.total -le 0 -or $counts.passed -le 0 -or $counts.failed -ne 0 -or
-                  ($counts.passed + $counts.skipped) -ne $counts.total) {
-                throw 'Legacy Pester evidence is empty, failed, all-skipped, or inconsistent.'
-              }
-            }
-            foreach ($name in @('total', 'passed', 'skipped', 'failed')) {
-              if ($source.pester.$name -ne $typed.$name) { throw 'Legacy aggregate and typed Pester counts differ.' }
+            $counts = $checks[1].testCounts
+            if ($null -eq $counts -or $counts.total -le 0 -or $counts.passed -le 0 -or
+                $counts.failed -ne 0 -or $counts.skipped -lt 0 -or
+                ($counts.passed + $counts.skipped) -ne $counts.total) {
+              throw 'Core Pester evidence lacks a complete passing test count.'
             }
             return $true
           }
+
+          function Write-CorePesterDiagnostics {
+            param(
+              [Parameter(Mandatory)][string] $ReportPath,
+              [Parameter(Mandatory)][string] $RunOwnedRoot,
+              [Parameter(Mandatory)][string] $ArtifactsRoot,
+              [Parameter(Mandatory)][string] $ExpectedSourceRevision
+            )
+            try {
+              $failedReport = Get-Content -LiteralPath $ReportPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
+              $ownedRoot = [IO.Path]::GetFullPath($RunOwnedRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              $coreRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              $runRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.runRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              $checks = @($failedReport.checks)
+              if ($failedReport.schemaVersion -eq 2 -and
+                  [string]$failedReport.evidence -ceq 'standard-core-validation-evidence-v2' -and
+                  [string]$failedReport.candidate.sourceRevision -ceq $ExpectedSourceRevision -and
+                  [IO.Path]::GetFullPath([string]$failedReport.artifacts.root) -ieq $coreRoot -and
+                  [IO.Path]::GetFullPath([string]$failedReport.artifacts.outputPath) -ieq [IO.Path]::GetFullPath($ReportPath) -and
+                  $runRoot.StartsWith($coreRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+                  $checks.Count -eq 2 -and $checks[1].id -ceq 'repository-pester' -and $checks[1].kind -ceq 'pester') {
+                $stderrPath = [IO.Path]::GetFullPath([string]$checks[1].stderrPath)
+                $expectedRawRoot = Join-Path $runRoot 'raw'
+                if ([IO.Path]::GetDirectoryName($stderrPath) -ieq $expectedRawRoot -and
+                    [IO.Path]::GetFileName($stderrPath) -ceq '002-repository-pester.stderr.txt' -and
+                    (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
+                  $cursor = $stderrPath
+                  $safePath = $true
+                  while ($cursor.Length -ge $ownedRoot.Length) {
+                    if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                      $safePath = $false
+                      break
+                    }
+                    if ($cursor -ieq $ownedRoot) { break }
+                    $cursor = Split-Path -Parent $cursor
+                  }
+                  if ($safePath -and $cursor -ieq $ownedRoot -and
+                      (Get-FileHash -LiteralPath $stderrPath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq [string]$checks[1].stderrSha256) {
+                    $diagnostic = Get-Content -LiteralPath $stderrPath -Raw -Encoding utf8
+                    if ($diagnostic.Length -gt 12000) {
+                      $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
+                    }
+                    foreach ($line in @($diagnostic -split '\r?\n')) {
+                      if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
+                    }
+                  }
+                }
+                if ($checks[1].status -ceq 'timeout') {
+                  $snapshotRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.snapshotRoot)
+                  if ($snapshotRoot -ieq (Join-Path $runRoot 'candidate')) {
+                    $progressPath = Join-Path $snapshotRoot 'repository-pester-progress.log'
+                    if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
+                      $cursor = $progressPath
+                      $safePath = $true
+                      while ($cursor.Length -ge $ownedRoot.Length) {
+                        if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                          $safePath = $false
+                          break
+                        }
+                        if ($cursor -ieq $ownedRoot) { break }
+                        $cursor = Split-Path -Parent $cursor
+                      }
+                      if ($safePath -and $cursor -ieq $ownedRoot) {
+                        foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
+                          $boundedLine = [string]$line
+                          if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
+                          if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            catch { Write-Output 'Run-owned Core Pester diagnostic could not be read.' }
+          }
+
           $ErrorActionPreference = 'Stop'
+          if ($env:VALIDATION_MODE -cne 'core') { throw 'Protected validation requires the approved Core mode.' }
           if ($env:VALIDATION_MODE -ceq 'core') {
             [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $null, 'Process')
             [Environment]::SetEnvironmentVariable('GH_TOKEN', $null, 'Process')
           }
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
-          if ($env:VALIDATION_MODE -ceq 'legacy') {
-          $runnerNpmPrefix = [Environment]::GetEnvironmentVariable('NPM_CONFIG_PREFIX', 'Process')
-          if ($runnerNpmPrefix -ceq 'C:\npm\prefix') {
-            [Environment]::SetEnvironmentVariable('NPM_CONFIG_PREFIX', $null, 'Process')
-          }
-          elseif (-not [string]::IsNullOrWhiteSpace($runnerNpmPrefix)) {
-            throw 'Unexpected npm prefix in the Windows runner environment.'
-          }
-          $npmPath = (Get-Command npm.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-          if ([IO.Path]::GetFullPath($npmPath) -ine [IO.Path]::GetFullPath($env:APPROVED_NPM_PATH)) {
-            throw 'The npm executable changed after the approved runtime was bound.'
-          }
-          }
           $env:PATH = "$(Split-Path -Parent $env:POWERSHELL_RUNTIME);$env:PATH"
           $resolvedRuntime = Get-Command pwsh -ErrorAction Stop | Select-Object -First 1
           if ([string]$resolvedRuntime.CommandType -cne 'Application' -or
@@ -525,238 +428,28 @@ jobs:
             }
             [string]$parents[0]
           }
-          if ($env:VALIDATION_MODE -ceq 'legacy') {
-          $goVersion = @(& go version)
-          if ($LASTEXITCODE -ne 0 -or $goVersion.Count -ne 1 -or
-              [string]$goVersion[0] -notmatch '^go version go(?<version>[0-9]+\.[0-9]+\.[0-9]+) [^\s]+/[^\s]+$') {
-            throw 'The approved stable Go runtime could not be identified.'
-          }
-          $expectedGoRuntimeVersion = $Matches.version
-          $outputPath = Join-Path $env:RUN_OWNED_ROOT 'skill-general-conformance-report.json'
+          $artifactsRoot = Join-Path $env:RUN_OWNED_ROOT 'artifacts'
+          if (Test-Path -LiteralPath $artifactsRoot) { throw 'Core artifacts directory already exists.' }
+          New-Item -ItemType Directory -Path $artifactsRoot -ErrorAction Stop | Out-Null
+          $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
           $driverArgs = @('-RepositoryRoot', $candidate,
-            '-ArtifactsRoot', $env:RUN_OWNED_ROOT,
+            '-ArtifactsRoot', $artifactsRoot,
             '-BaseCommit', $baseCommit,
-            '-ExpectedGoRuntimeVersion', $expectedGoRuntimeVersion,
+            '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
+            '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
             '-TimeoutSeconds', '900',
             '-OutputPath', $outputPath)
-          }
-          elseif ($env:VALIDATION_MODE -ceq 'core') {
-            $artifactsRoot = Join-Path $env:RUN_OWNED_ROOT 'artifacts'
-            if (Test-Path -LiteralPath $artifactsRoot) { throw 'Core artifacts directory already exists.' }
-            New-Item -ItemType Directory -Path $artifactsRoot -ErrorAction Stop | Out-Null
-            $outputPath = Join-Path $artifactsRoot 'standard-core-validation-v2-report.json'
-            $driverArgs = @('-RepositoryRoot', $candidate,
-              '-ArtifactsRoot', $artifactsRoot,
-              '-BaseCommit', $baseCommit,
-              '-AuthorityRepositoryRoot', (Join-Path $env:GITHUB_WORKSPACE 'authority'),
-              '-TrustedToolRoot', (Split-Path -Parent $env:POWERSHELL_RUNTIME),
-              '-TimeoutSeconds', '900',
-              '-OutputPath', $outputPath)
-          }
-          else { throw 'Protected authority mode is missing or invalid.' }
           pwsh -NoProfile -NonInteractive -File ./scripts/Validate.ps1 @driverArgs
           $validatorExitCode = [int]$LASTEXITCODE
-          $legacySourceAccepted = $false
-          $legacyProjectionError = $null
-          if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
-            try {
-              $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-              $candidateConfig = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json -Depth 20
-              $runnerPins = @($candidateConfig.authority.files | Where-Object { $_.path -ceq 'scripts/Invoke-StandardValidation.ps1' })
-              if ($runnerPins.Count -ne 1) { throw 'Legacy candidate has no unique approved authority runner pin.' }
-              $legacySourceAccepted = Assert-LegacySourceCheckProjection -Report $report -ProcessExitCode $validatorExitCode -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision $baseCommit -ExpectedAuthorityRunnerSha256 $runnerPins[0].sha256
-            }
-            catch { $legacyProjectionError = $_.Exception.Message }
-          }
-          if ($validatorExitCode -ne 0 -and -not $legacySourceAccepted) {
-            if ($env:VALIDATION_MODE -ceq 'legacy' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
-              try {
-                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-                if ([string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA) {
-                  $pesterEvents = @($failedReport.stages |
-                    Where-Object { $_.id -ceq 'repository-tests' } |
-                    ForEach-Object { $_.events } |
-                    Where-Object { $_.stageId -ceq 'repository-tests' -and $_.toolId -ceq 'repository-test-pester' })
-                  foreach ($event in $pesterEvents) {
-                    $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
-                    $eventPath = [IO.Path]::GetFullPath([string]$event.outputPath)
-                    if (-not $eventPath.StartsWith($ownedRoot + [IO.Path]::DirectorySeparatorChar,
-                        [StringComparison]::OrdinalIgnoreCase) -or
-                        [IO.Path]::GetFileName($eventPath) -cne "event-$($event.eventId).json") { continue }
-                    $cursor = Split-Path -Parent $eventPath
-                    $safePath = $true
-                    while ($cursor.Length -ge $ownedRoot.Length) {
-                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                        $safePath = $false
-                        break
-                      }
-                      if ($cursor -ieq $ownedRoot) { break }
-                      $cursor = Split-Path -Parent $cursor
-                    }
-                    if (-not $safePath -or -not (Test-Path -LiteralPath $eventPath -PathType Leaf)) { continue }
-                    $rawEvent = Get-Content -LiteralPath $eventPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-                    if ([string]$rawEvent.eventId -cne [string]$event.eventId -or
-                        [string]$rawEvent.stageId -cne 'repository-tests' -or
-                        [string]$rawEvent.toolId -cne 'repository-test-pester') { continue }
-                    $diagnostic = [string]$rawEvent.stderr
-                    if ($diagnostic.Length -gt 12000) {
-                      $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
-                    }
-                    foreach ($line in @($diagnostic -split '\r?\n')) {
-                      if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
-                    }
-                    $eventIdCompact = ([string]$event.eventId).Replace('-', '')
-                    if ($event.status -ceq 'timeout' -and $eventIdCompact -cmatch '^[0-9a-f]{32}$') {
-                      $childWorkRoot = Join-Path $ownedRoot 'child-work'
-                      if (Test-Path -LiteralPath $childWorkRoot -PathType Container) {
-                        $childRoots = @(Get-ChildItem -LiteralPath $childWorkRoot -Directory -Force -ErrorAction Stop)
-                        if ($childRoots.Count -eq 1 -and $childRoots[0].Name -cmatch '^[0-9a-f]{32}$') {
-                          $progressPath = Join-Path (Join-Path $childRoots[0].FullName $eventIdCompact) 'repository-pester-progress.log'
-                          if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
-                            $cursor = $progressPath
-                            $safePath = $true
-                            while ($cursor.Length -ge $ownedRoot.Length) {
-                              if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                                $safePath = $false
-                                break
-                              }
-                              if ($cursor -ieq $ownedRoot) { break }
-                              $cursor = Split-Path -Parent $cursor
-                            }
-                            if ($safePath -and $cursor -ieq $ownedRoot) {
-                              foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
-                                $boundedLine = [string]$line
-                                if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
-                                if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-              catch { Write-Output 'Run-owned Pester diagnostic could not be read.' }
-            }
-            elseif ($env:VALIDATION_MODE -ceq 'core' -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
-              try {
-                $failedReport = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-                $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT).TrimEnd([IO.Path]::DirectorySeparatorChar)
-                $coreRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
-                $runRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.runRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
-                $checks = @($failedReport.checks)
-                if ($failedReport.schemaVersion -eq 2 -and
-                    [string]$failedReport.evidence -ceq 'standard-core-validation-evidence-v2' -and
-                    [string]$failedReport.candidate.sourceRevision -ceq $env:EXPECTED_SOURCE_SHA -and
-                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.root) -ieq $coreRoot -and
-                    [IO.Path]::GetFullPath([string]$failedReport.artifacts.outputPath) -ieq [IO.Path]::GetFullPath($outputPath) -and
-                    $runRoot.StartsWith($coreRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
-                    $checks.Count -eq 2 -and $checks[1].id -ceq 'repository-pester' -and $checks[1].kind -ceq 'pester') {
-                  $stderrPath = [IO.Path]::GetFullPath([string]$checks[1].stderrPath)
-                  $expectedRawRoot = Join-Path $runRoot 'raw'
-                  if ([IO.Path]::GetDirectoryName($stderrPath) -ieq $expectedRawRoot -and
-                      [IO.Path]::GetFileName($stderrPath) -ceq '002-repository-pester.stderr.txt' -and
-                      (Test-Path -LiteralPath $stderrPath -PathType Leaf)) {
-                    $cursor = $stderrPath
-                    $safePath = $true
-                    while ($cursor.Length -ge $ownedRoot.Length) {
-                      if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                        $safePath = $false
-                        break
-                      }
-                      if ($cursor -ieq $ownedRoot) { break }
-                      $cursor = Split-Path -Parent $cursor
-                    }
-                    if ($safePath -and $cursor -ieq $ownedRoot -and
-                        (Get-FileHash -LiteralPath $stderrPath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq [string]$checks[1].stderrSha256) {
-                      $diagnostic = Get-Content -LiteralPath $stderrPath -Raw -Encoding utf8
-                      if ($diagnostic.Length -gt 12000) {
-                        $diagnostic = $diagnostic.Substring(0, 1000) + '[middle truncated]' + $diagnostic.Substring($diagnostic.Length - 11000)
-                      }
-                      foreach ($line in @($diagnostic -split '\r?\n')) {
-                        if ($line.Length -gt 0) { Write-Output "Pester diagnostic: $line" }
-                      }
-                    }
-                  }
-                  if ($checks[1].status -ceq 'timeout') {
-                    $snapshotRoot = [IO.Path]::GetFullPath([string]$failedReport.artifacts.snapshotRoot)
-                    if ($snapshotRoot -ieq (Join-Path $runRoot 'candidate')) {
-                      $progressPath = Join-Path $snapshotRoot 'repository-pester-progress.log'
-                      if (Test-Path -LiteralPath $progressPath -PathType Leaf) {
-                        $cursor = $progressPath
-                        $safePath = $true
-                        while ($cursor.Length -ge $ownedRoot.Length) {
-                          if ((Get-Item -LiteralPath $cursor -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                            $safePath = $false
-                            break
-                          }
-                          if ($cursor -ieq $ownedRoot) { break }
-                          $cursor = Split-Path -Parent $cursor
-                        }
-                        if ($safePath -and $cursor -ieq $ownedRoot) {
-                          foreach ($line in @(Get-Content -LiteralPath $progressPath -Tail 24 -ErrorAction Stop)) {
-                            $boundedLine = [string]$line
-                            if ($boundedLine.Length -gt 300) { $boundedLine = $boundedLine.Substring(0, 300) + '[truncated]' }
-                            if ($boundedLine.Length -gt 0) { Write-Output "Pester progress: $boundedLine" }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-              catch { Write-Output 'Run-owned Core Pester diagnostic could not be read.' }
+          if ($validatorExitCode -ne 0) {
+            if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
+              Write-CorePesterDiagnostics -ReportPath $outputPath -RunOwnedRoot $env:RUN_OWNED_ROOT -ArtifactsRoot $artifactsRoot -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA
             }
             throw "Canonical validator exited $validatorExitCode."
           }
           if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) { throw 'Canonical report is missing.' }
           $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json -Depth 100
-          if ($env:VALIDATION_MODE -ceq 'legacy') {
-            if (-not $legacySourceAccepted) { throw "Legacy source projection rejected: $legacyProjectionError" }
-            Write-Host "Source stages 1-5 passed for $($report.candidate.sourceRevision); original canonical state=$($report.state), exitCode=$validatorExitCode, releaseEligible=false."
-            # The workflow publishes source checks only; preserve the report and actual validator exit above.
-            $global:LASTEXITCODE = 0
-          }
-          elseif ($env:VALIDATION_MODE -ceq 'core') {
-            if ($report.candidate.sourceRevision -cne $env:EXPECTED_SOURCE_SHA -or
-                $report.state -cne 'PASS' -or $report.exitCode -ne 0) {
-              throw 'Canonical report does not prove full exact-head source validation.'
-            }
-            $checks = @($report.checks)
-            if ($report.schemaVersion -ne 2 -or
-                $report.evidence -cne 'standard-core-validation-evidence-v2' -or
-                $report.releaseEligible -ne $false -or
-                $report.contentMode -cne 'immutable-source' -or
-                $report.candidate.repository -cne 'https://github.com/SyuanTsai/Skill-General.git' -or
-                $report.candidate.baseRevision -cne $baseCommit -or
-                $report.candidate.eventName -cne $env:GITHUB_EVENT_NAME -or
-                $report.candidate.contentMode -cne 'immutable-source' -or
-                $report.authority.revision -cne $env:APPROVED_AUTHORITY_REVISION -or
-                $report.authority.contentMode -cne 'source' -or
-                $report.adapter.identity -cne 'standard-core-adapter-v2' -or
-                $report.failure -ne $null -or $checks.Count -ne 2 -or
-                [IO.Path]::GetFullPath([string]$report.artifacts.root) -ine [IO.Path]::GetFullPath($artifactsRoot) -or
-                [IO.Path]::GetFullPath([string]$report.artifacts.outputPath) -ine [IO.Path]::GetFullPath($outputPath)) {
-              throw 'Core report lacks exact immutable candidate and authority evidence.'
-            }
-            if ($checks[0].id -cne 'repository-general' -or $checks[0].kind -cne 'general' -or
-                $checks[1].id -cne 'repository-pester' -or $checks[1].kind -cne 'pester') {
-              throw 'Core report does not contain the two reviewed repository checks.'
-            }
-            foreach ($check in $checks) {
-              if ($check.status -cne 'passed' -or $check.exitCode -ne 0 -or $check.cleanedUp -ne $true) {
-                throw "Core check '$($check.id)' did not finish successfully and cleanly."
-              }
-            }
-            $counts = $checks[1].testCounts
-            if ($null -eq $counts -or $counts.total -le 0 -or $counts.passed -le 0 -or
-                $counts.failed -ne 0 -or $counts.skipped -lt 0 -or
-                ($counts.passed + $counts.skipped) -ne $counts.total) {
-              throw 'Core Pester evidence lacks a complete passing test count.'
-            }
-          }
-          else { throw 'Protected authority mode changed before report acceptance.' }
+          [void](Assert-CoreSourceCheckReport -Report $report -ProcessExitCode $validatorExitCode -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA -ExpectedBaseRevision $baseCommit -ExpectedAuthorityRevision $env:APPROVED_AUTHORITY_REVISION -ExpectedEventName $env:GITHUB_EVENT_NAME -ArtifactsRoot $artifactsRoot -OutputPath $outputPath)
       - name: Preserve complete Core Pester case inventory
         id: preserve-core-pester-inventory
         if: ${{ always() && steps.authority-mode.outputs.validation_mode == 'core' }}
