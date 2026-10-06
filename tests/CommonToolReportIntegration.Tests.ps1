@@ -4,6 +4,40 @@
 # Keep the shared helper in the test-file scope for both independent Describe containers.
 . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
 
+Describe 'General Static native failure propagation' {
+    # Scenario: SkillSpector exits nonzero while a plausible previous JSON report already exists.
+    # Purpose: the actual Static dispatch must reject native failure before reading PASS bytes (V3).
+    It 'InterT10_rejects_nonzero_Static_exit_before_reading_an_existing_report' {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
+        if (-not $child.Success) { throw 'General child runner source was not found.' }
+        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
+        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
+        $scanner = Join-Path $TestDrive 'scanner.ps1'
+        [IO.File]::WriteAllText($scanner, '$global:LASTEXITCODE = 7')
+        [IO.File]::WriteAllText((Join-Path $TestDrive 'skillspector-demo.json'), '{"decision":"PASS"}')
+        $fixture = New-Module -ScriptBlock {
+            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
+            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
+            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
+            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
+            function Read-Json { param($Path, $Context) throw 'Static dispatch read stale report after native failure.' }
+            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
+            function New-Envelope { param($ActiveSkills, $Findings, $Additional) throw 'Static dispatch published PASS after native failure.' }
+        }
+        Push-Location $TestDrive
+        try {
+            { & $fixture { param($body, $path, $root)
+                $script:FixtureRoot = $root
+                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
+                $activeSkills = @('demo'); $SemanticRequired = 'false'
+                & ([scriptblock]::Create($body))
+            } $dispatch.Groups['body'].Value $scanner $TestDrive } | Should -Throw -ExpectedMessage '*returned exit code 7*'
+        }
+        finally { Pop-Location }
+    }
+}
+
 Describe 'Candidate-pinned Common Tool authority transport' {
     BeforeAll {
         . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
@@ -124,6 +158,9 @@ Describe 'General child uses central package tool report rules' {
         $script:toolchainHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $script:toolchainPath).Hash.ToLowerInvariant()
     }
 
+    BeforeEach { Push-Location -LiteralPath $script:testRoot }
+    AfterEach { Pop-Location }
+
     AfterAll {
         foreach ($name in $script:priorEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $script:priorEnv[$name]) }
         $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
@@ -156,6 +193,13 @@ Describe 'General child uses central package tool report rules' {
         $envelope = ($output -join "`n") | ConvertFrom-Json -Depth 10
         $envelope.decision | Should -Be 'PASS'
         $envelope.candidateIdentity | Should -Be ('a' * 64)
+        @($envelope.nativeReports).Count | Should -Be 1
+        $native = $envelope.nativeReports[0]
+        $native.skillId | Should -Be 'demo'
+        $native.command | Should -Be $script:fakeToolPath
+        $native.exitCode | Should -Be 0
+        $native.path | Should -Be (Join-Path $script:testRoot 'native-skill-validator-demo.json')
+        $native.sha256 | Should -Be (Get-FileHash -LiteralPath $native.path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 
     # Scenario: the same report is supplied with a forged central runner digest.

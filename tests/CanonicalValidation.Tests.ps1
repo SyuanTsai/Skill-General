@@ -1,5 +1,267 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
+Describe 'Source validation request boundary' {
+    BeforeAll {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+        if (@($errors).Count) { throw 'Validate.ps1 must parse before source request fixtures run.' }
+        $parts = @($ast.EndBlock.Statements | Where-Object {
+            ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -cin @(
+                '$script:AuthorityRepository', '$script:NextAuthorityCommit', '$script:MergedAuthorityCommit', '$script:SourceAuthorityCommit',
+                '$script:SourceRepository', '$childRunnerText')) -or
+            ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -cin @(
+                'Test-LegacyRunRequested', 'Assert-OrdinaryCoreRunRequest', 'Assert-NoReparseAncestors',
+                'Assert-ExactPropertySet', 'Assert-NoDuplicateJsonProperties', 'Read-JsonFile', 'Read-SourceToolSetup',
+                'Test-PathEqual', 'Get-FileSha256'))
+        } | ForEach-Object { $_.Extent.Text })
+        # Shared receipt/frozen-file validation is independently covered by the authority suite.
+        # These deterministic doubles observe this adapter's calls while testing its own toolchain mapping.
+        $centralAssertions = @'
+$script:FrozenAssertionCalls = 0
+$script:ReceiptAssertionCalls = 0
+function Assert-StandardCoreFrozenFiles { param($Files) $script:FrozenAssertionCalls++ }
+function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, $RunId) $script:ReceiptAssertionCalls++ }
+'@
+        $script:SourceRequestModule = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n") + "`n" + $centralAssertions))
+        $script:CorePin = (Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'config/standard-v1.json') -Raw | ConvertFrom-Json).authority
+        function Invoke-SourceRequestFixture {
+            param([hashtable] $Bound)
+            & $script:SourceRequestModule { param($pin, $bound)
+                Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $pin -BoundParameters $bound
+            } $script:CorePin $Bound
+        }
+        function New-PreparedSourceFixture {
+            $path = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.json')
+            $runId = [guid]::NewGuid().ToString('N')
+            $owned = Join-Path $TestDrive "source-tools-$runId"
+            [void](New-Item -ItemType Directory -Path $owned)
+            $wrapper = Join-Path $owned 'Invoke-SkillGeneralValidationChild.ps1'
+            [IO.File]::WriteAllText($wrapper, (& $script:SourceRequestModule { $childRunnerText }), [Text.UTF8Encoding]::new($false))
+            $toolchain = Join-Path $owned 'toolchain.json'
+            $archive = Join-Path $owned 'candidate.zip'
+            $payloads = [ordered]@{}
+            foreach ($name in @('validator', 'node', 'entry', 'static')) {
+                $payload = Join-Path $owned "$name.bin"
+                [IO.File]::WriteAllText($payload, "offline $name fixture bytes", [Text.UTF8Encoding]::new($false))
+                $payloads[$name] = @{ path = $payload; sha256 = (Get-FileHash $payload).Hash.ToLowerInvariant() }
+            }
+            $receipts = [ordered]@{}
+            foreach ($name in @('skill-validator', 'skill-tools', 'skillspector')) {
+                $receiptPath = Join-Path $owned "receipt-$name.json"
+                $receipt = [ordered]@{ toolName = $name; resolutionRunId = $runId; frozenForRun = $true; channel = 'latest-stable'; resolvedVersion = 'fixture'; resolvedIdentity = 'offline fixture' }
+                if ($name -eq 'skill-tools') {
+                    $receipt.nodePath = $payloads.node.path; $receipt.nodeSha256 = $payloads.node.sha256
+                    $receipt.entryPointPath = $payloads.entry.path; $receipt.entryPointSha256 = $payloads.entry.sha256
+                }
+                else {
+                    $payload = if ($name -eq 'skillspector') { $payloads.static } else { $payloads.validator }
+                    $receipt.executablePath = $payload.path; $receipt.executableSha256 = $payload.sha256
+                }
+                [IO.File]::WriteAllText($receiptPath, ($receipt | ConvertTo-Json -Depth 10))
+                $receipts[$name] = @{ path = $receiptPath; sha256 = (Get-FileHash $receiptPath).Hash.ToLowerInvariant() }
+            }
+            $toolchainValue = [ordered]@{
+                skillValidatorPath = $payloads.validator.path; skillValidatorSha256 = $payloads.validator.sha256
+                skillToolsNodePath = $payloads.node.path; skillToolsNodeSha256 = $payloads.node.sha256
+                skillToolsEntryPointPath = $payloads.entry.path; skillToolsEntryPointSha256 = $payloads.entry.sha256
+                skillSpectorPath = $payloads.static.path; skillSpectorSha256 = $payloads.static.sha256
+                skillSpectorReceiptPath = $receipts.skillspector.path; skillSpectorReceiptSha256 = $receipts.skillspector.sha256
+            }
+            [IO.File]::WriteAllText($toolchain, ($toolchainValue | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($archive, 'offline fixture archive bytes', [Text.UTF8Encoding]::new($false))
+            $repository = & $script:SourceRequestModule { $script:SourceRepository }
+            $arguments = @('-NoProfile', '-NonInteractive', '-File', $wrapper, '-ToolchainPath', $toolchain,
+                '-ToolchainSha256', (Get-FileHash $toolchain).Hash.ToLowerInvariant(), '-SourceRepository', $repository,
+                '-SourceRevision', ('b' * 40), '-ArchiveSha256', (Get-FileHash $archive).Hash.ToLowerInvariant())
+            $dispatch = [ordered]@{}
+            foreach ($entry in @(@('packageAdapter','package-adapter'),@('skillValidator','skill-validator'),@('skillTools','skill-tools'),@('staticAnalyzer','static'))) {
+                $dispatch[$entry[0]] = @{ command = 'fixture-pwsh'; arguments = @($arguments + @('-Mode',$entry[1])) }
+            }
+            $dispatch.toolReceipts = @($receipts.Values)
+            $dispatch.frozenFiles = @($payloads.Values) + @($receipts.Values) + @(foreach ($file in @($wrapper, $toolchain)) {
+                @{ path = $file; sha256 = (Get-FileHash $file).Hash.ToLowerInvariant() }
+            })
+            $prepared = [ordered]@{
+                schemaVersion = 1; preparation = 'skill-general-source-tools'; runId = $runId
+                sourceRevision = ('b' * 40); authorityRevision = ('c' * 40); ownedRoot = $owned
+                sourceValidation = $dispatch
+            }
+            [IO.File]::WriteAllText($path, ($prepared | ConvertTo-Json -Depth 10))
+            return $path
+        }
+    }
+
+    # Scenario: ordinary Core has no source setup or source execution inputs.
+    # Purpose: preserve the existing offline Core entry without adding acquisition prerequisites (V4).
+    It 'UnitT10_accepts_ordinary_Core_without_source_inputs' {
+        { Invoke-SourceRequestFixture -Bound @{} } | Should -Not -Throw
+    }
+
+    # Scenario: a prepared source-tool path is supplied to ordinary Core without an explicit source purpose.
+    # Purpose: fail before execution rather than silently ignoring tool identity or acquiring replacements (V2/V4).
+    It 'UnitT20_rejects_source_tool_path_on_ordinary_Core' {
+        { Invoke-SourceRequestFixture -Bound @{ SourceToolsPath = 'prepared.json' } } | Should -Throw
+    }
+
+    # Scenario: source setup and source execution are mixed, or either purpose omits its prepared-tool path.
+    # Purpose: keep explicit acquisition separate from validation and reject incomplete source requests (V2/V4).
+    It 'UnitT30_rejects_mixed_or_incomplete_source_requests' {
+        foreach ($bound in @(
+            @{ PrepareSourceTools = $true; SourceValidation = $true; SourceToolsPath = 'prepared.json' },
+            @{ PrepareSourceTools = $true }, @{ SourceValidation = $true }
+        )) {
+            { Invoke-SourceRequestFixture -Bound $bound } | Should -Throw
+        }
+    }
+
+    # Scenario: explicit source validation references a missing previously prepared toolset.
+    # Purpose: missing setup must fail locally without invoking a resolver or downloading fallback tools (V2/V4).
+    It 'UnitT40_rejects_missing_prepared_source_tools' {
+        { & $script:SourceRequestModule { param($path)
+            Read-SourceToolSetup -Path $path -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+        } (Join-Path $TestDrive 'missing.json') } | Should -Throw
+    }
+
+    # Scenario: a prepared source record has a different candidate, authority, runtime or run identity.
+    # Purpose: refuse cross-candidate reuse before dispatch even when the JSON structure is valid (V2).
+    It 'UnitT50_rejects_prepared_source_identity_mismatch' {
+        foreach ($field in @('sourceRevision', 'authorityRevision', 'runId', 'runtime')) {
+            $path = New-PreparedSourceFixture
+            $prepared = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if ($field -eq 'runtime') { $prepared.sourceValidation.packageAdapter.command = 'other-pwsh' }
+            else { $prepared.$field = 'wrong' }
+            [IO.File]::WriteAllText($path, ($prepared | ConvertTo-Json -Depth 10))
+            { & $script:SourceRequestModule { param($p)
+                Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+            } $path } | Should -Throw -ExpectedMessage '*do not bind this candidate, authority and runtime*'
+        }
+    }
+
+    # Scenario: prepared source dispatch differs from the exact protected driver wrapper or one of its tool slots.
+    # Purpose: preserve the new source setup boundary against wrapper/command/argument substitution (V2).
+    It 'UnitT60_accepts_exact_protected_dispatch_and_rejects_substitution' {
+        & $script:SourceRequestModule { $script:FrozenAssertionCalls = 0; $script:ReceiptAssertionCalls = 0 }
+        $path = New-PreparedSourceFixture
+        { & $script:SourceRequestModule { param($p)
+            Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+        } $path } | Should -Not -Throw
+        (& $script:SourceRequestModule { $script:FrozenAssertionCalls }) | Should -Be 1
+        (& $script:SourceRequestModule { $script:ReceiptAssertionCalls }) | Should -Be 1
+        foreach ($slot in @('packageAdapter', 'skillValidator', 'skillTools', 'staticAnalyzer')) {
+            $path = New-PreparedSourceFixture
+            $prepared = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $prepared.sourceValidation.$slot.arguments += 'substituted'
+            [IO.File]::WriteAllText($path, ($prepared | ConvertTo-Json -Depth 10))
+            { & $script:SourceRequestModule { param($p)
+                Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+            } $path } | Should -Throw -ExpectedMessage '*dispatch differs from the protected driver*'
+        }
+        $path = New-PreparedSourceFixture
+        $prepared = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        [IO.File]::AppendAllText((Join-Path $prepared.ownedRoot 'Invoke-SkillGeneralValidationChild.ps1'), 'substituted')
+        { & $script:SourceRequestModule { param($p)
+            Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+        } $path } | Should -Throw -ExpectedMessage '*wrapper differs from the protected driver*'
+    }
+
+    # Scenario: a substituted entry point is rehashed consistently in the toolchain, frozen files and every dispatch argument.
+    # Purpose: matching self-declared hashes cannot replace the payload identified by the independent resolver receipt (V2).
+    It 'UnitT70_rejects_rehashed_entry_point_substitution_against_resolver_receipt' {
+        $path = New-PreparedSourceFixture
+        $prepared = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $toolchainPath = Join-Path $prepared.ownedRoot 'toolchain.json'
+        $toolchainValue = Get-Content -LiteralPath $toolchainPath -Raw | ConvertFrom-Json
+        $replacement = Join-Path $prepared.ownedRoot 'replacement-entry.bin'
+        [IO.File]::WriteAllText($replacement, 'substituted entry fixture bytes')
+        $replacementHash = (Get-FileHash $replacement).Hash.ToLowerInvariant()
+        $toolchainValue.skillToolsEntryPointPath = $replacement
+        $toolchainValue.skillToolsEntryPointSha256 = $replacementHash
+        [IO.File]::WriteAllText($toolchainPath, ($toolchainValue | ConvertTo-Json -Depth 10))
+        $toolchainHash = (Get-FileHash $toolchainPath).Hash.ToLowerInvariant()
+        foreach ($file in @($prepared.sourceValidation.frozenFiles)) {
+            if ($file.path -eq $toolchainPath) { $file.sha256 = $toolchainHash }
+        }
+        $prepared.sourceValidation.frozenFiles += [pscustomobject]@{ path = $replacement; sha256 = $replacementHash }
+        foreach ($slot in @('packageAdapter', 'skillValidator', 'skillTools', 'staticAnalyzer')) {
+            $arguments = $prepared.sourceValidation.$slot.arguments
+            $hashIndex = [array]::IndexOf($arguments, '-ToolchainSha256') + 1
+            $arguments[$hashIndex] = $toolchainHash
+        }
+        [IO.File]::WriteAllText($path, ($prepared | ConvertTo-Json -Depth 20))
+        { & $script:SourceRequestModule { param($p)
+            Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
+        } $path } | Should -Throw -ExpectedMessage '*does not match the skill-tools entry point resolver receipt*'
+    }
+
+    # Scenario: setup rehashes a substituted central runner, package adapter implementation or upstream policy consistently.
+    # Purpose: source dispatch must retain the verified authority's exact files despite internally consistent replacement evidence (V2).
+    It 'UnitT80_binds_package_adapter_files_to_the_verified_authority_root' {
+        $authority = Join-Path $TestDrive ('authority-' + [guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path (Join-Path $authority 'scripts'), (Join-Path $authority 'docs/standards'))
+        $runner = Join-Path $authority 'scripts/Invoke-StandardValidation.ps1'
+        [IO.File]::WriteAllText($runner, @'
+param([switch] $DefineFunctionsOnly, [string] $CandidateRoot, [string] $AdapterPath,
+    [string] $ArtifactsRoot, [string] $SourceRepository, [string] $SourceRevision,
+    [string] $BaseRevision, [string] $AuthorityRevision)
+if (-not $DefineFunctionsOnly) { throw 'Authority fixture requires DefineFunctionsOnly.' }
+$script:FixtureAuthorityRevision = $AuthorityRevision
+function Assert-StandardCoreFrozenFiles { param($Files) $script:FrozenAssertionCalls++ }
+function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, $RunId) $script:ReceiptAssertionCalls++ }
+'@)
+        [IO.File]::WriteAllText((Join-Path $authority 'scripts/Validate-UpstreamAdapter.ps1'), '# offline package adapter fixture')
+        [IO.File]::WriteAllText((Join-Path $authority 'docs/standards/upstream-adapter.json'), '{"fixture":true}')
+        $authorityBindings = @(
+            @('centralRunnerPath', 'centralRunnerSha256', 'scripts/Invoke-StandardValidation.ps1'),
+            @('upstreamAdapterValidatorPath', 'upstreamAdapterValidatorSha256', 'scripts/Validate-UpstreamAdapter.ps1'),
+            @('upstreamPolicyPath', 'upstreamPolicySha256', 'docs/standards/upstream-adapter.json')
+        )
+        function Set-AuthorityMappingFixture {
+            param([string] $Path, [string] $ReplaceField)
+            $prepared = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+            $toolchainPath = Join-Path $prepared.ownedRoot 'toolchain.json'
+            $toolchainValue = Get-Content -LiteralPath $toolchainPath -Raw | ConvertFrom-Json
+            foreach ($binding in $authorityBindings) {
+                $file = Join-Path $authority $binding[2]
+                if ($binding[0] -eq $ReplaceField) {
+                    $file = Join-Path $prepared.ownedRoot ('replacement-' + (Split-Path -Leaf $file))
+                    [IO.File]::WriteAllText($file, 'substituted authority fixture bytes')
+                }
+                $hash = (Get-FileHash $file).Hash.ToLowerInvariant()
+                $toolchainValue | Add-Member -NotePropertyName $binding[0] -NotePropertyValue $file -Force
+                $toolchainValue | Add-Member -NotePropertyName $binding[1] -NotePropertyValue $hash -Force
+                $prepared.sourceValidation.frozenFiles += [pscustomobject]@{ path = $file; sha256 = $hash }
+            }
+            [IO.File]::WriteAllText($toolchainPath, ($toolchainValue | ConvertTo-Json -Depth 10))
+            $toolchainHash = (Get-FileHash $toolchainPath).Hash.ToLowerInvariant()
+            foreach ($file in @($prepared.sourceValidation.frozenFiles)) {
+                if ($file.path -eq $toolchainPath) { $file.sha256 = $toolchainHash }
+            }
+            foreach ($slot in @('packageAdapter', 'skillValidator', 'skillTools', 'staticAnalyzer')) {
+                $arguments = $prepared.sourceValidation.$slot.arguments
+                $arguments[[array]::IndexOf($arguments, '-ToolchainSha256') + 1] = $toolchainHash
+            }
+            [IO.File]::WriteAllText($Path, ($prepared | ConvertTo-Json -Depth 20))
+        }
+        & $script:SourceRequestModule { $script:FrozenAssertionCalls = 0; $script:ReceiptAssertionCalls = 0 }
+        $path = New-PreparedSourceFixture
+        Set-AuthorityMappingFixture -Path $path
+        { & $script:SourceRequestModule { param($p, $root)
+            Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh -AuthorityRoot $root
+        } $path $authority } | Should -Not -Throw
+        (& $script:SourceRequestModule { $script:FixtureAuthorityRevision }) | Should -Be ('c' * 40)
+        (& $script:SourceRequestModule { $script:FrozenAssertionCalls }) | Should -Be 1
+        (& $script:SourceRequestModule { $script:ReceiptAssertionCalls }) | Should -Be 1
+        foreach ($binding in $authorityBindings) {
+            $path = New-PreparedSourceFixture
+            Set-AuthorityMappingFixture -Path $path -ReplaceField $binding[0]
+            { & $script:SourceRequestModule { param($p, $root)
+                Read-SourceToolSetup -Path $p -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh -AuthorityRoot $root
+            } $path $authority } | Should -Throw -ExpectedMessage '*verified authority files*'
+        }
+    }
+}
+
 Describe 'Canonical Standard v1 validation adapter' {
     BeforeAll {
         $script:RepositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -71,6 +333,9 @@ Describe 'Canonical Standard v1 validation adapter' {
         }
         $script:ExpectedMergedAuthorityCommit = '053b80143b5ef48b06a8c448d5ac1abaf9a49df8'
         $script:ExpectedMergedAuthorityArchiveSha256 = 'cdaa67f38ee595495015d37955082e16ac248afb48fca64f1788d2eab8adfbc9'
+        $script:ExpectedSourceAuthorityCommit = 'd54ef2cc83a19fa58f62fdcc6fa290095355d03e'
+        $script:ExpectedSourceAuthorityArchiveSha256 = '03a865e164cf4875dc8e6a12ed10c698db9d6e83cf1d0b6adbfe4e53b2396763'
+        $script:ExpectedSourceAuthorityInventorySha256 = '4ce21109fa065ae4a0358bfe697d70a1a2f448a4e422058acbacef366218da7e'
         $script:ExpectedMergedAuthorityFiles = [ordered]@{
             'docs/standards/README.md' = '43c1526ac55302f62b706688905be160d9805cc3a6a800189d689e66fa727b71'
             'docs/standards/managed-skill-lifecycle.md' = '70950cf8bdd02819efae6f6e06ac5be1da3e70f809c23e3c6f8d3b217797416c'
@@ -205,10 +470,10 @@ exit /b 0
             $parts = @($ast.EndBlock.Statements | Where-Object {
                 ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
                     $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
-                        '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles',
+                        '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
                         '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles')) -or
                 ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
-                    $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+                    $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
             } | ForEach-Object { $_.Extent.Text })
             return New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         }
@@ -220,7 +485,7 @@ exit /b 0
             if (@($errors).Count -ne 0) { throw 'Validate.ps1 does not parse as PowerShell.' }
             $constantNames = @(
                 '$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
-                '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles',
+                '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
                 '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles'
             )
             $constants = @($ast.FindAll({
@@ -255,7 +520,7 @@ function Test-CoreRunSelected {
             if (@($errors).Count -ne 0) { throw 'Validate.ps1 does not parse as PowerShell.' }
             $constantNames = @(
                 '$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
-                '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles',
+                '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
                 '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles'
             )
             $constants = @($ast.FindAll({
@@ -443,9 +708,9 @@ function Test-CoreRunSelected {
         @($errors).Count | Should -Be 0
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
-                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
         $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         $approved = [pscustomobject]@{
@@ -470,9 +735,9 @@ function Test-CoreRunSelected {
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
                 $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
-                    '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+                    '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
-                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
         $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         $next = [pscustomobject]@{
@@ -584,10 +849,12 @@ function Test-CoreRunSelected {
         $resolverInstallIndex | Should -BeGreaterThan $guardIndex
     }
 
-    It 'runs the next candidate pin through Core while explicit Semantic setup remains separate' {
-        $script:Validator | Should -Match '\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit\)'
+    # Scenario: any approved Core candidate enters the prepared driver while Semantic remains explicit.
+    # Purpose: retain canonical Core routing and verify the execution authority selected before tools run.
+    It 'UnitT18_routes_approved_Core_candidates_while_Semantic_setup_remains_separate' {
+        $script:Validator | Should -Match '\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit\)'
         $script:Validator | Should -Match 'Assert-OrdinaryCoreRunRequest -ExecutionMode \$ExecutionMode -CandidateAuthority \$candidateAuthority -BoundParameters \$PSBoundParameters'
-        $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$candidateAuthority'
+        $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$executionAuthority'
         $script:Validator | Should -Match '''-AuthorityRevision'', \[string\]\$candidateAuthority\.commit'
         $script:Validator | Should -Match '\$authority = Get-LegacyAuthorityPin -SelectedPin \$candidateAuthority'
         $script:Validator | Should -Match 'Invoke-WebRequest -Uri \(\[string\]\$authority\.archiveUrl\)'
@@ -610,9 +877,9 @@ function Test-CoreRunSelected {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
-                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
         $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         $obsolete = $script:Adapter | ConvertTo-Json -Depth 20 | ConvertFrom-Json
@@ -755,9 +1022,9 @@ function Test-CoreRunSelected {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
-                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig'))
+                $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
         $verifier = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n")))
         $approved = [pscustomobject]@{
@@ -867,7 +1134,9 @@ function Test-CoreRunSelected {
         { & $pathModule { param($root, $output) Get-StandardCoreRunPaths -ArtifactsRoot $root -ArtifactsRootWasExplicit $false -OutputPath $output } $parent $explicitOutput } | Should -Throw
     }
 
-    It 'dispatches only preflight-approved ordinary Run requests through Core v2' {
+    # Scenario: the approved driver selects Core for an immutable candidate after checking the public request.
+    # Purpose: source pin support must preserve preflight and ordinary Core's absence of Semantic prerequisites.
+    It 'UnitT19_dispatches_only_preflight_approved_requests_through_Core_v2' {
         $branchIndex = $script:Validator.IndexOf('if ($coreRunSelected)')
         $argumentsStart = $script:Validator.IndexOf('$coreRunnerArgs = @(', $branchIndex)
         $invokeIndex = $script:Validator.IndexOf('& $pwshPath -NoProfile -NonInteractive -File $centralRunnerPath @coreRunnerArgs', $argumentsStart)
@@ -878,11 +1147,12 @@ function Test-CoreRunSelected {
         $coreArguments | Should -Match '\[string\]\$candidateAuthority\.commit'
         $coreArguments | Should -Match 'TrustedToolRoot.*, \$trustedRoot'
         $coreArguments | Should -Not -Match 'CandidateArchive|DevelopmentHarness|Semantic|Supervisor|Lifecycle|ExpectedPlanSha256'
-        $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and\s+\[string\]\$candidateAuthority\.repository -ceq \$script:AuthorityRepository -and\s+\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit\)'
+        $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and\s+\[string\]\$candidateAuthority\.repository -ceq \$script:AuthorityRepository -and\s+\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit\)'
         $preflightIndex = $script:Validator.IndexOf('Assert-OrdinaryCoreRunRequest -ExecutionMode $ExecutionMode')
         $preflightIndex | Should -BeGreaterThan -1
         $preflightIndex | Should -BeLessThan $branchIndex
-        $script:Validator | Should -Match 'Test-LegacyRunRequested -BoundParameters \$BoundParameters'
+        [regex]::IsMatch($script:Validator, 'Test-LegacyRunRequested -BoundParameters \$ordinaryParameters') |
+            Should -BeTrue -Because 'the ordinary request copy retains the legacy-input guard after explicit source setup is classified'
         $script:Validator | Should -Match 'Ordinary Run does not accept legacy tool-resolution or development-harness inputs'
         $script:Validator | Should -Match 'Ordinary Run requires one exact approved Core authority pin'
         $script:Validator | Should -Match ([regex]::Escape("'-ArtifactsRoot', `$coreArtifactsRoot"))
@@ -1405,6 +1675,72 @@ function Test-CoreRunSelected {
      $shown[-1]|Should -BeExactly ('Pester progress: '+$lines[-1].Substring(0,300)+'[truncated]')
      $f.report.artifacts.snapshotRoot=Join-Path $f.artifactRoot 'other'
      @(@(Invoke-CoreDiagnosticFixture -Fixture $f)|Where-Object{$_ -like 'Pester progress:*'}).Count|Should -Be 0
+    }
+
+    Context 'Source authority driver preparation' {
+        # Scenario: the driver prepares a reviewed source authority while the production config retains the earlier Core pin.
+        # Purpose: accept only the complete new tuple and require it for source execution without coupling ordinary Core to acquisition (V2/V4).
+        It 'UnitT10_accepts_only_the_complete_reviewed_source_pin_and_separates_source_requests' {
+            $verifier = New-AuthorityVerifierModule
+            $pin = & $verifier { Get-ApprovedSourceAuthorityPin }
+            $pin.commit | Should -BeExactly $script:ExpectedSourceAuthorityCommit
+            $pin.archiveSha256 | Should -BeExactly $script:ExpectedSourceAuthorityArchiveSha256
+            $pin.archiveUrl | Should -BeExactly "https://codeload.github.com/SyuanTsai/SyuanTsai-AI-Instructions/zip/$($script:ExpectedSourceAuthorityCommit)"
+            $files = @(foreach ($entry in $pin.files.GetEnumerator()) {
+                [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+            })
+            $files.Count | Should -Be 29
+            $canonical = (@($files | ForEach-Object { [string]$_.path + "`t" + [string]$_.sha256 }) -join "`n") + "`n"
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canonical))).ToLowerInvariant() |
+                Should -BeExactly $script:ExpectedSourceAuthorityInventorySha256
+            $config = [pscustomobject]@{ schemaVersion = 1; standardVersion = 'v1'; authority = [pscustomobject]@{
+                repository = $pin.repository; commit = $pin.commit; archiveUrl = $pin.archiveUrl; archiveSha256 = $pin.archiveSha256; files = $files
+            } }
+            { & $verifier { param($c) Assert-AuthorityConfig -Config $c -AllowNextAuthority } $config } | Should -Not -Throw
+            { & $verifier { param($c) Assert-AuthorityConfig -Config $c } $config } | Should -Throw
+            foreach ($field in @('archiveSha256', 'fileHash')) {
+                $forged = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+                if ($field -eq 'fileHash') { $forged.authority.files[0].sha256 = '0' * 64 }
+                else { $forged.authority.archiveSha256 = '0' * 64 }
+                { & $verifier { param($c) Assert-AuthorityConfig -Config $c -AllowNextAuthority } $forged } | Should -Throw
+            }
+            $guard = New-OrdinaryRunGuardModule
+            $core = (New-MergedAuthorityConfig).authority
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
+                SourceValidation = $true; SourceToolsPath = 'prepared.json'
+            } } $core } | Should -Throw -ExpectedMessage '*exact approved source authority pin*'
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
+                SourceValidation = $true; SourceToolsPath = 'prepared.json'
+            } } $pin } | Should -Not -Throw
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
+                PrepareSourceTools = $true; SourceToolsPath = 'prepared.json'; ExpectedGoRuntimeVersion = 'fixture-go'
+            } } $core } | Should -Not -Throw
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
+                SourceValidation = $true; SourceToolsPath = 'prepared.json'; ExpectedGoRuntimeVersion = 'fixture-go'
+            } } $pin } | Should -Throw -ExpectedMessage '*legacy tool-resolution*'
+            $selector = New-CoreRunSelectorModule
+            (& $selector { param($p) Test-CoreRunSelected -ExecutionMode Run -candidateAuthority $p -legacyRunRequested $false } $pin) | Should -BeTrue
+        }
+
+        # Scenario: explicit source setup uses the newly approved authority even while the candidate still selects ordinary Core.
+        # Purpose: exercise the actual executionAuthority expression rather than inferring behavior from a green old-base gate (V2/V7).
+        It 'UnitT20_selects_source_setup_authority_and_preserves_ordinary_candidate_authority' {
+            $tokens = $null; $errors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
+            @($errors).Count | Should -Be 0
+            $assignment = @($ast.FindAll({ param($node)
+                $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$executionAuthority'
+            }, $true))
+            $assignment.Count | Should -Be 1 -Because 'source setup needs an explicit authority selection before checkout verification'
+            $expression = 'param([bool] $PrepareSourceTools, $candidateAuthority); ' + $assignment[0].Right.Extent.Text
+            $verifier = New-AuthorityVerifierModule
+            $core = (New-MergedAuthorityConfig).authority
+            $selected = & $verifier ([scriptblock]::Create($expression)) $true $core
+            $selected.commit | Should -BeExactly $script:ExpectedSourceAuthorityCommit
+            $ordinary = & $verifier ([scriptblock]::Create($expression)) $false $core
+            $ordinary.commit | Should -BeExactly $script:ExpectedMergedAuthorityCommit
+            [object]::ReferenceEquals($ordinary, $core) | Should -BeTrue
+        }
     }
 
 }
