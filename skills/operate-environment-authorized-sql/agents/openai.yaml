@@ -1,0 +1,4 @@
+interface:
+  display_name: "Environment-Authorized SQL"
+  short_description: "Prepare scoped Azure SQL requests and interpret results"
+  default_prompt: "Use $operate-environment-authorized-sql to verify the requested test results through the registered controlled CLI."

@@ -48,6 +48,7 @@ tests/
 | `investigate-datadog-logs` | Datadog log and APM investigation |
 | `manage-notion-ai-memory` | Durable cross-task Notion memory |
 | `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
+| `operate-environment-authorized-sql` | Controlled Azure SQL workflows and v1 offline contracts; execution runtime remains separate |
 | `review-agent-skills` | Agent Skill package review |
 
 `manage-task-handoff` is platform-neutral: its core receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
