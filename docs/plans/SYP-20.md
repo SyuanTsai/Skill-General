@@ -31,3 +31,11 @@
 P3–P5：受保護授權存放、Agent OS 身份隔離、管理/執行 IPC、SqlClient/ScriptDom、Entra/WAM、實際 DB session target/principal、交易/併發/trigger/級聯及 UNCERTAIN_COMMIT。工程初始限制僅為建議，必須由首次授權確定。公司 DB 禁止 MCP；不得提取既有登入快取、建立 DB 帳號/Role/GRANT/REVOKE、或修改 PRD。
 
 模型：本 chat 原生 turn_context 已核對為 gpt-6.1-sol/xhigh，與本機設定一致。沒有代為切換模型或新增委派。
+
+## 6. 完整來源回歸修正
+
+- 目標與範圍：保留完整 canonical gates，讓新增的第七個 Skill 納入精確來源測試，並提供足夠的 Windows CI 整體執行時間。
+- 證據與位置：精確候選 b4bc7adc 的全部 17 個測試檔共 290 案，286 passed、4 failed；其中 `tests/StandardV1Conformance.Tests.ps1` 的固定六個 Skill 清單缺少新 Skill。其餘為獨立 harness 路徑格式與兩個 5 秒假 Git child 啟動 timeout，另行保存並核對。前版 CI raw events 顯示每個 native package check 間隔約 5–6 分鐘；七個套件加 Static、repository checks 與 setup 有超出 `.github/workflows/validate.yml` 原 105 分鐘整體時限的風險。
+- 變更：精確 inventory assertion 加入 SQL Skill，為該既有測試補 `UnitT05_` 與 Scenario/Purpose；canonical job 整體時限改為 180 分鐘。各工具 900 秒時限、完整套件／Static／Pester、severity、scope 與 integrity gate 保持。
+- 驗證與 TDD：inventory 已有真實 Red；更新清單後在 clean 新候選跑全部 repository Pester 與 canonical SourceValidation。CI YAML 是 configuration-only，依 Testing 規則豁免新增 test-first 測試，以解析 YAML、核對唯一 job timeout 差異及真實 CI 結果驗證。獨立 harness 使用 Windows 正規化 authority 路徑；假 Git timeout 先於低負載環境以原測試核對，不先放寬時限。
+- 風險與回復：新 commit 使舊候選的 approval/canonical 證據失效，重新固定來源、archive 與中央導入提案；舊原始結果保留。若需回復，回復本次 inventory/CI 設定 commit；不改 normative authority 或降低任何 release/install 要求。
