@@ -84,8 +84,11 @@ Describe 'manage-ai-memory provider-neutral contract' {
             $case = @($script:AgentInputs.scenarios | Where-Object id -EQ $id)[0]
             foreach ($call in @($case.fixedToolResponses | Where-Object { $_.tool -in @('files.save', 'records.create') })) {
                 $expectedPurpose = if ($call.tool -eq 'files.save') { 'files' } else { 'records' }
-                $target = @($case.connectedTargets | Where-Object { $_.id -eq $call.arguments.target -and $_.purpose -eq $expectedPurpose -and $_.connected })
-                if ($null -ne $call.arguments.target) {
+                $targetProperty = $call.arguments.PSObject.Properties['target']
+                if ($null -ne $targetProperty) {
+                    $targetName = [string]$targetProperty.Value
+                    $targetName | Should -Not -BeNullOrEmpty
+                    $target = @($case.connectedTargets | Where-Object { $_.id -eq $targetName -and $_.purpose -eq $expectedPurpose -and $_.connected })
                     $target.Count | Should -Be 1
                 } else {
                     @($case.connectedTargets | Where-Object { $_.purpose -eq $expectedPurpose -and $_.connected }).Count | Should -Be 1
