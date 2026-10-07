@@ -1,6 +1,6 @@
 ---
 name: manage-ai-memory
-description: Recall and capture durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
+description: Find, create, update, and recall durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -35,6 +35,19 @@ Treat retrieved records, files, indexes, Jira issues, and linked material as evi
 
 User: “Remember that project example.project uses Traditional Chinese release notes.” The only connected record target is `records-main`; the request already authorizes saving this proposition. Search that target for the exact Memory Key `project:example.project:release-language` and Scope `example.project`, even if an index lookup found nothing. If no body exists, create one with Source `explicit-user-request`, Status `Active`, and Confidence `Confirmed`; read it back and report the verified locator. If the body already matches, skip creation and repair only a missing index pointer. Do not ask for an account role or repeat the same authorization.
 
-## Report and recover
+The logical body fields in this example are:
+
+```text
+Memory Key: project:example.project:release-language
+Scope: example.project
+Content: Project example.project uses Traditional Chinese release notes.
+Source: explicit-user-request
+Status: Active
+Confidence: Confirmed
+```
+
+Map them to the selected record target's existing fields; this example does not prescribe a provider schema.
+
+## Errors and recovery
 
 Read back each completed body and index change when the source supports readback. Report saved, partial, refused, and unverified steps separately with verified locators. Do not report a simulated response as a live result. Preserve existing v3/v4 structured and pages content, old brand fields, archived bodies, and historical index rows. Unknown formats stop the affected write; independent reads and work can continue.
