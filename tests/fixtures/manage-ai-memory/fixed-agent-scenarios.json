@@ -219,7 +219,7 @@
       "id": "AC06",
       "scenario": "Scenario: inference repeated with high confidence",
       "purpose": "Purpose: Verify AC06 without live memory or file mutation.",
-      "userInput": "Capture this as a candidate memory under Memory Key project:example.project:notes-length and Scope example.project: the assistant twice inferred that this project may prefer short release notes. No user or authoritative source has confirmed the preference.",
+      "userInput": "Capture a candidate memory under Memory Key project:example.project:notes-length and Scope example.project. Use Content exactly 'Project example.project may prefer short release notes.' and Source 'assistant-inference'. The assistant inferred this twice; no user or authoritative source has confirmed it.",
       "connectedTargets": [
         {
           "id": "records-main",
@@ -241,6 +241,10 @@
         {
           "tool": "records.create",
           "arguments": {
+            "key": "project:example.project:notes-length",
+            "scope": "example.project",
+            "content": "Project example.project may prefer short release notes.",
+            "source": "assistant-inference",
             "status": "Pending",
             "confidence": "Inferred"
           },

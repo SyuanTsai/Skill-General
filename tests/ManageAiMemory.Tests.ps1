@@ -44,6 +44,12 @@ Describe 'manage-ai-memory provider-neutral contract' {
         $case = @($script:Cases.cases | Where-Object id -EQ 'AC06')[0]
         $case.expected.status | Should -Be 'Pending'
         $case.expected.confidence | Should -Be 'Inferred'
+        $agentCase = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC06')[0]
+        $created = @($agentCase.fixedToolResponses | Where-Object tool -EQ 'records.create')[0].arguments
+        $readback = @($agentCase.fixedToolResponses | Where-Object tool -EQ 'records.read')[0].response
+        foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            $readback.$field | Should -Be $created.$field
+        }
     }
 
     # Scenario: The index has no row for a key whose body is already present.
