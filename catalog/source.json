@@ -5,7 +5,7 @@
   "skillsRoot": "skills",
   "skills": [
     "investigate-datadog-logs",
-    "manage-notion-ai-memory",
+    "manage-ai-memory",
     "manage-task-handoff",
     "plan-production-change",
     "review-agent-skills",
