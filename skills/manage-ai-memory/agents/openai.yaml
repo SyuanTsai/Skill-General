@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 SyuanTsai
+# SPDX-License-Identifier: Apache-2.0
+interface:
+  display_name: "Manage AI Memory"
+  short_description: "Recall and capture durable records and file references"
+  default_prompt: "Use $manage-ai-memory to recall or capture reusable memory with the connected record and file targets."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
-Describe 'manage-notion-ai-memory durable memory contract' {
+Describe 'legacy v4 Notion memory compatibility fixtures' {
     BeforeAll {
         $script:Root = Split-Path -Parent $PSScriptRoot
-        $script:Skill = Join-Path $script:Root 'skills/manage-notion-ai-memory'
-        $script:Contract = Get-Content -Raw (Join-Path $script:Skill 'references/notion-memory-contract.json') | ConvertFrom-Json -Depth 30
+        $script:Skill = Join-Path $script:Root 'skills/manage-ai-memory'
+        $script:Contract = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-notion-ai-memory/notion-memory-contract-v4.json') | ConvertFrom-Json -Depth 30
         $script:Cases = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-notion-ai-memory/routing-cases.json') | ConvertFrom-Json -Depth 20
         $script:AgentEvaluation = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures/manage-notion-ai-memory/fixed-agent-scenarios.json') | ConvertFrom-Json -Depth 50
     }
@@ -13,7 +13,7 @@ Describe 'manage-notion-ai-memory durable memory contract' {
     # Purpose: Keep responsibility and runtime connector dependencies separate.
     It 'InterT10_publishes_memory_without_owning_handoffs' {
         $source = Get-Content -Raw (Join-Path $script:Root 'catalog/source.json') | ConvertFrom-Json -Depth 10
-        @($source.skills) | Should -Contain 'manage-notion-ai-memory'
+        @($source.skills) | Should -Contain 'manage-ai-memory'
         @($source.skills) | Should -Contain 'manage-task-handoff'
         @($script:Contract.PSObject.Properties.Name) | Should -Not -Contain 'handoff'
         $script:Contract.schemaVersion | Should -Be 4
@@ -22,8 +22,8 @@ Describe 'manage-notion-ai-memory durable memory contract' {
         $skillText | Should -Not -Match 'references/handoff-operations.md'
         $skillText | Should -Match 'references/memory-operations.md'
         $yaml = Get-Content -Raw (Join-Path $script:Skill 'agents/openai.yaml')
-        $yaml | Should -Match '\$manage-notion-ai-memory'
-        $yaml | Should -Match '(?m)^\s*value:\s*"notion"\s*$'
+        $yaml | Should -Match '\$manage-ai-memory'
+        $yaml | Should -Not -Match '(?m)^\s*value:\s*"notion"\s*$'
     }
 
     # Scenario: A confirmed explicit remember request competes with a mere inferred candidate.
