@@ -63,9 +63,29 @@ Describe 'manage-ai-memory provider-neutral contract' {
         $script:Contract.workflow.partialIndexFailure.retainBody | Should -BeTrue
         $script:Contract.workflow.partialIndexFailure.resumeAction | Should -Be 'read-current-state-repair-index-only'
         $case = @($script:Cases.cases | Where-Object id -EQ 'AC12')[0]
+        # The routing oracle stops at the failed write; the fixed transcript includes recovery.
         $case.expected.operationComplete | Should -BeFalse
         $case.expected.resumeBodyCreateCount | Should -Be 0
         $case.expected.resumeIndexRepairCount | Should -Be 1
+        $transcript = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC12')[0]
+        $transcript.oracle.expected.operationComplete | Should -BeTrue
+    }
+
+    # Scenario: Fixed write transcripts have an available target for each named destination.
+    # Purpose: Keep acceptance fixtures executable under the target-resolution contract.
+    It 'UnitT45_binds_each_fixed_write_destination_to_a_connected_target' {
+        foreach ($id in @('AC05', 'AC11', 'AC13', 'AC14')) {
+            $case = @($script:AgentInputs.scenarios | Where-Object id -EQ $id)[0]
+            foreach ($call in @($case.fixedToolResponses | Where-Object { $_.tool -in @('files.save', 'records.create') })) {
+                $expectedPurpose = if ($call.tool -eq 'files.save') { 'files' } else { 'records' }
+                $target = @($case.connectedTargets | Where-Object { $_.id -eq $call.arguments.target -and $_.purpose -eq $expectedPurpose -and $_.connected })
+                if ($null -ne $call.arguments.target) {
+                    $target.Count | Should -Be 1
+                } else {
+                    @($case.connectedTargets | Where-Object { $_.purpose -eq $expectedPurpose -and $_.connected }).Count | Should -Be 1
+                }
+            }
+        }
     }
 
     # Scenario: User requests a file and record in one authorized action while the source lacks hash metadata.

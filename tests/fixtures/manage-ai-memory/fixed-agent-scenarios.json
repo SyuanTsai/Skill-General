@@ -182,7 +182,10 @@
       "scenario": "Scenario: record connector refuses write after file succeeds",
       "purpose": "Purpose: Verify AC05 without live memory or file mutation.",
       "userInput": "Store this document and its summary.",
-      "connectedTargets": [],
+      "connectedTargets": [
+        { "id": "files-main", "purpose": "files", "connected": true },
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
       "fixedToolResponses": [
         {
           "tool": "files.save",
@@ -448,7 +451,9 @@
       "scenario": "Scenario: body write times out with unknown result",
       "purpose": "Purpose: Verify AC11 without live memory or file mutation.",
       "userInput": "Remember the new release language.",
-      "connectedTargets": [],
+      "connectedTargets": [
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
       "fixedToolResponses": [
         {
           "tool": "records.create",
@@ -603,7 +608,7 @@
       ],
       "oracle": {
         "expected": {
-          "operationComplete": false,
+          "operationComplete": true,
           "retainBodyLocator": true,
           "resumeBodyCreateCount": 0,
           "resumeIndexRepairCount": 1
@@ -615,7 +620,10 @@
       "scenario": "Scenario: user authorizes file and record storage in one request",
       "purpose": "Purpose: Verify AC13 without live memory or file mutation.",
       "userInput": "Save this file and remember the decision it contains.",
-      "connectedTargets": [],
+      "connectedTargets": [
+        { "id": "files-main", "purpose": "files", "connected": true },
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
       "fixedToolResponses": [
         {
           "tool": "files.save",
@@ -650,7 +658,9 @@
       "scenario": "Scenario: file target has no hash or version API",
       "purpose": "Purpose: Verify AC14 without live memory or file mutation.",
       "userInput": "Save this file.",
-      "connectedTargets": [],
+      "connectedTargets": [
+        { "id": "files-main", "purpose": "files", "connected": true }
+      ],
       "fixedToolResponses": [
         {
           "tool": "files.save",
