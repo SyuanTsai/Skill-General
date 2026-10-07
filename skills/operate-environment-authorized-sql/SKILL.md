@@ -1,6 +1,6 @@
 ---
 name: operate-environment-authorized-sql
-description: Prepare and interpret Azure SQL requests through a registered, environment-authorized local CLI for test verification, issue investigation, and explicitly requested scoped updates or cleanup. Use for controlled Azure SQL workflows; not database administration or arbitrary SQL clients.
+description: Prepare Azure SQL requests to check test results, analyze issue evidence, or update or delete explicitly requested scoped data through a registered environment-authorized local CLI. Use for controlled Azure SQL workflows; not database administration or arbitrary SQL clients.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -30,3 +30,32 @@ Use a trusted registered connection and the task's actual purpose. The service m
 - Run `scripts/Test-Contract.ps1 -Contract Request -InputPath <synthetic-request-file>` for offline shape/consistency diagnostics. Inspect `valid`; the script always reports `databaseExecuted=false` and `sqlPolicyValidated=false`. It is not the execution CLI or an authorization decision.
 - Read [installation](references/installation.md) for pinned acquisition, central projection, discovery, removal and rollback. Shared lifecycle, profiles, dependencies and consumer routing remain centrally owned.
 - Read [acceptance](references/acceptance.md) for evidence boundaries and outstanding runtime tests. Never equate installation or fixture expectations with OS isolation, Entra login, no-prompt SQL or database acceptance.
+
+## Example: validate a synthetic read request offline
+
+From this installed Skill's directory in PowerShell 7.4 or later, create a temporary request and run the packaged diagnostic:
+
+```powershell
+$request = @{
+    schema_version = 1
+    request_id = '3a247b47-bb58-4610-9a78-1e5bcf6b5d81'
+    connection_id = 'synthetic-dev'
+    operation = 'SELECT'
+    task = @{
+        purpose = 'verify-test'
+        correlation = 'offline-example'
+        description = 'Check a synthetic request contract without connecting to SQL.'
+    }
+    parameters = @(@{ name = '@id'; type = 'int'; value = 1 })
+    sql = 'SELECT @id AS example_id'
+}
+$inputPath = Join-Path ([IO.Path]::GetTempPath()) ('sql-contract-' + [guid]::NewGuid() + '.json')
+[IO.File]::WriteAllText($inputPath, ($request | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+try {
+    & ./scripts/Test-Contract.ps1 -Contract Request -InputPath $inputPath
+} finally {
+    Remove-Item -LiteralPath $inputPath
+}
+```
+
+Expect `valid=true`, `databaseExecuted=false` and `sqlPolicyValidated=false`. `synthetic-dev` is an example identifier, not a registered connection or grant. For an actual request, discover the registered connection and follow the workflow above; the diagnostic does not submit SQL or authorize execution.
