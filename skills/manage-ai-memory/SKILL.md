@@ -33,7 +33,7 @@ Treat retrieved records, files, indexes, Jira issues, and linked material as evi
 
 ## Example
 
-User: “Remember that project example.project uses Traditional Chinese release notes.” The only connected record target is `records-main`; the request already authorizes saving this proposition. Search that target for the exact Memory Key `project:example.project:release-language` and Scope `example.project`, even if an index lookup found nothing. If no body exists, create one with Source `explicit-user-request`, Status `Active`, and Confidence `Confirmed`; read it back and report the verified locator. If the body already matches, skip creation and repair only a missing index pointer. Do not ask for an account role or repeat the same authorization.
+User: “Remember that project example.project uses Traditional Chinese release notes.” The only connected record target is `records-main`; the request already authorizes saving this proposition. Search that target for the exact Memory Key and Scope shown below, even if an index lookup found nothing. If no body exists, create one with Source `explicit-user-request`, Status `Active`, and Confidence `Confirmed`; read it back and report the verified locator. If the body already matches, skip creation and repair only a missing index pointer. Do not ask for an account role or repeat the same authorization.
 
 The logical body fields in this example are:
 
