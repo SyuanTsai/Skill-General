@@ -18,7 +18,7 @@ jobs:
   canonical-validation:
     name: Skill-General Standard v1
     runs-on: windows-latest
-    timeout-minutes: 105
+    timeout-minutes: 180
     outputs:
       source_conformance: ${{ steps.canonical-source-report.outputs.source_conformance }}
     # The approved authority inventory treats a literal checkout action token

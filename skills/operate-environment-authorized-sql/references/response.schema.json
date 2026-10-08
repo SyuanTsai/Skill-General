@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Environment-authorized SQL response v1 (shape contract only)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "actual_environment": {
+      "enum": [
+        "DEV",
+        "UAT",
+        "PRD",
+        null
+      ]
+    },
+    "policy_version": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "status": {
+      "enum": [
+        "SUCCESS",
+        "DENIED",
+        "AUTH_REQUIRED",
+        "TARGET_CHANGED",
+        "ERROR",
+        "UNCERTAIN_COMMIT"
+      ]
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+                  },
+                  "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "name",
+                  "type"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 128
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "minItems": 0,
+                "maxItems": 128
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "columns",
+            "rows"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "affected_rows": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "audit_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "commit_state": {
+      "enum": [
+        "not-applicable",
+        "committed",
+        "rolled-back",
+        "unknown"
+      ]
+    },
+    "retry_safe": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "actual_environment",
+    "policy_version",
+    "status",
+    "result",
+    "affected_rows",
+    "truncated",
+    "elapsed_ms",
+    "audit_reference",
+    "error_code",
+    "message",
+    "commit_state",
+    "retry_safe"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "SUCCESS"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "actual_environment": {
+            "enum": [
+              "DEV",
+              "UAT",
+              "PRD"
+            ]
+          },
+          "policy_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "error_code": {
+            "type": "null"
+          },
+          "commit_state": {
+            "enum": [
+              "not-applicable",
+              "committed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "not": {
+              "const": "SUCCESS"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "type": "null"
+          },
+          "affected_rows": {
+            "type": "null"
+          },
+          "truncated": {
+            "const": false
+          },
+          "error_code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retry_safe": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "UNCERTAIN_COMMIT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "commit_state": {
+            "const": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "commit_state": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "UNCERTAIN_COMMIT"
+          }
+        }
+      }
+    }
+  ]
+}

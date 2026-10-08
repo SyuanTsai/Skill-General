@@ -38,7 +38,9 @@ Describe 'Skill-General Standard v1 reference implementation' {
         }
     }
 
-    It 'uses the canonical skills source root and schema v2 inventory' {
+    # Scenario: The canonical source publishes every active Skill, including the SQL package.
+    # Purpose: Bind the exact ordinal source inventory and reject legacy or missing packages.
+    It 'UnitT05_uses_the_canonical_skills_source_root_and_exact_schema_v2_inventory' {
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -PathType Container | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.agents/skills') | Should -BeFalse
         Test-Path -LiteralPath $script:SourceInventoryPath -PathType Leaf | Should -BeTrue
@@ -55,6 +57,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
             'investigate-datadog-logs'
             'manage-notion-ai-memory'
             'manage-task-handoff'
+            'operate-environment-authorized-sql'
             'plan-production-change'
             'review-agent-skills'
             'verify-data-access-performance'
