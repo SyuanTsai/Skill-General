@@ -24,6 +24,16 @@ Describe 'Skill-General Standard v1 reference implementation' {
             filesSha256 = '4ce21109fa065ae4a0358bfe697d70a1a2f448a4e422058acbacef366218da7e'
             fileCount = 29
         }
+        $script:ApprovedAuthoritySnapshots['ff85d5f80fe795b96354e753074b5ce59ad04ecd'] = @{
+            archiveSha256 = '3dc38613f2e2316ad8fcc79d4bf48d0b03fd8398f8dacc72d156abcbce95ea9d'
+            filesSha256 = 'df7b916e02bc19f7c0632ef189db8b4edc206a5ab216a6104654bcd262bdfb7e'
+            fileCount = 32
+        }
+        $script:ApprovedAuthoritySnapshots['ff85d5f80fe795b96354e753074b5ce59ad04ecd'] = @{
+            archiveSha256 = '3dc38613f2e2316ad8fcc79d4bf48d0b03fd8398f8dacc72d156abcbce95ea9d'
+            filesSha256 = 'df7b916e02bc19f7c0632ef189db8b4edc206a5ab216a6104654bcd262bdfb7e'
+            fileCount = 32
+        }
         $script:GetAuthorityInventorySha256 = {
             param([object[]] $Files)
 
@@ -42,7 +52,40 @@ Describe 'Skill-General Standard v1 reference implementation' {
     # Purpose: Bind the exact ordinal source inventory and reject legacy or missing packages.
     It 'UnitT05_uses_the_canonical_skills_source_root_and_exact_schema_v2_inventory' {
         Test-Path -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -PathType Container | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path $script:RepositoryRoot '.agents/skills') | Should -BeFalse
+        $legacySkillRoot = Join-Path $script:RepositoryRoot '.agents/skills'
+        if (Test-Path -LiteralPath $legacySkillRoot) {
+            $priorExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+            $hadPriorExitCode = $null -ne $priorExitVariable
+            $priorExitCode = if ($hadPriorExitCode) { $priorExitVariable.Value } else { $null }
+            try {
+                $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+                $gitRootLines = @(& $gitCommand.Source -C $script:RepositoryRoot rev-parse --show-toplevel)
+                $gitRootExitCode = $LASTEXITCODE
+                if ($gitRootExitCode -ne 0 -or $gitRootLines.Count -ne 1 -or
+                    -not [IO.Path]::GetFullPath([string]$gitRootLines[0]).Equals([IO.Path]::GetFullPath($script:RepositoryRoot), [StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'A present legacy skill directory is allowed only as ignored content inside this true Git checkout.'
+                }
+
+                $runtimeEntries = @(Get-ChildItem -LiteralPath $legacySkillRoot -Recurse -Force)
+                if (@($runtimeEntries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -gt 0) {
+                    throw 'The local legacy skill directory cannot contain reparse points.'
+                }
+                $runtimeFiles = @($runtimeEntries | Where-Object { -not $_.PSIsContainer })
+                foreach ($file in $runtimeFiles) {
+                    $relativePath = [IO.Path]::GetRelativePath($script:RepositoryRoot, $file.FullName).Replace('\', '/')
+                    & $gitCommand.Source -C $script:RepositoryRoot ls-files --error-unmatch -- $relativePath 2>$null | Out-Null
+                    $trackedExitCode = $LASTEXITCODE
+                    if ($trackedExitCode -eq 0) { throw "A legacy skill file is tracked in the canonical source checkout: $relativePath" }
+                    if ($trackedExitCode -ne 1) { throw "Could not verify tracked status for the local legacy skill file: $relativePath" }
+                    & $gitCommand.Source -C $script:RepositoryRoot check-ignore --quiet -- $relativePath
+                    if ($LASTEXITCODE -ne 0) { throw "A local legacy skill file is not ignored: $relativePath" }
+                }
+            }
+            finally {
+                if ($hadPriorExitCode) { Set-Variable -Name LASTEXITCODE -Value $priorExitCode -Scope Global }
+                else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
+            }
+        }
         Test-Path -LiteralPath $script:SourceInventoryPath -PathType Leaf | Should -BeTrue
 
         $inventory = Get-Content -LiteralPath $script:SourceInventoryPath -Raw | ConvertFrom-Json
@@ -91,6 +134,17 @@ Describe 'Skill-General Standard v1 reference implementation' {
         (& $script:GetAuthorityInventorySha256 -Files $files) | Should -Be $approved.filesSha256
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'security'
         @($adapter.PSObject.Properties.Name) | Should -Not -Contain 'deviations'
+    }
+
+    # Scenario: the protected driver carries a finite reviewed prepared-source snapshot.
+    # Purpose: bind the ff85 archive and complete ordered inventory reference for this and later source-pin selection.
+    It 'UnitT42_records_the_prepared_ff85_authority_snapshot' {
+        $preparedCommit = 'ff85d5f80fe795b96354e753074b5ce59ad04ecd'
+        $prepared = $script:ApprovedAuthoritySnapshots[$preparedCommit]
+        $null -ne $prepared | Should -BeTrue
+        $prepared.archiveSha256 | Should -BeExactly '3dc38613f2e2316ad8fcc79d4bf48d0b03fd8398f8dacc72d156abcbce95ea9d'
+        $prepared.filesSha256 | Should -BeExactly 'df7b916e02bc19f7c0632ef189db8b4edc206a5ab216a6104654bcd262bdfb7e'
+        $prepared.fileCount | Should -Be 32
     }
 
     # Scenario: local and CI validation enter through the repository's reviewed adapter.
@@ -297,16 +351,23 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$commonBase\.Count -ne 1'
         $workflow | Should -Match '\$driverHead -cne \$env:EXPECTED_DRIVER_SHA'
         $workflow | Should -Match '\$sourceAuthority = ''d54ef2cc83a19fa58f62fdcc6fa290095355d03e'''
-        $workflow | Should -Match '\$coreAuthorities = @\(''ea1d368ac7b36f838ce4c3af363972c90fa12930'', ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'', \$sourceAuthority\)'
-        $workflow | Should -Match '\$candidatePin\.authority\.commit -cne \$sourceAuthority'
+        $workflow | Should -Match '\$preparedSourceAuthority = ''ff85d5f80fe795b96354e753074b5ce59ad04ecd'''
+        $workflow | Should -Match '\$coreAuthorities = @\(''ea1d368ac7b36f838ce4c3af363972c90fa12930'', ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'', \$sourceAuthority, \$preparedSourceAuthority\)'
+        $workflow | Should -Match '\$candidateSourceAuthority -cnotin @\(\$sourceAuthority, \$preparedSourceAuthority\)'
         $workflow | Should -Match 'Source validation cannot accept a Core-only candidate authority\.'
+        $workflow | Should -Match '\$sourceDefinitions\.Count -ne 1'
         $workflow | Should -Match '\$sourcePins\.Count -ne 1'
         $workflow | Should -Match '\$sourcePins\[0\]\.Groups\[''sha''\]\.Value -cne \$sourceAuthority'
+        $workflow | Should -Match '\$preparedSourceDefinitions = \[regex\]::Matches'
+        $workflow | Should -Match '\$preparedSourcePins = \[regex\]::Matches'
+        $workflow | Should -Match '\$preparedSourceRequired = \$candidateSourceAuthority -ceq \$preparedSourceAuthority -or \$driverAuthority -ceq \$preparedSourceAuthority'
+        $workflow | Should -Match '\$preparedSourceDefinitions\.Count -eq 1 -and \$preparedSourcePins\.Count -eq 1'
+        $workflow | Should -Match '\$preparedSourcePins\[0\]\.Groups\[''sha''\]\.Value -ceq \$preparedSourceAuthority'
 
         $workflow | Should -Not -Match '\$baselineAuthority|\$mode = ''legacy'''
         $workflow | Should -Match '\$driverAuthority -cnotin \$coreAuthorities'
         $workflow | Should -Match 'scripts/Invoke-Core.*Pester\.ps1'
-        $workflow | Should -Match 'authority_revision=\$\(\[string\]\$candidatePin\.authority\.commit\)'
+        $workflow | Should -Match 'authority_revision=\$candidateSourceAuthority'
         $workflow | Should -Match 'ref:\s*\$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}'
         $workflow | Should -Match 'APPROVED_AUTHORITY_REVISION:\s*\$\{\{ steps\.authority-mode\.outputs\.authority_revision \}\}'
         $workflow | Should -Match '\$baseCommit = if \(\$env:GITHUB_EVENT_NAME -eq ''pull_request''\)'
