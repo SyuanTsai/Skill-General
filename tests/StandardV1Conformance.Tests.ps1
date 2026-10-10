@@ -46,23 +46,30 @@ Describe 'Skill-General Standard v1 reference implementation' {
             $bytes = [Text.Encoding]::UTF8.GetBytes($canonicalInventory)
             [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
         }
-    }
+        function Assert-LegacySkillRuntimeLayout {
+            param([Parameter(Mandatory)][string] $RepositoryRoot)
 
-    # Scenario: The canonical source publishes every active Skill, including the SQL package.
-    # Purpose: Bind the exact ordinal source inventory and reject legacy or missing packages.
-    It 'UnitT05_uses_the_canonical_skills_source_root_and_exact_schema_v2_inventory' {
-        Test-Path -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -PathType Container | Should -BeTrue
-        $legacySkillRoot = Join-Path $script:RepositoryRoot '.agents/skills'
-        if (Test-Path -LiteralPath $legacySkillRoot) {
+            $legacySkillRoot = Join-Path $RepositoryRoot '.agents/skills'
+            if (-not (Test-Path -LiteralPath $legacySkillRoot)) { return }
+
             $priorExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
             $hadPriorExitCode = $null -ne $priorExitVariable
             $priorExitCode = if ($hadPriorExitCode) { $priorExitVariable.Value } else { $null }
             try {
+                $agentsRootItem = Get-Item -LiteralPath (Join-Path $RepositoryRoot '.agents') -Force -ErrorAction Stop
+                if (($agentsRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'The local legacy .agents ancestor cannot be a reparse point.'
+                }
+                $legacySkillRootItem = Get-Item -LiteralPath $legacySkillRoot -Force -ErrorAction Stop
+                if (($legacySkillRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'The local legacy .agents/skills root cannot be a reparse point.'
+                }
+
                 $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
-                $gitRootLines = @(& $gitCommand.Source -C $script:RepositoryRoot rev-parse --show-toplevel)
+                $gitRootLines = @(& $gitCommand.Source -C $RepositoryRoot rev-parse --show-toplevel)
                 $gitRootExitCode = $LASTEXITCODE
                 if ($gitRootExitCode -ne 0 -or $gitRootLines.Count -ne 1 -or
-                    -not [IO.Path]::GetFullPath([string]$gitRootLines[0]).Equals([IO.Path]::GetFullPath($script:RepositoryRoot), [StringComparison]::OrdinalIgnoreCase)) {
+                    -not [IO.Path]::GetFullPath([string]$gitRootLines[0]).Equals([IO.Path]::GetFullPath($RepositoryRoot), [StringComparison]::OrdinalIgnoreCase)) {
                     throw 'A present legacy skill directory is allowed only as ignored content inside this true Git checkout.'
                 }
 
@@ -72,12 +79,12 @@ Describe 'Skill-General Standard v1 reference implementation' {
                 }
                 $runtimeFiles = @($runtimeEntries | Where-Object { -not $_.PSIsContainer })
                 foreach ($file in $runtimeFiles) {
-                    $relativePath = [IO.Path]::GetRelativePath($script:RepositoryRoot, $file.FullName).Replace('\', '/')
-                    & $gitCommand.Source -C $script:RepositoryRoot ls-files --error-unmatch -- $relativePath 2>$null | Out-Null
+                    $relativePath = [IO.Path]::GetRelativePath($RepositoryRoot, $file.FullName).Replace('\', '/')
+                    & $gitCommand.Source -C $RepositoryRoot ls-files --error-unmatch -- $relativePath 2>$null | Out-Null
                     $trackedExitCode = $LASTEXITCODE
                     if ($trackedExitCode -eq 0) { throw "A legacy skill file is tracked in the canonical source checkout: $relativePath" }
                     if ($trackedExitCode -ne 1) { throw "Could not verify tracked status for the local legacy skill file: $relativePath" }
-                    & $gitCommand.Source -C $script:RepositoryRoot check-ignore --quiet -- $relativePath
+                    & $gitCommand.Source -C $RepositoryRoot check-ignore --quiet -- $relativePath
                     if ($LASTEXITCODE -ne 0) { throw "A local legacy skill file is not ignored: $relativePath" }
                 }
             }
@@ -86,6 +93,14 @@ Describe 'Skill-General Standard v1 reference implementation' {
                 else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
             }
         }
+    }
+
+    # Scenario: The canonical source publishes every active Skill, including the SQL package.
+    # Purpose: Bind the exact ordinal source inventory and reject legacy or missing packages.
+    It 'UnitT05_uses_the_canonical_skills_source_root_and_exact_schema_v2_inventory' {
+        Test-Path -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -PathType Container | Should -BeTrue
+        $legacySkillRoot = Join-Path $script:RepositoryRoot '.agents/skills'
+        Assert-LegacySkillRuntimeLayout -RepositoryRoot $script:RepositoryRoot
         Test-Path -LiteralPath $script:SourceInventoryPath -PathType Leaf | Should -BeTrue
 
         $inventory = Get-Content -LiteralPath $script:SourceInventoryPath -Raw | ConvertFrom-Json
@@ -105,6 +120,73 @@ Describe 'Skill-General Standard v1 reference implementation' {
             'review-agent-skills'
             'verify-data-access-performance'
         )
+    }
+
+    # Scenario: the legacy runtime directory or its direct ancestor is a Windows junction.
+    # Purpose: reject path escapes before recursive enumeration can hide the link and accept ignored external files.
+    It 'UnitT06_rejects_junctioned_legacy_skill_locations_before_enumerating_<Boundary>' -ForEach @(
+        @{ Boundary = 'skills-root' }
+        @{ Boundary = 'agents-ancestor' }
+    ) {
+        $fixtureRoot = Join-Path $TestDrive ('legacy-runtime-junction-' + [guid]::NewGuid().ToString('N'))
+        $repositoryRoot = Join-Path $fixtureRoot 'repo'
+        $targetRoot = Join-Path $fixtureRoot 'external-target'
+        [void](New-Item -ItemType Directory -Path $repositoryRoot -Force)
+        [void](New-Item -ItemType Directory -Path $targetRoot -Force)
+        $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        & $gitCommand.Source -C $repositoryRoot init --quiet
+        if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the isolated legacy-runtime fixture repository.' }
+        [IO.File]::WriteAllText((Join-Path $repositoryRoot '.gitignore'), ".agents/skills/`n", [Text.UTF8Encoding]::new($false))
+
+        $targetSkillsRoot = if ($Boundary -eq 'skills-root') { $targetRoot } else { Join-Path $targetRoot 'skills' }
+        [void](New-Item -ItemType Directory -Path $targetSkillsRoot -Force)
+        $targetFile = Join-Path $targetSkillsRoot 'runtime-fixture.txt'
+        [IO.File]::WriteAllText($targetFile, 'private fixture runtime bytes', [Text.UTF8Encoding]::new($false))
+
+        if ($Boundary -eq 'skills-root') {
+            $agentsPath = Join-Path $repositoryRoot '.agents'
+            [void](New-Item -ItemType Directory -Path $agentsPath -Force)
+            $junctionPath = Join-Path $agentsPath 'skills'
+        }
+        else {
+            $junctionPath = Join-Path $repositoryRoot '.agents'
+        }
+
+        try {
+            [void](New-Item -ItemType Junction -Path $junctionPath -Target $targetRoot -ErrorAction Stop)
+            $junctionItem = Get-Item -LiteralPath $junctionPath -Force -ErrorAction Stop
+            ($junctionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 | Should -BeTrue
+            (Test-Path -LiteralPath $targetFile -PathType Leaf) | Should -BeTrue
+
+            $legacySkillRoot = Join-Path $repositoryRoot '.agents/skills'
+            $enumeratedFixtureFiles = @(Get-ChildItem -LiteralPath $legacySkillRoot -Recurse -Force)
+            $enumeratedFixtureFiles.Count | Should -Be 1
+            $relativePath = [IO.Path]::GetRelativePath($repositoryRoot, $enumeratedFixtureFiles[0].FullName).Replace('\', '/')
+            $relativePath | Should -BeExactly '.agents/skills/runtime-fixture.txt'
+            & $gitCommand.Source -C $repositoryRoot ls-files --error-unmatch -- $relativePath 2>$null | Out-Null
+            $LASTEXITCODE | Should -Be 1
+            & $gitCommand.Source -C $repositoryRoot check-ignore --quiet -- $relativePath
+            $LASTEXITCODE | Should -Be 0
+
+            $priorExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+            $hadPriorExitCode = $null -ne $priorExitVariable
+            $priorExitCode = if ($hadPriorExitCode) { $priorExitVariable.Value } else { $null }
+            try {
+                Set-Variable -Name LASTEXITCODE -Value 73 -Scope Global
+                { Assert-LegacySkillRuntimeLayout -RepositoryRoot $repositoryRoot } | Should -Throw -ExpectedMessage '*reparse point*'
+                (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction Stop).Value | Should -Be 73
+            }
+            finally {
+                if ($hadPriorExitCode) { Set-Variable -Name LASTEXITCODE -Value $priorExitCode -Scope Global }
+                else { Remove-Variable -Name LASTEXITCODE -Scope Global -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        finally {
+            if (Test-Path -LiteralPath $junctionPath) {
+                Remove-Item -LiteralPath $junctionPath -Force -ErrorAction Stop
+            }
+            (Test-Path -LiteralPath $targetFile -PathType Leaf) | Should -BeTrue
+        }
     }
 
     # Scenario: the consumer config selects a complete reviewed immutable authority tuple, including source validation.
