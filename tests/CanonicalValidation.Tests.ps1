@@ -8,7 +8,7 @@ Describe 'Source validation request boundary' {
         if (@($errors).Count) { throw 'Validate.ps1 must parse before source request fixtures run.' }
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -cin @(
-                '$script:AuthorityRepository', '$script:NextAuthorityCommit', '$script:MergedAuthorityCommit', '$script:SourceAuthorityCommit',
+                '$script:AuthorityRepository', '$script:NextAuthorityCommit', '$script:MergedAuthorityCommit', '$script:SourceAuthorityCommit', '$script:PreparedSourceAuthorityCommit',
                 '$script:SourceRepository', '$childRunnerText')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -cin @(
                 'Test-LegacyRunRequested', 'Assert-OrdinaryCoreRunRequest', 'Assert-NoReparseAncestors',
