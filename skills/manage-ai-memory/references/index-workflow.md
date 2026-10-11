@@ -25,9 +25,9 @@ For exact-key recall or capture, query the body destination by Memory Key and Sc
 For a new or changed body, use this order:
 
 1. Resolve target, authorization, exact key, scope, and current body state.
-2. Save the body, then read it back through its verified locator.
-3. For replacement, only after the new body is verified, retire the prior current body as Superseded. If retirement fails, preserve both and report an incomplete transition.
-4. Maintain the index. Preserve the old pointer as Superseded and add or update the new Active pointer. Read back the index result.
+2. Save the body, then read it back through its verified locator. An unconfirmed change remains a Pending candidate. If an Active body already exists for the same key and Scope, preserve the existing Active body and index row.
+3. For a confirmed replacement, only after the new body is verified, retire the prior current body as Superseded. If retirement fails, preserve both and report an incomplete transition.
+4. Maintain the index using the verified body's Status. For a confirmed replacement, preserve the old pointer as Superseded and add or update the new pointer whose Status matches the verified body. A Pending pointer remains non-current. Read back the index result.
 
 Unchanged content skips the body write. An existing unindexed body needs only a verified index repair. If the body succeeds and the index fails, retain the body and locator, report the exact failed index step and error, and leave the operation incomplete. On resume, re-read the body and index, then repair only the missing index entry; never resave the body just to retry indexing.
 

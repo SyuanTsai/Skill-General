@@ -63,6 +63,23 @@ Describe 'manage-ai-memory provider-neutral contract' {
         $case.expected.indexRepairCount | Should -Be 1
     }
 
+    # Scenario: A verified Pending body is added to an index that treats Pending as non-current.
+    # Purpose: Prevent an inferred candidate from superseding current memory or becoming current navigation.
+    It 'UnitT35_uses_verified_body_status_for_the_new_index_row' {
+        $script:Contract.index.nonCurrentStates | Should -Contain 'Pending'
+        $script:Contract.workflow.pendingCandidateAction.existingActiveBody | Should -Be 'retain'
+        $script:Contract.workflow.pendingCandidateAction.existingActiveIndexRow | Should -Be 'retain'
+        $script:Contract.workflow.pendingCandidateAction.candidateIndexStatus | Should -Be 'Pending'
+        $script:Contract.workflow.replacementReadiness | Should -Be 'confirmed-new-body-readback-before-retiring-old'
+        $script:Contract.workflow.replacementAction | Should -Be 'preserve-old-as-Superseded-after-confirmed-replacement'
+        $script:Contract.workflow.indexReplacementAction | Should -Be 'retain-old-row-as-Superseded-add-new-row-with-verified-body-status'
+        $indexWorkflow = Get-Content -Raw (Join-Path $script:Skill 'references/index-workflow.md')
+        $indexWorkflow | Should -Match 'Pending candidate'
+        $indexWorkflow | Should -Match 'preserve the existing Active body and index row'
+        $indexWorkflow | Should -Match 'new pointer whose Status matches the verified body'
+        $indexWorkflow | Should -Not -Match 'new Active pointer'
+    }
+
     # Scenario: Body save succeeds and index update fails.
     # Purpose: Preserve the body locator and resume without duplicating the body.
     It 'UnitT40_reports_partial_index_failure_and_resumes_index_only' {

@@ -194,9 +194,14 @@
     "sameKeyAbsenceRequires": "verified-body-destination-result",
     "indexMissAction": "check-body-destination",
     "unchangedAction": "skip-duplicate",
-    "replacementReadiness": "verified-new-body-before-retiring-old",
-    "replacementAction": "preserve-old-as-Superseded",
-    "indexReplacementAction": "retain-old-row-as-Superseded-add-new-Active-row",
+    "replacementReadiness": "confirmed-new-body-readback-before-retiring-old",
+    "replacementAction": "preserve-old-as-Superseded-after-confirmed-replacement",
+    "pendingCandidateAction": {
+      "existingActiveBody": "retain",
+      "existingActiveIndexRow": "retain",
+      "candidateIndexStatus": "Pending"
+    },
+    "indexReplacementAction": "retain-old-row-as-Superseded-add-new-row-with-verified-body-status",
     "archiveAction": "retain-body-mark-Archived",
     "unknownWriteAction": "read-current-state-before-retry",
     "partialIndexFailure": {
