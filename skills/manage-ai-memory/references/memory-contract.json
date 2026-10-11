@@ -194,6 +194,8 @@
     "sameKeyAbsenceRequires": "verified-body-destination-result",
     "indexMissAction": "check-body-destination",
     "unchangedAction": "skip-duplicate",
+    "unchangedIdentityRequires": ["content", "source", "status", "confidence"],
+    "pendingPromotionAction": "save-confirmed-body-readback-then-supersede-pending",
     "replacementReadiness": "confirmed-new-body-readback-before-retiring-old",
     "replacementAction": "preserve-old-as-Superseded-after-confirmed-replacement",
     "pendingCandidateAction": {

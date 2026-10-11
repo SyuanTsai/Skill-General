@@ -52,6 +52,28 @@ Describe 'manage-ai-memory provider-neutral contract' {
         }
     }
 
+    # Scenario: A user confirms the same words already stored as a Pending inference.
+    # Purpose: Preserve the inference as history and verify a separate confirmed body before retirement.
+    It 'UnitT25_promotes_same_content_only_after_confirmed_readback' {
+        @($script:Contract.workflow.unchangedIdentityRequires) | Should -Be @('content', 'source', 'status', 'confidence')
+        $script:Contract.workflow.pendingPromotionAction | Should -Be 'save-confirmed-body-readback-then-supersede-pending'
+        $operations = Get-Content -Raw (Join-Path $script:Skill 'references/memory-operations.md')
+        $operations | Should -Match 'already held in a Pending body'
+        $operations | Should -Match 'read it back, then mark the Pending body Superseded'
+        $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC07')[0]
+        @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.create','records.read','records.update','records.read')
+        $pending = $case.fixedToolResponses[1].response
+        $confirmed = $case.fixedToolResponses[3].response
+        $pending.content | Should -Be $confirmed.content
+        $pending.status | Should -Be 'Pending'
+        $confirmed.status | Should -Be 'Active'
+        $confirmed.confidence | Should -Be 'Confirmed'
+        $case.fixedToolResponses[4].arguments.locator | Should -Be $pending.locator
+        $case.fixedToolResponses[5].response.status | Should -Be 'Superseded'
+        $case.fixedToolResponses[5].response.source | Should -Be $pending.source
+        $case.oracle.expected.unrelatedInferenceUnchanged | Should -BeTrue
+    }
+
     # Scenario: The index has no row for a key whose body is already present.
     # Purpose: Preserve the SYP-257 same-key body check and index-only repair.
     It 'UnitT30_checks_body_after_index_miss_and_repairs_only_index' {

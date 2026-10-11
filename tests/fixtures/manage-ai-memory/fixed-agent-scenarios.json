@@ -279,19 +279,94 @@
       "id": "AC07",
       "scenario": "Scenario: one proposition explicitly confirmed",
       "purpose": "Purpose: Verify AC07 without live memory or file mutation.",
-      "userInput": "I confirm only that the release notes are in Japanese.",
-      "connectedTargets": [],
+      "userInput": "I confirm only that the release notes are in Japanese under Memory Key project:example.project:release-language and Scope example.project. Keep the separate inference that all documentation is Japanese unconfirmed.",
+      "connectedTargets": [
+        {
+          "id": "records-main",
+          "purpose": "records",
+          "connected": true
+        }
+      ],
       "fixedToolResponses": [
         {
-          "tool": "records.read",
+          "tool": "records.search",
           "arguments": {
-            "locator": "record://old/1"
+            "target": "records-main",
+            "key": "project:example.project:release-language",
+            "scope": "example.project"
           },
           "response": {
-            "claims": [
-              "release notes are Japanese",
-              "all documentation is Japanese"
+            "matches": [
+              {
+                "locator": "record://pending/7",
+                "key": "project:example.project:release-language",
+                "scope": "example.project",
+                "status": "Pending"
+              }
             ]
+          }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://pending/7" },
+          "response": {
+            "locator": "record://pending/7",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes are in Japanese.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          }
+        },
+        {
+          "tool": "records.create",
+          "arguments": {
+            "target": "records-main",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes are in Japanese.",
+            "source": "explicit-user-confirmation",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": { "locator": "record://confirmed/7" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://confirmed/7" },
+          "response": {
+            "locator": "record://confirmed/7",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes are in Japanese.",
+            "source": "explicit-user-confirmation",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "records.update",
+          "arguments": {
+            "locator": "record://pending/7",
+            "status": "Superseded"
+          },
+          "response": {
+            "locator": "record://pending/7",
+            "status": "Superseded"
+          }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://pending/7" },
+          "response": {
+            "locator": "record://pending/7",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes are in Japanese.",
+            "source": "assistant-inference",
+            "status": "Superseded",
+            "confidence": "Inferred"
           }
         }
       ],
@@ -303,7 +378,9 @@
           "inferredClaims": [
             "all documentation is Japanese"
           ],
-          "preserveSource": true
+          "preserveSource": true,
+          "sameContentPendingPromotedAfterReadback": true,
+          "unrelatedInferenceUnchanged": true
         }
       }
     },
