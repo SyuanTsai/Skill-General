@@ -113,7 +113,7 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $inventory.skillsRoot | Should -Be 'skills'
         @($inventory.skills) | Should -Be @(
             'investigate-datadog-logs'
-            'manage-notion-ai-memory'
+            'manage-ai-memory'
             'manage-task-handoff'
             'operate-environment-authorized-sql'
             'plan-production-change'

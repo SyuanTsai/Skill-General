@@ -46,7 +46,7 @@ tests/
 | `plan-production-change` | Evidence-based production change planning |
 | `verify-data-access-performance` | Query-count and data-access performance verification |
 | `investigate-datadog-logs` | Datadog log and APM investigation |
-| `manage-notion-ai-memory` | Durable cross-task Notion memory |
+| `manage-ai-memory` | Durable record and file memory through adopter-selected connected targets |
 | `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
 | `operate-environment-authorized-sql` | Controlled Azure SQL workflows and v1 offline contracts; execution runtime remains separate |
 | `review-agent-skills` | Agent Skill package review |

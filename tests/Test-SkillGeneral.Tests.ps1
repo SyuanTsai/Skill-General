@@ -177,7 +177,7 @@ Describe 'Skill-General repository contract' {
     }
 
     It 'rejects undeclared OpenAI policy keys' {
-        $metadataPath = Join-Path $fixtureRoot 'skills/manage-notion-ai-memory/agents/openai.yaml'
+        $metadataPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/agents/openai.yaml'
         Add-Content -LiteralPath $metadataPath -Value '  unsafe_override: true'
 
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
@@ -193,9 +193,10 @@ Describe 'Skill-General repository contract' {
     }
 
     It 'validates the final dependency before a following policy section' {
-        $metadataPath = Join-Path $fixtureRoot 'skills/manage-notion-ai-memory/agents/openai.yaml'
+        $metadataPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/agents/openai.yaml'
         $metadata = Get-Content -LiteralPath $metadataPath -Raw
-        $metadata = $metadata -replace '(?m)^      value:.*\r?\n', ''
+        $missingValue = "dependencies:`n  tools:`n    - type: `"mcp`"`n      description: `"Optional target`"`n`npolicy:"
+        $metadata = $metadata -replace '(?m)^policy:', $missingValue
         Set-Content -LiteralPath $metadataPath -Value $metadata -Encoding utf8NoBOM -NoNewline
 
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
