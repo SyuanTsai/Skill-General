@@ -60,20 +60,30 @@ jobs:
           $candidate = Join-Path $env:GITHUB_WORKSPACE 'candidate'
           $candidatePin = Get-Content -LiteralPath (Join-Path $candidate 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json
           $sourceAuthority = 'd54ef2cc83a19fa58f62fdcc6fa290095355d03e'
-          $coreAuthorities = @('ea1d368ac7b36f838ce4c3af363972c90fa12930', '053b80143b5ef48b06a8c448d5ac1abaf9a49df8', $sourceAuthority)
-          if ([string]$candidatePin.authority.commit -cne $sourceAuthority) {
+          $preparedSourceAuthority = 'ff85d5f80fe795b96354e753074b5ce59ad04ecd'
+          $coreAuthorities = @('ea1d368ac7b36f838ce4c3af363972c90fa12930', '053b80143b5ef48b06a8c448d5ac1abaf9a49df8', $sourceAuthority, $preparedSourceAuthority)
+          $candidateSourceAuthority = [string]$candidatePin.authority.commit
+          if ($candidateSourceAuthority -cnotin @($sourceAuthority, $preparedSourceAuthority)) {
             throw 'Source validation cannot accept a Core-only candidate authority.'
           }
           $driverAuthority = [string]$pin.authority.commit
           $driverText = Get-Content -LiteralPath (Join-Path $driver 'scripts/Validate.ps1') -Raw -Encoding utf8
+          $sourceDefinitions = [regex]::Matches($driverText, '(?m)^[ \t]*\$script:SourceAuthorityCommit\b[^\r\n]*\r?$')
           $sourcePins = [regex]::Matches($driverText, '(?m)^\$script:SourceAuthorityCommit = ''(?<sha>[0-9a-f]{40})''\r?$')
-          if ($driverAuthority -cnotin $coreAuthorities -or $sourcePins.Count -ne 1 -or
+          $preparedSourceDefinitions = [regex]::Matches($driverText, '(?m)^[ \t]*\$script:PreparedSourceAuthorityCommit\b[^\r\n]*\r?$')
+          $preparedSourcePins = [regex]::Matches($driverText, '(?m)^\$script:PreparedSourceAuthorityCommit = ''(?<sha>[0-9a-f]{40})''\r?$')
+          $preparedSourceRequired = $candidateSourceAuthority -ceq $preparedSourceAuthority -or $driverAuthority -ceq $preparedSourceAuthority
+          $preparedSourceIsValid = ($preparedSourceDefinitions.Count -eq 0 -and -not $preparedSourceRequired) -or
+              ($preparedSourceDefinitions.Count -eq 1 -and $preparedSourcePins.Count -eq 1 -and
+                  $preparedSourcePins[0].Groups['sha'].Value -ceq $preparedSourceAuthority)
+          if ($driverAuthority -cnotin $coreAuthorities -or $sourceDefinitions.Count -ne 1 -or $sourcePins.Count -ne 1 -or
               $sourcePins[0].Groups['sha'].Value -cne $sourceAuthority -or
+              -not $preparedSourceIsValid -or
               -not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
             throw 'The exact protected driver is not prepared for the approved source authority.'
           }
           $mode = 'core'
-          "authority_revision=$([string]$candidatePin.authority.commit)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "authority_revision=$candidateSourceAuthority" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "validation_mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Checkout candidate-pinned authority for validation tests
