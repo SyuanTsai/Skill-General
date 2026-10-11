@@ -118,7 +118,7 @@ switch ($env:TEST_FAKE_GIT_MODE) {
     It 'InterT30_kills_a_stalled_git_process_tree' {
         $pidFile = Join-Path $TestDrive 'owned-pids.txt'
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        { Invoke-FakeBlobReader -Mode 'hang' -TimeoutSeconds 3 -PidFile $pidFile } |
+        { Invoke-FakeBlobReader -Mode 'hang' -TimeoutSeconds 5 -PidFile $pidFile } |
             Should -Throw '*timed out*'
         $clock.Elapsed.TotalSeconds | Should -BeLessThan 10
         $pids = @(Get-Content -LiteralPath $pidFile | ForEach-Object { [int]$_ })
@@ -133,7 +133,7 @@ switch ($env:TEST_FAKE_GIT_MODE) {
     It 'InterT40_kills_a_stalled_tree_lookup' {
         $pidFile = Join-Path $TestDrive 'tree-owned-pids.txt'
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        { Invoke-FakeBlobReader -Mode 'hang-tree' -TimeoutSeconds 3 -PidFile $pidFile } |
+        { Invoke-FakeBlobReader -Mode 'hang-tree' -TimeoutSeconds 5 -PidFile $pidFile } |
             Should -Throw '*tree lookup timed out*'
         $clock.Elapsed.TotalSeconds | Should -BeLessThan 10
         $pids = @(Get-Content -LiteralPath $pidFile | ForEach-Object { [int]$_ })

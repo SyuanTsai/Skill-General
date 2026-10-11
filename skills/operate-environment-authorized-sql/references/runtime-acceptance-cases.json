@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "classification": "future-runtime-specification",
+  "executed": false,
+  "cases": [
+    {
+      "id": "new-connection",
+      "given_or_input": "No protected authorization",
+      "expected_status": "DENIED",
+      "required_evidence": "No business SQL; human first confirmation is needed",
+      "executed": false
+    },
+    {
+      "id": "repeated-read",
+      "given_or_input": "Same confirmed target and identity; valid login; read task",
+      "expected_status": "SUCCESS",
+      "required_evidence": "Repeated reads need no per-SQL prompt",
+      "executed": false
+    },
+    {
+      "id": "reboot",
+      "given_or_input": "Persistent authorization; expired login",
+      "expected_status": "AUTH_REQUIRED",
+      "required_evidence": "Re-login same identity retains authorization",
+      "executed": false
+    },
+    {
+      "id": "target-server",
+      "given_or_input": "Actual server differs",
+      "expected_status": "TARGET_CHANGED",
+      "required_evidence": "No business SQL",
+      "executed": false
+    },
+    {
+      "id": "target-database",
+      "given_or_input": "Actual database differs",
+      "expected_status": "TARGET_CHANGED",
+      "required_evidence": "No business SQL",
+      "executed": false
+    },
+    {
+      "id": "target-principal",
+      "given_or_input": "Actual principal differs",
+      "expected_status": "TARGET_CHANGED",
+      "required_evidence": "No old pooled identity",
+      "executed": false
+    },
+    {
+      "id": "revoked",
+      "given_or_input": "Authorization revoked",
+      "expected_status": "DENIED",
+      "required_evidence": "Caches and pooled sessions invalidated",
+      "executed": false
+    },
+    {
+      "id": "unknown-policy",
+      "given_or_input": "Unknown authorization/policy version",
+      "expected_status": "DENIED",
+      "required_evidence": "No assumed DEV",
+      "executed": false
+    },
+    {
+      "id": "select-into",
+      "given_or_input": "SELECT OrderId INTO dbo.Copy FROM dbo.Orders",
+      "expected_status": "DENIED",
+      "required_evidence": "Full AST rejects write",
+      "executed": false
+    },
+    {
+      "id": "batch-smuggling",
+      "given_or_input": "SELECT OrderId FROM dbo.Orders; DELETE FROM dbo.Orders",
+      "expected_status": "DENIED",
+      "required_evidence": "Full AST rejects multi statement",
+      "executed": false
+    },
+    {
+      "id": "cte-write",
+      "given_or_input": "WITH x AS (SELECT OrderId FROM dbo.Orders) DELETE FROM x",
+      "expected_status": "DENIED",
+      "required_evidence": "Full AST rejects write through CTE",
+      "executed": false
+    },
+    {
+      "id": "dynamic-exec",
+      "given_or_input": "EXEC sp_executesql @query",
+      "expected_status": "DENIED",
+      "required_evidence": "EXEC/dynamic SQL unavailable",
+      "executed": false
+    },
+    {
+      "id": "external",
+      "given_or_input": "SELECT * FROM OtherDb.dbo.Orders",
+      "expected_status": "DENIED",
+      "required_evidence": "Cross-database/external sources unavailable",
+      "executed": false
+    },
+    {
+      "id": "valid-join-cte",
+      "given_or_input": "Authorized SELECT with JOIN/CTE/aggregate",
+      "expected_status": "SUCCESS",
+      "required_evidence": "AST/dependencies/rows/columns verified",
+      "executed": false
+    },
+    {
+      "id": "unknown-function",
+      "given_or_input": "Unknown function or view dependency",
+      "expected_status": "DENIED",
+      "required_evidence": "Unverified dependency fails closed",
+      "executed": false
+    },
+    {
+      "id": "unknown-trigger",
+      "given_or_input": "Write with unknown trigger/cascade/schema change",
+      "expected_status": "DENIED",
+      "required_evidence": "Reverify complete effect before enabling writes",
+      "executed": false
+    },
+    {
+      "id": "scope-leak",
+      "given_or_input": "SELECT lacks the authorized row/column condition",
+      "expected_status": "DENIED",
+      "required_evidence": "Service enforces scope independently of TOP/WHERE presence",
+      "executed": false
+    },
+    {
+      "id": "write-over-limit",
+      "given_or_input": "Atomic write affects more than the confirmed limit",
+      "expected_status": "ERROR",
+      "required_evidence": "Rollback; no COUNT/write race",
+      "executed": false
+    },
+    {
+      "id": "concurrency",
+      "given_or_input": "Expected value/rowversion no longer matches",
+      "expected_status": "ERROR",
+      "required_evidence": "Rollback or no write",
+      "executed": false
+    },
+    {
+      "id": "uncertain-commit",
+      "given_or_input": "Connection breaks during commit",
+      "expected_status": "UNCERTAIN_COMMIT",
+      "required_evidence": "Do not claim success or automatically resend",
+      "executed": false
+    },
+    {
+      "id": "replay",
+      "given_or_input": "Known committed request_id is replayed",
+      "expected_status": "SUCCESS",
+      "required_evidence": "Return recorded result without another write",
+      "executed": false
+    },
+    {
+      "id": "os-isolation",
+      "given_or_input": "Real low privilege Agent attempts token/registry/binary/admin IPC access",
+      "expected_status": "DENIED",
+      "required_evidence": "OS/service denies; mock is insufficient",
+      "executed": false
+    },
+    {
+      "id": "bounded-output",
+      "given_or_input": "Result/byte/time/concurrency limit is reached",
+      "expected_status": "SUCCESS",
+      "required_evidence": "Bounded output; truncate/cancel is explicit; no secrets",
+      "executed": false
+    },
+    {
+      "id": "fixed-cli",
+      "given_or_input": "Repeated authorized CLI calls under actual managed approval rules",
+      "expected_status": "SUCCESS",
+      "required_evidence": "No per-call prompt proven on deployed host",
+      "executed": false
+    }
+  ]
+}

@@ -1,0 +1,513 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Environment-authorized SQL authorization v1 (shape contract only)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "policy_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "connection_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "host_binding": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+\\.database\\.windows\\.net$"
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "server",
+        "database"
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "object_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "database_principal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "tenant_id",
+        "object_id",
+        "database_principal"
+      ]
+    },
+    "environment": {
+      "enum": [
+        "DEV",
+        "UAT",
+        "PRD"
+      ]
+    },
+    "allowed_operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "SELECT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "SELECT",
+                "UPDATE",
+                "DELETE"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
+          },
+          "read_columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "minItems": 1,
+            "maxItems": 128
+          },
+          "write_columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "minItems": 0,
+            "maxItems": 128
+          },
+          "key_columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "row_scope": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+                },
+                "operator": {
+                  "enum": [
+                    "EQ",
+                    "IN"
+                  ]
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^@[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                      },
+                      "type": {
+                        "enum": [
+                          "int",
+                          "bigint",
+                          "decimal",
+                          "bit",
+                          "nvarchar",
+                          "uniqueidentifier",
+                          "datetime2",
+                          "binary"
+                        ]
+                      },
+                      "value": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 4000
+                      },
+                      "precision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 38
+                      },
+                      "scale": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 38
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "type",
+                      "value"
+                    ],
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "int"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "integer",
+                                "null"
+                              ],
+                              "minimum": -2147483648,
+                              "maximum": 2147483647
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "bigint"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "integer",
+                                "null"
+                              ],
+                              "minimum": -9223372036854775808,
+                              "maximum": 9223372036854775807
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "decimal"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"
+                            }
+                          },
+                          "required": [
+                            "precision",
+                            "scale"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "bit"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "nvarchar"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "maxLength": 4000
+                            }
+                          },
+                          "required": [
+                            "size"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "uniqueidentifier"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "datetime2"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "binary"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "value": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "pattern": "^(?:[0-9a-fA-F]{2})+$",
+                              "maxLength": 8000
+                            }
+                          },
+                          "required": []
+                        }
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "column",
+                "operator",
+                "values"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "dependency_state": {
+            "enum": [
+              "confirmed",
+              "unknown"
+            ]
+          },
+          "dependency_revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "schema_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "schema",
+          "name",
+          "operations",
+          "read_columns",
+          "write_columns",
+          "key_columns",
+          "row_scope",
+          "dependency_state",
+          "dependency_revision",
+          "schema_fingerprint"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "max_result_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "max_result_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "max_write_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "lock_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "max_concurrent_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "required": [
+        "operation_timeout_ms",
+        "max_result_rows",
+        "max_result_bytes",
+        "max_write_rows",
+        "lock_timeout_ms",
+        "max_concurrent_requests"
+      ]
+    },
+    "confirmed_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "confirmed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$"
+    },
+    "status": {
+      "enum": [
+        "Active",
+        "Revoked"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "policy_version",
+    "connection_id",
+    "host_binding",
+    "target",
+    "identity",
+    "environment",
+    "allowed_operations",
+    "objects",
+    "limits",
+    "confirmed_by",
+    "confirmed_at",
+    "status"
+  ]
+}
