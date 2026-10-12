@@ -1,6 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 SyuanTsai; SPDX-License-Identifier: Apache-2.0 -->
 # Acceptance evidence
 
+Run local acceptance preparation and execution only on Windows; CI also runs only on Windows. The remote Azure SQL service's operating system is outside this local-host restriction.
+
 ## First-stage package acceptance
 
 Record exact source/authority revisions, candidate content inventory/hashes, actual tool versions, real commands, target kind, exit codes and reports. Verify discriminating routing, all required references, canonical source inventory and self-contained resource paths. Run the strict authorization/request/response diagnostics against positive synthetic envelopes and negative override, unknown-version, duplicate/case-colliding field, raw write, purpose mismatch, parameter binding, environment matrix, dependency and uncertainty cases. A valid envelope proves shape/consistency only.

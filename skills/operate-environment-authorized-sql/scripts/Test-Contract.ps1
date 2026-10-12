@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $IsWindows) { throw 'Windows hosts only.' }
 
 # Offline diagnostics only. These functions never access a database, credentials, or IPC.
 function Assert-UnambiguousJson([System.Text.Json.JsonElement] $Element) {

@@ -1,6 +1,6 @@
 ---
 name: manage-ai-memory
-description: Find, create, update, and recall durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
+description: Windows-only Skill. Find, create, update, and recall durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Manage AI Memory
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
 
 Use the adopter's authoritative record and file targets for durable memory. The adopter selects and manages those sources. This Skill uses their available operations and opaque locators; it does not store provider, tenant, account, or workspace-role identity. It does not implement synchronization, locks, version history, conflict resolution, or a storage service. Use $manage-task-handoff for interruption-safe task state.
 

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
 
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows hosts only.' }
+
 function Get-HandoffField {
     param($Value, [string]$Name)
     if ($null -eq $Value) { return $null }

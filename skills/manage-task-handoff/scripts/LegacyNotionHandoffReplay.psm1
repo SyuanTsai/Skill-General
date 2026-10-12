@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 Set-StrictMode -Version Latest
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows hosts only.' }
 
 function ConvertTo-LegacyNotionUtcTicks {
     param(

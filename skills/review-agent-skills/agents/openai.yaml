@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 interface:
   display_name: "Review Agent Skills"
-  short_description: "Review Agent Skill quality and safety"
-  default_prompt: "Use $review-agent-skills to review this Agent Skill package."
+  short_description: "Windows-only Agent Skill package reviews"
+  default_prompt: "Use $review-agent-skills on Windows to review this Agent Skill package."

@@ -1,6 +1,6 @@
 ---
 name: plan-production-change
-description: Create or update evidence-based production-code implementation plans with detail proportionate to risk and uncertainty. Use when the user asks to plan a feature, fix, refactor, migration, or other code change, or when repository guidance requires TDD sequencing, rollout, or rollback.
+description: Windows-only Skill. Create or update evidence-based production-code implementation plans with detail proportionate to risk and uncertainty. Use when the user asks to plan a feature, fix, refactor, migration, or other code change, or when repository guidance requires TDD sequencing, rollout, or rollback.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Plan a Production Change
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
 
 1. Search the relevant symbols, files, interfaces, direct references, and existing conventions before planning. Keep the investigation scoped to evidence needed for implementation and acceptance.
 2. Read the repository's applicable testing and domain rules. Convert applicable guardrails into concrete change, validation, or delivery steps instead of copying irrelevant rule text.

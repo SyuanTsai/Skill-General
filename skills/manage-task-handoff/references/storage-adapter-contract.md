@@ -4,6 +4,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Source result contract
 
+Local development, installation, execution, testing, and acceptance for this Skill are supported only on Windows; CI also runs only on Windows. The source-neutral contract does not define or imply cross-platform local host support.
+
 The record core is a source-neutral plain-data validator. It does not select a provider, call a connector, read or write source records, or establish durable storage. The caller and selected source own authorization, persistence, conditional updates and operation-ID idempotency, opaque source revisions, conflict handling, merging, retry, and any source readback. This package does not create a backend, storage schema, or source-specific conflict protocol.
 
 ## Caller-reported operation result

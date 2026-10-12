@@ -3,6 +3,8 @@
 
 This package is source inventory in Skill-General. Shared release/managed lifecycle/consumer projection remain governed by the exact authority pinned in `config/standard-v1.json`, including [the central Standard](https://github.com/SyuanTsai/SyuanTsai-AI-Instructions/blob/d54ef2cc83a19fa58f62fdcc6fa290095355d03e/docs/standards/skill-repository-standard.md) and its managed lifecycle companion. Do not create a private installer, alternate release gate, custom profile or competing consumer rule inside this Skill.
 
+Local development, installation, execution, testing, and acceptance for this Skill are supported only on Windows; CI also runs only on Windows. The remote Azure SQL service's operating system is outside this local-host restriction.
+
 ## Before release
 
 Use the repository's canonical `scripts/Validate.ps1` source path on a clean immutable candidate after explicit tool setup. Preserve real package validators, complete Static coverage, full repository Pester evidence and AI Review for that exact revision. Human Release Approval precedes publish/install. Core diagnostics alone cannot authorize release. Changing candidate bytes invalidates earlier evidence/approval.

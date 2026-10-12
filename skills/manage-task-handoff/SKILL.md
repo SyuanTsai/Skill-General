@@ -1,6 +1,6 @@
 ---
 name: manage-task-handoff
-description: Create interruption-safe Handoff records from caller-supplied task data. Use for explicit handoffs, meaningful checkpoints, branch progress, or resuming blocked work. Skip ordinary reads and new-conversation-only triggers.
+description: Windows-only Skill. Create interruption-safe Handoff records from caller-supplied task data. Use for explicit handoffs, meaningful checkpoints, branch progress, or resuming blocked work. Skip ordinary reads and new-conversation-only triggers.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Manage Task Handoff
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction. The Handoff core remains provider/storage-neutral, but that neutrality does not expand local host support beyond Windows.
 
 Maintain one task-level common Handoff and independent peer branch records. The record core accepts plain caller-supplied data, validates identity and state, and returns a proposed record with field-change intents. It makes no source calls and never claims durable storage. The caller and selected source own acquisition, authorization, persistence, conditional writes and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and any independent readback. A Handoff is task continuity, not cross-task long-term memory.
 

@@ -47,17 +47,19 @@ tests/
 | `verify-data-access-performance` | Query-count and data-access performance verification |
 | `investigate-datadog-logs` | Datadog log and APM investigation |
 | `manage-ai-memory` | Durable record and file memory through adopter-selected connected targets |
-| `manage-task-handoff` | Platform-neutral task Handoff and peer branches |
+| `manage-task-handoff` | Task Handoff records and peer branches (Windows-only local host) |
 | `operate-environment-authorized-sql` | Controlled Azure SQL workflows and v1 offline contracts; execution runtime remains separate |
 | `review-agent-skills` | Agent Skill package review |
 
-`manage-task-handoff` is platform-neutral: its core receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. Windows is also the only supported CI host. Operating systems used by external SaaS and remote services are outside this local-host restriction.
+
+`manage-task-handoff` retains a provider/storage-neutral core: it receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. Provider/storage neutrality does not expand local host support beyond Windows. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
 
 ## Canonical validation
 
 The protected PR/main workflow validates one clean immutable candidate with the authority pinned in `config/standard-v1.json`. Explicit setup acquires and freezes the approved skill-validator, skill-tools, and SkillSpector tools. One canonical source run then checks every active package with both validators, performs complete Static analysis without an LLM, runs the repository contract and full Pester suite, and verifies the candidate/run/authority/tool/report bindings before projecting the same result to all three required contexts.
 
-For local source validation, first stage the reviewed PowerShell and Pester runtime and a clean checkout of the pinned authority, then explicitly prepare a fresh run-owned toolset and consume it:
+Run local development, installation, execution, testing, acceptance, and source validation on Windows. For local source validation, first stage the reviewed PowerShell and Pester runtime and a clean checkout of the pinned authority, then explicitly prepare a fresh run-owned toolset and consume it:
 
 ```powershell
 pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -PrepareSourceTools -SourceToolsPath C:\short\t\source-tools.json -ArtifactsRoot C:\short\t
