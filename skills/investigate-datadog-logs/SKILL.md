@@ -1,6 +1,6 @@
 ---
 name: investigate-datadog-logs
-description: Windows-only Skill. Investigate Datadog error logs and APM telemetry through a configured connector. Use when the user provides a Logs Explorer, trace, or investigation-widget URL, asks to analyze logs or spans, or needs correlated patterns and trends. Do not use solely for incident records, dashboards, or notebooks.
+description: Windows-only Skill. Investigate Datadog error logs/APM through a configured connector. Use when given Logs Explorer, trace, investigation-widget, or focused-dashboard URLs; to analyze logs/spans or correlated patterns and trends. Not solely for incident records, dashboards, or notebooks.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
