@@ -10,7 +10,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if (-not $IsWindows) { throw 'Windows hosts only.' }
 
 $helperPath = Join-Path $PSScriptRoot 'CorePesterIntegrity.psm1'
 Import-Module -Name $helperPath -Force -ErrorAction Stop

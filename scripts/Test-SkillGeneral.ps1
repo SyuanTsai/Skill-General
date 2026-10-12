@@ -11,7 +11,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if (-not $IsWindows) { throw 'Windows hosts only.' }
 
 function Assert-ExactPropertySet {
     param(

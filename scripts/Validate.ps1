@@ -39,7 +39,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if (-not $IsWindows) { throw 'Windows hosts only.' }
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
