@@ -85,7 +85,7 @@ For an ordinary source change:
 
 1. Review the exact diff and run local checks that directly exercise its changed behavior. Use complete local `-SourceValidation` only when it is needed to investigate a specific failure.
 2. Commit the candidate and open a normal protected pull request. Windows CI runs the exact candidate through the complete canonical source validation and produces all three required contexts. Inspect the complete source report and evidence.
-3. For release, follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
+3. Follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
 
 Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence. Core `PASS` does not grant Human Release Approval.
 
