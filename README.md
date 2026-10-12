@@ -59,11 +59,12 @@ Windows is the only supported host for local development, installation, executio
 
 The protected PR/main workflow validates one clean immutable candidate with the authority pinned in `config/standard-v1.json`. Explicit setup acquires and freezes the approved skill-validator, skill-tools, and SkillSpector tools. One canonical source run then checks every active package with both validators, performs complete Static analysis without an LLM, runs the repository contract and full Pester suite, and verifies the candidate/run/authority/tool/report bindings before projecting the same result to all three required contexts.
 
-Run local development, installation, execution, testing, acceptance, and source validation on Windows. For local source validation, first stage the reviewed PowerShell and Pester runtime and a clean checkout of the pinned authority, then explicitly prepare a fresh run-owned toolset and consume it:
+Run local development, installation, execution, testing, acceptance, and any local source-validation run on Windows. When a specific failure needs investigation, a complete local `-SourceValidation` run is available as an optional diagnostic. Use the exact verified PowerShell runtime with its staged Pester 6.2.0 module closure and a clean checkout of the authority pinned in `config/standard-v1.json`. The commands below prepare a fresh run-owned toolset and consume it for that diagnostic:
 
 ```powershell
-pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -PrepareSourceTools -SourceToolsPath C:\short\t\source-tools.json -ArtifactsRoot C:\short\t
-pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -SourceValidation -SourceToolsPath C:\short\t\source-tools.json -ArtifactsRoot C:\short\artifacts -BaseCommit HEAD^
+$pwsh = 'C:\path\to\verified\powershell\pwsh.exe'
+& $pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -PrepareSourceTools -SourceToolsPath C:\short\t\source-tools.json -ArtifactsRoot C:\short\t
+& $pwsh -NoProfile -File ./scripts/Validate.ps1 -AuthorityRepositoryRoot C:\path\to\pinned-authority -SourceValidation -SourceToolsPath C:\short\t\source-tools.json -ArtifactsRoot C:\short\artifacts -BaseCommit HEAD^
 ```
 
 Ordinary `Run` remains a separate Core entry point. It accepts only approved authority tuples and verified runtime paths, rejects legacy resolver or development-harness arguments before tool resolution, and never downloads, installs, or falls back. Its two repository checks are the read-only source diagnostic and complete Pester suite. A Core `PASS` proves those checks; the source required contexts also require the complete real-tool evidence from `-SourceValidation`. Neither path grants release approval; reports retain `releaseEligible: false`.
@@ -82,8 +83,8 @@ Semantic preparation and continuation remain explicit through `PrepareSemantic` 
 
 For an ordinary source change:
 
-1. Commit the candidate, explicitly prepare source tools and run `scripts/Validate.ps1 -SourceValidation` locally with the pinned authority checkout.
-2. Inspect the complete source report and obtain the required Windows CI contexts for the exact commit.
+1. Review the exact diff and run local checks that directly exercise its changed behavior. Use complete local `-SourceValidation` only when it is needed to investigate a specific failure.
+2. Commit the candidate and open a normal protected pull request. Windows CI runs the exact candidate through the complete canonical source validation and produces all three required contexts. Inspect the complete source report and evidence.
 3. Follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
 
 Approval binds one immutable candidate commit; changing candidate bytes invalidates earlier approval and validation evidence. Core `PASS` does not grant Human Release Approval.
@@ -94,7 +95,7 @@ Approval binds one immutable candidate commit; changing candidate bytes invalida
 2. Add or update `skills/<skill-id>/SKILL.md` and `skills/<skill-id>/agents/openai.yaml`.
 3. Add Skill-specific resources and domain regression tests when needed.
 4. Update the ordinal `catalog/source.json` Skill inventory.
-5. Commit the candidate, run `scripts/Validate.ps1`, review the emitted evidence, and obtain Human Release Approval before release.
+5. Follow the [Development and release flow](#development-and-release-flow), review the required evidence, and obtain Human Release Approval before release.
 
 Do not add profiles, compatibility, dependency, lifecycle, consumer-routing, validation-tool, or security policy to this repository. Change shared policy through the normative authority and its authority regressions.
 
