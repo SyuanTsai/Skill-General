@@ -1,6 +1,6 @@
 ---
 name: verify-data-access-performance
-description: Analyze and test database query efficiency with repeated measurements, query counts, and N+1 checks. Use when the user needs to check, review, or fix slow queries, ORM loading behavior, benchmarks, or round-trip growth.
+description: Windows-only Skill. Analyze and test database query efficiency with repeated measurements, query counts, and N+1 checks. Use when the user needs to check, review, or fix slow queries, ORM loading behavior, benchmarks, or round-trip growth.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Verify Data-Access Performance
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
 
 1. Apply this workflow only to performance improvement, benchmarking, query optimization, or N+1 work. Do not add performance tests to unrelated feature changes.
 2. Read the repository's testing and database rules before proposing or changing code. Preserve its projection, return-shape, framework, and test-style constraints.

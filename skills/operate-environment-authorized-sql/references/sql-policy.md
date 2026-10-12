@@ -1,6 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 SyuanTsai; SPDX-License-Identifier: Apache-2.0 -->
 # SQL enforcement requirements
 
+The local host for development, installation, execution, testing, acceptance, and CI is Windows-only; the external database service's operating system is not constrained by this local-host rule.
+
 The environment matrix is DEV SELECT/UPDATE/DELETE; UAT SELECT/UPDATE; PRD SELECT. All other operations, including INSERT, MERGE, DDL, EXEC/procedures and permission changes, are denied. Existing application-driven integration tests need their own explicit scope and cannot bypass this execution policy to insert test data.
 
 The future service parses the complete T-SQL AST using Microsoft.SqlServer.TransactSql.ScriptDom, verifies one permitted statement and resolves every object/function/view dependency. Legal authorized SELECT/JOIN/CTE/aggregate and diagnostic queries remain supported. SELECT INTO, batches/GO or hidden statements, CTE writes, dynamic SQL, external/cross-database sources, unknown functions and unverified dependencies fail before execution. A leading SELECT, keyword filter, regular expression or read-only GUI toggle is insufficient. The offline contract checker deliberately does not parse SQL; a shape-valid malicious SELECT envelope still requires runtime rejection.

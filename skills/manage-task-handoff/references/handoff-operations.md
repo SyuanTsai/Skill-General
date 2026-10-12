@@ -4,6 +4,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Handoff operations
 
+Local development, installation, execution, testing, and acceptance for this Skill are supported only on Windows; CI also runs only on Windows. The core's provider/storage neutrality describes its source-ownership semantics and does not expand local host support.
+
 Read [the machine-readable task contract](task-handoff-contract.json) first. `HandoffRecordCore.psm1` validates caller-supplied records and produces proposed state and field-change intents; it performs no source I/O. The caller and selected source own reads, writes, authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merge policy, retry, and readback.
 
 ## Create or resume

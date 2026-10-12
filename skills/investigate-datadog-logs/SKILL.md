@@ -1,6 +1,6 @@
 ---
 name: investigate-datadog-logs
-description: Investigate Datadog error logs and APM telemetry through a configured connector. Use when the user provides a Logs Explorer, trace, or investigation-widget URL, asks to analyze logs or spans, or needs correlated patterns and trends. Do not use solely for incident records, dashboards, or notebooks.
+description: Windows-only Skill. Investigate Datadog error logs/APM through a configured connector. Use when given Logs Explorer, trace, or investigation-widget URLs; to analyze logs/spans or correlated patterns and trends. Not solely for incident records, dashboards, or notebooks.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Investigate Datadog Logs
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
 
 ## Prepare
 

@@ -1,6 +1,6 @@
 ---
 name: operate-environment-authorized-sql
-description: Prepare Azure SQL requests to check test results, analyze issue evidence, or update or delete explicitly requested scoped data through a registered environment-authorized local CLI. Use for controlled Azure SQL workflows; not database administration or arbitrary SQL clients.
+description: Windows-only Skill. Prepare Azure SQL requests to check test results, analyze issue evidence, or update or delete explicitly requested scoped data through a registered environment-authorized local CLI. Use for controlled Azure SQL workflows; not database administration or arbitrary SQL clients.
 ---
 <!--
 SPDX-FileCopyrightText: 2026 SyuanTsai
@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 # Operate Environment-Authorized SQL
+
+Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services, including the remote Azure SQL service, are outside this local-host restriction.
 
 Use a trusted registered connection and the task's actual purpose. The service must enforce the intersection of the user's persistent grant, actual target/identity, environment matrix and current task scope. This package supplies instructions and v1 contracts; it does not supply a CLI, Windows service, login client or SQL enforcement. Read [workflow and wire contracts](references/workflow.md) before preparing requests.
 
