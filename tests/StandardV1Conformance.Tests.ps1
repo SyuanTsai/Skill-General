@@ -34,6 +34,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
             filesSha256 = 'df7b916e02bc19f7c0632ef189db8b4edc206a5ab216a6104654bcd262bdfb7e'
             fileCount = 32
         }
+        $script:ApprovedAuthoritySnapshots['8e627baf54bd6e47862e6291b25e71cc45a2f2b7'] = @{
+            archiveSha256 = '9aa4a7fc8fc7c7f0ff9e774c79c77a64077b4003212a523dda519d034ff99989'
+            filesSha256 = '1d199b485ecf563948042e4bcd5b2e37afe3e32088248be93e2d1b91682ffdf9'
+            fileCount = 32
+        }
         $script:GetAuthorityInventorySha256 = {
             param([object[]] $Files)
 
