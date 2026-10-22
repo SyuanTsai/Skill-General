@@ -196,6 +196,7 @@ exit 0
             $validatorText = $validatorText.Remove($authorityFilesMatch.Index, $authorityFilesMatch.Length).Insert($authorityFilesMatch.Index, $authorityFilesText)
             $validatorPath = Join-Path $fixtureRoot 'Validate.ps1'
             [IO.File]::WriteAllText($validatorPath, $validatorText, [Text.UTF8Encoding]::new($false))
+            Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'scripts/SourceToolRoots.psm1') -Destination (Join-Path $fixtureRoot 'SourceToolRoots.psm1')
 
             $helperMarker = '$semanticPreparationHelperText = @'''
             $helperStart = $validatorText.IndexOf($helperMarker, [StringComparison]::Ordinal)
