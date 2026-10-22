@@ -39,6 +39,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module -Name (Join-Path $PSScriptRoot 'SourceToolRoots.psm1') -Force -ErrorAction Stop
 
 $script:SourceRepository = 'https://github.com/SyuanTsai/Skill-General.git'
 $script:AuthorityRepository = 'https://github.com/SyuanTsai/SyuanTsai-AI-Instructions.git'
@@ -974,8 +975,12 @@ function Read-SourceToolSetup {
         $prepared.authorityRevision -cne $AuthorityRevision -or $prepared.sourceValidation.packageAdapter.command -cne $PowerShell) {
         throw 'Prepared source tools do not bind this candidate, authority and runtime.'
     }
-    $expectedOwned = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($Path))) "source-tools-$($prepared.runId)"
-    if (-not (Test-PathEqual -Left $prepared.ownedRoot -Right $expectedOwned)) { throw 'Prepared source setup owned root differs.' }
+    $expectedOwned = Assert-SourceToolSetupOwnedRoot -Path $prepared.ownedRoot -PreparedPath $Path -RunId $prepared.runId
+    $legacyOwned = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($Path))) "source-tools-$($prepared.runId)"
+    if (-not (Test-PathEqual -Left $expectedOwned -Right $legacyOwned)) {
+        $allocation = Read-SourceToolRootAllocation -Path "$Path.allocation.json" -ExpectedRunId $prepared.runId -ExpectedSourceRevision $SourceRevision
+        if (-not (Test-PathEqual -Left $allocation.ownedRoot -Right $expectedOwned)) { throw 'Prepared source setup differs from the allocated tool root.' }
+    }
     Assert-NoReparseAncestors -Path $expectedOwned -Context 'Prepared source setup owned root'
     $wrapper = Join-Path $expectedOwned 'Invoke-SkillGeneralValidationChild.ps1'
     $wrapperHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($childRunnerText))).ToLowerInvariant()

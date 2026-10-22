@@ -13,7 +13,7 @@ Describe 'Source validation request boundary' {
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -cin @(
                 'Test-LegacyRunRequested', 'Assert-OrdinaryCoreRunRequest', 'Assert-NoReparseAncestors',
                 'Assert-ExactPropertySet', 'Assert-NoDuplicateJsonProperties', 'Read-JsonFile', 'Read-SourceToolSetup',
-                'Test-PathEqual', 'Get-FileSha256'))
+                'Test-PathEqual', 'Get-FileSha256', 'Assert-SourceToolSetupOwnedRoot'))
         } | ForEach-Object { $_.Extent.Text })
         # Shared receipt/frozen-file validation is independently covered by the authority suite.
         # These deterministic doubles observe this adapter's calls while testing its own toolchain mapping.
@@ -23,7 +23,13 @@ $script:ReceiptAssertionCalls = 0
 function Assert-StandardCoreFrozenFiles { param($Files) $script:FrozenAssertionCalls++ }
 function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, $RunId) $script:ReceiptAssertionCalls++ }
 '@
-        $script:SourceRequestModule = New-Module -ScriptBlock ([scriptblock]::Create(($parts -join "`n") + "`n" + $centralAssertions))
+        $rootModulePath=Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/SourceToolRoots.psm1'
+        $rootParts=@()
+        if(Test-Path -LiteralPath $rootModulePath) {
+            $rootAst=[Management.Automation.Language.Parser]::ParseFile($rootModulePath,[ref]$null,[ref]$null)
+            $rootParts=@($rootAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst]}|ForEach-Object {$_.Extent.Text})
+        }
+        $script:SourceRequestModule = New-Module -ScriptBlock ([scriptblock]::Create((($parts+$rootParts) -join "`n") + "`n" + $centralAssertions))
         $script:CorePin = (Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'config/standard-v1.json') -Raw | ConvertFrom-Json).authority
         function Invoke-SourceRequestFixture {
             param([hashtable] $Bound)
@@ -32,9 +38,10 @@ function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, 
             } $script:CorePin $Bound
         }
         function New-PreparedSourceFixture {
+            param([switch]$HostRoot)
             $path = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.json')
             $runId = [guid]::NewGuid().ToString('N')
-            $owned = Join-Path $TestDrive "source-tools-$runId"
+            $owned = if($HostRoot){Join-Path ([IO.Path]::GetTempPath()) "svt-tools-$runId"}else{Join-Path $TestDrive "source-tools-$runId"}
             [void](New-Item -ItemType Directory -Path $owned)
             $wrapper = Join-Path $owned 'Invoke-SkillGeneralValidationChild.ps1'
             [IO.File]::WriteAllText($wrapper, (& $script:SourceRequestModule { $childRunnerText }), [Text.UTF8Encoding]::new($false))
@@ -121,6 +128,57 @@ function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, 
         { & $script:SourceRequestModule { param($path)
             Read-SourceToolSetup -Path $path -SourceRevision ('b' * 40) -AuthorityRevision ('c' * 40) -PowerShell fixture-pwsh
         } (Join-Path $TestDrive 'missing.json') } | Should -Throw
+    }
+
+    # Scenario: the central allocator relocates tool bytes into its exact host-temp run root.
+    # Purpose: accept the helper root while retaining legacy protected-base preparations and rejecting forged roots.
+    It 'UnitT45_binds_prepared_tool_root_to_exact_host_temp_and_run_identity' {
+        $savedTemp=$env:TEMP; $savedTmp=$env:TMP; $savedLocal=$env:LOCALAPPDATA
+        try {
+            $tempBase=Join-Path $TestDrive 'host-temp'
+            $otherBase=Join-Path $TestDrive 'unowned'
+            [void](New-Item -ItemType Directory -Path $tempBase,$otherBase)
+            $env:TEMP=$tempBase; $env:TMP=$tempBase; $env:LOCALAPPDATA=''
+            $runId=[guid]::NewGuid().ToString('N')
+            $preparedPath=Join-Path $TestDrive 'prepared.json'
+            $helperRoot=Join-Path $tempBase "svt-tools-$runId"
+            $legacyRoot=Join-Path $TestDrive "source-tools-$runId"
+            $unownedRoot=Join-Path $otherBase "svt-tools-$runId"
+            [void](New-Item -ItemType Directory -Path $helperRoot,$legacyRoot,$unownedRoot)
+            foreach($accepted in @($helperRoot,$legacyRoot)) {
+                { & $script:SourceRequestModule {param($p,$r,$id) Assert-SourceToolSetupOwnedRoot -Path $r -PreparedPath $p -RunId $id} $preparedPath $accepted $runId } | Should -Not -Throw
+            }
+            foreach($bad in @(
+                @{root=$helperRoot;run=('f'*32)},
+                @{root=$unownedRoot;run=$runId},
+                @{root=(Join-Path $helperRoot 'nested');run=$runId}
+            )) {
+                { & $script:SourceRequestModule {param($p,$r,$id) Assert-SourceToolSetupOwnedRoot -Path $r -PreparedPath $p -RunId $id} $preparedPath $bad.root $bad.run } | Should -Throw
+            }
+            Test-Path -LiteralPath $unownedRoot | Should -BeTrue
+        }
+        finally {$env:TEMP=$savedTemp; $env:TMP=$savedTmp; $env:LOCALAPPDATA=$savedLocal}
+    }
+
+    # Scenario: a relocated prepared dispatch claims a helper allocation without its matching run/candidate sidecar.
+    # Purpose: require actual allocation ownership in addition to the existing frozen tool and dispatch bindings.
+    It 'UnitT47_requires_matching_allocation_for_a_relocated_prepared_dispatch' {
+        $savedTemp=$env:TEMP; $savedTmp=$env:TMP; $savedLocal=$env:LOCALAPPDATA
+        try {
+            $tempBase=Join-Path $TestDrive 'prepared-host-temp'
+            [void](New-Item -ItemType Directory -Path $tempBase)
+            $env:TEMP=$tempBase; $env:TMP=$tempBase; $env:LOCALAPPDATA=''
+            $path=New-PreparedSourceFixture -HostRoot
+            $prepared=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
+            { & $script:SourceRequestModule {param($p) Read-SourceToolSetup -Path $p -SourceRevision ('b'*40) -AuthorityRevision ('c'*40) -PowerShell fixture-pwsh} $path } | Should -Throw
+            $allocation=@{schemaVersion=1;runId=$prepared.runId;sourceRevision=('b'*40);ownedRoot=$prepared.ownedRoot}
+            $allocation|ConvertTo-Json|Set-Content -LiteralPath "$path.allocation.json"
+            { & $script:SourceRequestModule {param($p) Read-SourceToolSetup -Path $p -SourceRevision ('b'*40) -AuthorityRevision ('c'*40) -PowerShell fixture-pwsh} $path } | Should -Not -Throw
+            $allocation.sourceRevision='a'*40
+            $allocation|ConvertTo-Json|Set-Content -LiteralPath "$path.allocation.json"
+            { & $script:SourceRequestModule {param($p) Read-SourceToolSetup -Path $p -SourceRevision ('b'*40) -AuthorityRevision ('c'*40) -PowerShell fixture-pwsh} $path } | Should -Throw
+        }
+        finally {$env:TEMP=$savedTemp; $env:TMP=$savedTmp; $env:LOCALAPPDATA=$savedLocal}
     }
 
     # Scenario: a prepared source record has a different candidate, authority, runtime or run identity.
