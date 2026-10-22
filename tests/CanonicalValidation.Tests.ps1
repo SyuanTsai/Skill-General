@@ -2213,7 +2213,9 @@ function Invoke-StandardValidationProcess {
     return [pscustomobject]@{ status='passed'; exitCode=0; cleanedUp=$true; stderr='' }
 }
 '@
-            $module = New-Module -ScriptBlock ([scriptblock]::Create(($functions + $assignments + $setupDefinition + $fixtureHelpers) -join [Environment]::NewLine))
+            $rootAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/SourceToolRoots.psm1'), [ref]$null, [ref]$null)
+            $rootFunctions = @($rootAst.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] } | ForEach-Object { $_.Extent.Text })
+            $module = New-Module -ScriptBlock ([scriptblock]::Create(($functions + $rootFunctions + $assignments + $setupDefinition + $fixtureHelpers) -join [Environment]::NewLine))
 
             $root = Join-Path $TestDrive 'source-setup-output'
             $candidateRoot = Join-Path $TestDrive 'source-setup-candidate'
@@ -2253,14 +2255,32 @@ function Assert-StandardCoreSourceToolReceipts { param($Bindings, $FrozenFiles, 
                 [IO.File]::WriteAllText($file, 'fixture authority file')
             }
             $preparedPath = Join-Path $TestDrive 'prepared-source-tools.json'
+            $gatePath = Join-Path $authorityRoot 'scripts/Invoke-StandardAuthorityGate.ps1'
+            $gateFixture = @'
+param([switch]$DefineFunctionsOnly)
+function New-AuthorityRunOwnedToolRoot {
+    param([string]$RunId)
+    $root = Join-Path ([IO.Path]::GetTempPath()) "svt-tools-$RunId"
+    [void](New-Item -ItemType Directory -Path $root -ErrorAction Stop)
+    return $root
+}
+'@
+            [IO.File]::WriteAllText($gatePath,$gateFixture)
+            # The entire authority and transport are deterministic fixtures in this source-only test.
+            $selected.files['scripts/Invoke-StandardAuthorityGate.ps1'] = (Get-FileHash -LiteralPath $gatePath).Hash.ToLowerInvariant()
             $powerShell = Join-Path $PSHOME 'pwsh.exe'
-            & $module {
+            $savedTemp = $env:TEMP; $savedTmp = $env:TMP; $savedRun = $env:SOURCE_TOOLS_RUN_ID
+            try {
+                $env:TEMP = $root; $env:TMP = $root; $env:SOURCE_TOOLS_RUN_ID = [guid]::NewGuid().ToString('N')
+                & $module {
                 param($rootPath, $authorityRootPath, $authorityPin, $pwshPath, $sourceRevision, $gitPath, $candidatePath, $preparedPath)
                 if (@($rootPath, $authorityRootPath, $pwshPath, $sourceRevision, $gitPath, $candidatePath, $preparedPath).Where({ [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0) {
                     throw 'A required source setup fixture argument is empty.'
                 }
                 New-SourceToolSetup -Root $rootPath -AuthorityRoot $authorityRootPath -AuthorityPin $authorityPin -PowerShell $pwshPath -CandidateRevision $sourceRevision -Git $gitPath -CandidateRoot $candidatePath -PreparedPath $preparedPath -GoVersion '1.23.4' -LimitSeconds 30
-            } $root $authorityRoot $selected $powerShell $candidateRevision $git $candidateRoot $preparedPath
+                } $root $authorityRoot $selected $powerShell $candidateRevision $git $candidateRoot $preparedPath
+            }
+            finally { $env:TEMP = $savedTemp; $env:TMP = $savedTmp; $env:SOURCE_TOOLS_RUN_ID = $savedRun }
 
             $receipt = Get-Content -LiteralPath $preparedPath -Raw | ConvertFrom-Json -Depth 20
             $receipt.authorityRevision | Should -BeExactly $script:ExpectedPreparedSourceAuthorityCommit
