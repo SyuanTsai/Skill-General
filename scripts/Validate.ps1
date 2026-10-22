@@ -897,11 +897,27 @@ function New-SourceToolSetup {
     param([string] $Root, [string] $AuthorityRoot, $AuthorityPin, [string] $PowerShell,
         [string] $CandidateRevision, [string] $Git, [string] $CandidateRoot,
         [string] $PreparedPath, [string] $GoVersion, [int] $LimitSeconds)
-    $setupId = [guid]::NewGuid().ToString('N')
-    $owned = Assert-PathWithinRoot -Path (Join-Path $Root "source-tools-$setupId") -Root $Root -Context 'Source setup owned root'
-    if (Test-Path -LiteralPath $owned) { throw 'Source setup root already exists.' }
-    [void](New-Item -ItemType Directory -Path $owned -ErrorAction Stop)
-    Assert-NoReparseAncestors -Path $owned -Context 'Source setup owned root'
+    $setupId = [string]$env:SOURCE_TOOLS_RUN_ID
+    if ([string]::IsNullOrEmpty($setupId)) { $setupId = [guid]::NewGuid().ToString('N') }
+    if ($setupId -cnotmatch '^[0-9a-f]{32}$') { throw 'Source setup run identity is invalid.' }
+    $allocationPath = "$PreparedPath.allocation.json"
+    if (Test-Path -LiteralPath $allocationPath) { throw 'Source setup allocation record already exists.' }
+    $gate = Join-Path $AuthorityRoot 'scripts/Invoke-StandardAuthorityGate.ps1'
+    Assert-NoReparseAncestors -Path $gate -Context 'Source setup authority helper'
+    $gateHash = [string]$AuthorityPin.files['scripts/Invoke-StandardAuthorityGate.ps1']
+    if ($gateHash -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileSha256 -Path $gate) -cne $gateHash) {
+        throw 'Source setup authority helper hash differs from its verified pin.'
+    }
+    # Isolate the authority script's parameters from this caller's candidate and metadata bindings.
+    $owned = & {
+        param($GatePath, $RunId)
+        . $GatePath -DefineFunctionsOnly
+        New-AuthorityRunOwnedToolRoot -RunId $RunId
+    } $gate $setupId
+    $owned = Assert-SourceToolSetupOwnedRoot -Path $owned -PreparedPath $PreparedPath -RunId $setupId -HostRootOnly
+    Write-Utf8NoBomCreateNew -Path $allocationPath -Text ([ordered]@{
+        schemaVersion=1;runId=$setupId;sourceRevision=$CandidateRevision;ownedRoot=$owned
+    } | ConvertTo-Json)
     $runner = Join-Path $AuthorityRoot 'scripts/Invoke-StandardValidation.ps1'
     . $runner -DefineFunctionsOnly -CandidateRoot $CandidateRoot -AdapterPath $PreparedPath -ArtifactsRoot $Root `
         -SourceRepository $script:SourceRepository -SourceRevision $CandidateRevision -BaseRevision $CandidateRevision
@@ -912,7 +928,7 @@ function New-SourceToolSetup {
     foreach ($tool in @('skill-validator', 'skill-tools', 'skillspector')) {
         $receiptPath = Join-Path $owned "receipt-$tool.json"
         $result = Invoke-StandardValidationProcess -Command $PowerShell -Arguments @('-NoProfile','-NonInteractive','-File',$resolver,
-            '-PolicyPath',$policy,'-ToolName',$tool,'-Install','-InstallRoot',(Join-Path $owned 'installed'),
+            '-PolicyPath',$policy,'-ToolName',$tool,'-Install','-InstallRoot',$owned,
             '-ExpectedGoRuntimeVersion',$GoVersion,'-RunId',$setupId,'-OutputPath',$receiptPath) `
             -WorkingDirectory $owned -Environment @{} -TimeoutSeconds $LimitSeconds -CoreLifecycleOnly
         Write-Utf8NoBomCreateNew -Path (Join-Path $owned "setup-$tool-process.json") -Text ($result | ConvertTo-Json -Depth 30)
