@@ -706,6 +706,36 @@ jobs:
           if (($expectedModule -join "`n").TrimEnd("`n") -cne $actualModule) { throw 'Protected driver module differs from its immutable base commit.' }
           Import-Module -Name $modulePath -Force -ErrorAction Stop
           $allocation = Read-SourceToolRootAllocation -Path $allocationPath -ExpectedRunId $env:SOURCE_TOOLS_RUN_ID -ExpectedSourceRevision $env:EXPECTED_SOURCE_SHA
+          # Keep one artifact root even when native tools and metadata are on different drives.
+          # Only copy evidence JSON; retain original paths and verify byte identity.
+          $evidenceRoot = Join-Path $env:RUN_OWNED_ROOT 't/source-tools-evidence'
+          if (Test-Path -LiteralPath $evidenceRoot) { throw 'Source tool evidence staging root already exists.' }
+          [void](New-Item -ItemType Directory -Path $evidenceRoot -ErrorAction Stop)
+          $evidenceRootItem = Get-Item -LiteralPath $evidenceRoot -Force -ErrorAction Stop
+          if (-not $evidenceRootItem.PSIsContainer -or ($evidenceRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Source tool evidence staging root must be a regular non-reparse directory.'
+          }
+          $evidenceFiles = @()
+          foreach ($name in @('receipt-skill-validator.json','receipt-skill-tools.json','receipt-skillspector.json',
+              'setup-skill-validator-process.json','setup-skill-tools-process.json','setup-skillspector-process.json','toolchain.json')) {
+            $sourcePath = Join-Path $allocation.ownedRoot $name
+            if (-not (Test-Path -LiteralPath $sourcePath)) { continue }
+            $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop
+            if ($sourceItem.PSIsContainer -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'Source tool evidence must be a regular non-reparse file.'
+            }
+            $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $destination = Join-Path $evidenceRoot $name
+            [IO.File]::Copy($sourcePath,$destination,$false)
+            if ((Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sourceHash -or
+                (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sourceHash) {
+              throw 'Source tool evidence changed while staging.'
+            }
+            $evidenceFiles += [pscustomobject]@{originalPath=$sourcePath;artifactRelativePath="t/source-tools-evidence/$name";sha256=$sourceHash}
+          }
+          $evidenceIndex = [ordered]@{schemaVersion=1;kind='source-tool-evidence-copy';runId=$allocation.runId;
+            sourceRevision=$allocation.sourceRevision;ownedRoot=$allocation.ownedRoot;files=$evidenceFiles}
+          [IO.File]::WriteAllText((Join-Path $evidenceRoot 'evidence-index.json'),($evidenceIndex | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
           "SOURCE_TOOLS_ROOT=$($allocation.ownedRoot)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Preserve raw source validation evidence
@@ -725,12 +755,10 @@ jobs:
             ${{ env.RUN_OWNED_ROOT }}/artifacts/runs/*/repository-pester-case-inventory-v1.json
             ${{ env.RUN_OWNED_ROOT }}/t/source-tools.json
             ${{ env.RUN_OWNED_ROOT }}/t/source-tools.json.allocation.json
+            ${{ env.RUN_OWNED_ROOT }}/t/source-tools-evidence/evidence-index.json
             ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/receipt-*.json
             ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/setup-*-process.json
             ${{ env.RUN_OWNED_ROOT }}/t/source-tools-*/toolchain.json
-            ${{ env.SOURCE_TOOLS_ROOT }}/receipt-*.json
-            ${{ env.SOURCE_TOOLS_ROOT }}/setup-*-process.json
-            ${{ env.SOURCE_TOOLS_ROOT }}/toolchain.json
             ${{ env.RUN_OWNED_ROOT }}/pester-setup/setup-receipt.json
 
       - name: Publish protected validation result
