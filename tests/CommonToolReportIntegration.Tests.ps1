@@ -5,17 +5,21 @@
 . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
 
 Describe 'General Static native failure propagation' {
-    # Scenario: SkillSpector exits nonzero while a plausible previous JSON report already exists.
+    # Scenario: SkillSpector exits nonzero after emitting plausible JSON.
     # Purpose: the actual Static dispatch must reject native failure before reading PASS bytes (V3).
-    It 'InterT10_rejects_nonzero_Static_exit_before_reading_an_existing_report' {
+    It 'InterT10_rejects_nonzero_Static_exit_before_reading_stdout_report' {
         $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
         $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
         if (-not $child.Success) { throw 'General child runner source was not found.' }
         $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
         if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $scanner = Join-Path $TestDrive 'scanner.ps1'
-        [IO.File]::WriteAllText($scanner, '$global:LASTEXITCODE = 7')
-        [IO.File]::WriteAllText((Join-Path $TestDrive 'skillspector-demo.json'), '{"decision":"PASS"}')
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $caseRoot)
+        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
+        [IO.File]::WriteAllText($scannerScript, '[Console]::Error.WriteLine(''fixture stderr''); Write-Output ''{"decision":"PASS"}''; exit 7')
+        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
+        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
         $fixture = New-Module -ScriptBlock {
             function Assert-FileIdentity { param($Path, $Sha256, $Context) }
             function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
@@ -25,14 +29,87 @@ Describe 'General Static native failure propagation' {
             function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
             function New-Envelope { param($ActiveSkills, $Findings, $Additional) throw 'Static dispatch published PASS after native failure.' }
         }
-        Push-Location $TestDrive
+        Push-Location $caseRoot
         try {
             { & $fixture { param($body, $path, $root)
                 $script:FixtureRoot = $root
                 $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
                 $activeSkills = @('demo'); $SemanticRequired = 'false'
                 & ([scriptblock]::Create($body))
-            } $dispatch.Groups['body'].Value $scanner $TestDrive } | Should -Throw -ExpectedMessage '*returned exit code 7*'
+            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot } | Should -Throw -ExpectedMessage '*returned exit code 7*fixture stderr*'
+        }
+        finally { Pop-Location }
+    }
+
+    # Scenario: SkillSpector v2.13.3 emits its JSON report only to stdout.
+    # Purpose: preserve a new, complete report and record the actual no--output invocation (V3).
+    It 'InterT20_redirects_SkillSpector_stdout_to_a_new_report_without_output_argument' {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
+        if (-not $child.Success) { throw 'General child runner source was not found.' }
+        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
+        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $caseRoot)
+        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
+        [IO.File]::WriteAllText($scannerScript, 'Write-Output ''{"decision":"PASS"}''; exit 0')
+        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
+        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
+        $fixture = New-Module -ScriptBlock {
+            $script:Reports = @()
+            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
+            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
+            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
+            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) $script:Reports += [pscustomobject]@{ arguments = @($Arguments); path = $Path; exitCode = $ExitCode } }
+            function Read-Json { param($Path, $Context) return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
+            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
+            function New-Envelope { param($ActiveSkills, $Findings, $Additional) return }
+        }
+        Push-Location $caseRoot
+        try {
+            $reports = @(& $fixture { param($body, $path, $root)
+                $script:FixtureRoot = $root
+                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
+                $activeSkills = @('demo'); $SemanticRequired = 'false'
+                & ([scriptblock]::Create($body))
+                return $script:Reports
+            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot)
+            $reports.Count | Should -Be 1
+            $reports[0].exitCode | Should -Be 0
+            @($reports[0].arguments) | Should -Not -Contain '--output'
+            $reports[0].path | Should -Be (Join-Path $caseRoot 'skillspector-demo.json')
+            $reportPath = Join-Path $caseRoot 'skillspector-demo.json'
+            Test-Path -LiteralPath $reportPath -PathType Leaf | Should -BeTrue
+            (Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json).decision | Should -Be 'PASS'
+        }
+        finally { Pop-Location }
+    }
+
+    # Scenario: a report from an earlier attempt occupies the deterministic stdout path.
+    # Purpose: never overwrite prior evidence when creating a stdout report (V3).
+    It 'InterT30_rejects_an_existing_Static_stdout_report_path' {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
+        if (-not $child.Success) { throw 'General child runner source was not found.' }
+        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
+        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $caseRoot)
+        [IO.File]::WriteAllText((Join-Path $caseRoot 'skillspector-demo.json'), '{"decision":"PASS"}')
+        $fixture = New-Module -ScriptBlock {
+            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
+            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
+            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
+        }
+        Push-Location $caseRoot
+        try {
+            { & $fixture { param($body, $root)
+                $script:FixtureRoot = $root
+                $toolchain = @{ skillSpectorPath = 'not-invoked'; skillSpectorSha256 = ('a' * 64) }
+                $activeSkills = @('demo'); $SemanticRequired = 'false'
+                & ([scriptblock]::Create($body))
+            } $dispatch.Groups['body'].Value $caseRoot } | Should -Throw -ExpectedMessage '*report path already exists*'
         }
         finally { Pop-Location }
     }
