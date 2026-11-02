@@ -1542,13 +1542,27 @@ try {
                 $skillRoot = Get-SkillRoot -SkillId $skillId
                 $inventory = Get-InventoryPaths -SkillRoot $skillRoot
                 $reportPath = Join-Path (Get-Location) ("skillspector-$skillId.json")
-                $nativeArguments = @('scan', $skillRoot, '--no-llm', '--format', 'json', '--output', $reportPath)
-                & ([string]$toolchain.skillSpectorPath) @nativeArguments | Out-Null
-                $nativeExit = $LASTEXITCODE
-                if (Test-Path -LiteralPath $reportPath -PathType Leaf) { Add-NativeReport -Command ([string]$toolchain.skillSpectorPath) -Arguments $nativeArguments -ExitCode $nativeExit -Path $reportPath -SkillId $skillId }
-                if ($nativeExit -ne 0) { throw "SkillSpector scan for '$skillId' returned exit code $nativeExit." }
-                $report = Read-Json -Path $reportPath -Context "SkillSpector report for '$skillId'"
-                $findings += Assert-SkillSpectorReport -Report $report -SkillRoot $skillRoot -SkillId $skillId -Inventory $inventory
+                if (Test-Path -LiteralPath $reportPath) { throw "SkillSpector report path already exists for '$skillId'." }
+                $staticStderrPath = Join-Path (Get-Location) (([guid]::NewGuid().ToString('N')) + '.stderr')
+                $nativeArguments = @('scan', $skillRoot, '--no-llm', '--format', 'json')
+                try {
+                    & ([string]$toolchain.skillSpectorPath) @nativeArguments 1> $reportPath 2> $staticStderrPath
+                    $nativeExit = $LASTEXITCODE
+                    if (Test-Path -LiteralPath $reportPath -PathType Leaf) { Add-NativeReport -Command ([string]$toolchain.skillSpectorPath) -Arguments $nativeArguments -ExitCode $nativeExit -Path $reportPath -SkillId $skillId }
+                    $staticStderr = if (Test-Path -LiteralPath $staticStderrPath) { Get-Content -LiteralPath $staticStderrPath -Raw } else { '' }
+                    if ($staticStderr.Length -gt 4096) { $staticStderr = $staticStderr.Substring(0, 4096) + '[truncated]' }
+                    if ($nativeExit -ne 0) { throw "SkillSpector scan for '$skillId' returned exit code $nativeExit. $staticStderr" }
+                    try {
+                        $report = Read-Json -Path $reportPath -Context "SkillSpector report for '$skillId'"
+                    }
+                    catch {
+                        throw "SkillSpector report for '$skillId' is not valid JSON. $($_.Exception.Message) $staticStderr"
+                    }
+                    $findings += Assert-SkillSpectorReport -Report $report -SkillRoot $skillRoot -SkillId $skillId -Inventory $inventory
+                }
+                finally {
+                    if (Test-Path -LiteralPath $staticStderrPath) { Remove-Item -LiteralPath $staticStderrPath -Force -ErrorAction SilentlyContinue }
+                }
             }
             $semantic = ($SemanticRequired -ceq 'true') -or $findings.Count -gt 0
             New-Envelope -ActiveSkills $activeSkills -Findings $findings -Additional @{ scannerIdentity = 'SkillSpector'; analyzerCompleteness = 'complete'; semanticRequired = $semantic }

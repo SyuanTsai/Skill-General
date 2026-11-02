@@ -182,7 +182,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $IsWindows) { throw 'Validation requires Windows.' }
-          $ownedRoot = Join-Path $env:RUNNER_TEMP "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $ownedRoot = Join-Path $env:RUNNER_TEMP "sg-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           if (Test-Path -LiteralPath $ownedRoot) { throw 'Run-owned directory already exists.' }
           New-Item -ItemType Directory -Path $ownedRoot -ErrorAction Stop | Out-Null
           "RUN_OWNED_ROOT=$ownedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -529,7 +529,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
           $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
-          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "sg-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
           if (-not $ownedRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Case inventory preservation root differs from this run registered ownership path.'
           }
@@ -778,7 +778,7 @@ jobs:
             return
           }
           $tempRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
-          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "skill-general-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+          $expectedRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot "sg-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
           $ownedRoot = [IO.Path]::GetFullPath($env:RUN_OWNED_ROOT)
           if (-not [string]::Equals($ownedRoot, $expectedRoot, [StringComparison]::OrdinalIgnoreCase) -or
               -not $ownedRoot.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

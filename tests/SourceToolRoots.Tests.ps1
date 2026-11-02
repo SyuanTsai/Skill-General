@@ -21,7 +21,7 @@ Describe 'Source tool root workflow ownership' {
             $case=Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             $temp=Join-Path $case 'temp'; $runner=Join-Path $case 'runner'; $workspace=Join-Path $case 'workspace'
             $runId=[guid]::NewGuid().ToString('N')
-            $owned=Join-Path $runner 'skill-general-123-1'
+            $owned=Join-Path $runner 'sg-123-1'
             $tools=Join-Path $temp "svt-tools-$runId"
             $other=Join-Path $temp ('svt-tools-'+('e'*32))
             [void](New-Item -ItemType Directory -Path (Join-Path $owned 't'),$tools,$other,(Join-Path $workspace 'driver/scripts') -Force)
