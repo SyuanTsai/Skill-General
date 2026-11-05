@@ -1,0 +1,4 @@
+Temporary Codex review trigger probe.
+This test-only file contains no executable code.
+Stage: draft creation.
+This pull request will be closed without merging, and its branch deleted.
