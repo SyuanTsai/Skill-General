@@ -4,6 +4,56 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Skill-General
 
+## Overview
+
+**What it is:** general-purpose Agent Skills for everyday backend engineering with AI coding agents. Which Skills each agent receives is defined centrally in [SyuanTsai-AI-Instructions](https://github.com/SyuanTsai/SyuanTsai-AI-Instructions).
+
+**Problem it solves:** turning recurring investigation and verification work into repeatable, reviewable workflows in which any write requires explicit authorization and credentials are never exposed.
+
+**Key Skills**
+
+| Skill | What it helps with |
+| --- | --- |
+| `investigate-datadog-logs` | Investigate Datadog error logs and APM traces through a configured connector, including correlated patterns and trends |
+| `verify-data-access-performance` | Analyze and test query efficiency with repeated measurements, query counts and N+1 checks |
+| `plan-production-change` | Create evidence-based implementation plans sized to risk, with TDD sequencing, rollout and rollback when required |
+| `operate-environment-authorized-sql` | Prepare controlled Azure SQL requests (check results, analyze evidence, or update/delete explicitly requested scoped data) through a registered, environment-authorized CLI |
+| `manage-task-handoff` | Create interruption-safe handoff records from caller-supplied task data; persistence depends on the adopter's configured storage |
+| `manage-ai-memory` | Find, create, update and recall AI memory through the adopter's connected record and file targets |
+| `review-agent-skills` | Review Agent Skill packages for routing, instruction quality, safety boundaries, testability and maintainability |
+
+All Skills run on a Windows host.
+
+**In practice:** an AI-assisted Datadog log and APM workflow built on these Skills has cut my production issue investigation time by at least half.
+
+Installed and version-pinned through [SyuanTsai-AI-Instructions](https://github.com/SyuanTsai/SyuanTsai-AI-Instructions).
+
+## 概覽
+
+**這是什麼：** 搭配 AI 程式開發代理使用的日常後端工程通用 Agent Skills；各 Agent 可使用哪些 Skills，統一由 [SyuanTsai-AI-Instructions](https://github.com/SyuanTsai/SyuanTsai-AI-Instructions) 定義。
+
+**解決什麼問題：** 把反覆出現的調查與驗證工作，整理成可重複、可審查的工作流程；任何寫入都需要明確授權，且不外露憑證。
+
+**主要 Skills**
+
+| Skill | 用途 |
+| --- | --- |
+| `investigate-datadog-logs` | 透過已設定的 Connector 調查 Datadog 錯誤日誌與 APM Trace，包含關聯模式與趨勢 |
+| `verify-data-access-performance` | 以重複量測、查詢次數與 N+1 檢查，分析並測試查詢效率 |
+| `plan-production-change` | 依證據撰寫與風險相稱的實作計畫，需要時包含 TDD 順序、上線與回滾 |
+| `operate-environment-authorized-sql` | 透過已登錄、經環境授權的 CLI，準備受控的 Azure SQL 請求（檢查結果、分析證據，或更新／刪除明確指定範圍的資料） |
+| `manage-task-handoff` | 依呼叫端提供的任務資料建立可中斷恢復的交接紀錄；是否持久保存取決於採用端設定的儲存位置 |
+| `manage-ai-memory` | 透過採用端連接的紀錄與檔案目標，查詢、建立、更新與回想 AI 記憶 |
+| `review-agent-skills` | 審查 Agent Skill 套件的路由、指令品質、安全邊界、可測試性與可維護性 |
+
+所有 Skills 都在 Windows 主機上執行。
+
+**實際效果：** 以這些 Skills 建立的 AI 輔助 Datadog 日誌與 APM 調查流程，讓我調查正式環境問題的時間至少減少一半。
+
+透過 [SyuanTsai-AI-Instructions](https://github.com/SyuanTsai/SyuanTsai-AI-Instructions) 安裝並鎖定版本。
+
+---
+
 General-purpose Agent Skills source repository and the first reference implementation of Agent Skill Repository Standard v1.
 
 Stable source ID: `general`
