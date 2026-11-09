@@ -1611,7 +1611,11 @@ try {
                     & ([string]$toolchain.skillSpectorPath) @nativeArguments 1> $reportPath 2> $staticStderrPath
                     $nativeExit = $LASTEXITCODE
                     if (Test-Path -LiteralPath $reportPath -PathType Leaf) { Add-NativeReport -Command ([string]$toolchain.skillSpectorPath) -Arguments $nativeArguments -ExitCode $nativeExit -Path $reportPath -SkillId $skillId }
-                    $staticStderr = if (Test-Path -LiteralPath $staticStderrPath) { Get-Content -LiteralPath $staticStderrPath -Raw } else { '' }
+                    $staticStderr = ''
+                    if (Test-Path -LiteralPath $staticStderrPath) {
+                        $staticStderrContent = Get-Content -LiteralPath $staticStderrPath -Raw
+                        if ($null -ne $staticStderrContent) { $staticStderr = [string]$staticStderrContent }
+                    }
                     if ($staticStderr.Length -gt 4096) { $staticStderr = $staticStderr.Substring(0, 4096) + '[truncated]' }
                     if ($nativeExit -ne 0) { throw "SkillSpector scan for '$skillId' returned exit code $nativeExit. $staticStderr" }
                     try {
