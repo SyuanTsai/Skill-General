@@ -31,6 +31,17 @@ Describe 'Legacy sanitized child authority transport' {
         $snapshotRoot = Join-Path $tempRoot ('syp154-authority-' + [string]$pin.commit)
         $helperPath = Join-Path $testRoot 'run-common-tool-pester6.ps1'
         $process = $null
+        $getRepositoryFileInventory = {
+            param([Parameter(Mandatory)][string] $Root)
+            @(
+                Get-ChildItem -LiteralPath $Root -File -Recurse -Force |
+                    ForEach-Object {
+                        $relativePath = [IO.Path]::GetRelativePath($Root, $_.FullName)
+                        '{0}`t{1}`t{2}' -f $relativePath, $_.Length, (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                    } |
+                    Sort-Object
+            )
+        }
         try {
             & $gitPath -c $safeSource -c core.longpaths=true clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated local authority transport fixture.' }
@@ -101,7 +112,7 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
             $startInfo.CreateNoWindow = $true
             $startInfo.RedirectStandardOutput = $true
             $startInfo.RedirectStandardError = $true
-            $startInfo.WorkingDirectory = $repositoryRoot
+            $startInfo.WorkingDirectory = $testRoot
             $startInfo.ArgumentList.Add('-NoLogo')
             $startInfo.ArgumentList.Add('-NoProfile')
             $startInfo.ArgumentList.Add('-NonInteractive')
@@ -117,7 +128,7 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $startInfo.Environment[$name] = $value }
             }
             $startInfo.Environment['PATH'] = "$PSHOME;$([IO.Path]::GetDirectoryName($gitPath))"
-            $startInfo.Environment['PATHEXT'] = '.EXE'
+            $startInfo.Environment['PATHEXT'] = '.EXE;.CMD'
             $startInfo.Environment['TEMP'] = $tempRoot
             $startInfo.Environment['TMP'] = $tempRoot
             $startInfo.Environment['PSModulePath'] = $moduleSearchRoot
@@ -131,12 +142,16 @@ if ($summary.total -le 0 -or $summary.failed -ne 0 -or ($summary.passed + $summa
 
             $process = [Diagnostics.Process]::new()
             $process.StartInfo = $startInfo
+            $repositoryFilesBefore = @(& $getRepositoryFileInventory $repositoryRoot)
             if (-not $process.Start()) { throw 'Could not start the sanitized Pester 6 validation child.' }
             $stdoutTask = $process.StandardOutput.ReadToEndAsync()
             $stderrTask = $process.StandardError.ReadToEndAsync()
             $process.WaitForExit()
             $stdout = $stdoutTask.GetAwaiter().GetResult()
             $stderr = $stderrTask.GetAwaiter().GetResult()
+            $repositoryFilesAfter = @(& $getRepositoryFileInventory $repositoryRoot)
+            $repositoryChanges = @(Compare-Object -ReferenceObject $repositoryFilesBefore -DifferenceObject $repositoryFilesAfter)
+            $repositoryChanges | Should -BeNullOrEmpty -Because ('the sanitized child must not add, remove, or modify candidate files: ' + ($repositoryChanges -join '; '))
             $process.ExitCode | Should -Be 0 -Because ("child stdout: {0}; child stderr: {1}" -f $stdout, $stderr)
             $summaryLine = @($stdout -split '\r?\n' | Where-Object { $_ -match '^SYP154_TRANSPORT:' })
             $summaryLine.Count | Should -Be 1
