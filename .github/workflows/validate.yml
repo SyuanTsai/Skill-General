@@ -62,9 +62,10 @@ jobs:
           $sourceAuthority = 'd54ef2cc83a19fa58f62fdcc6fa290095355d03e'
           $preparedSourceAuthority = 'ff85d5f80fe795b96354e753074b5ce59ad04ecd'
           $scopedSourceAuthority = '8e627baf54bd6e47862e6291b25e71cc45a2f2b7'
-          $coreAuthorities = @('ea1d368ac7b36f838ce4c3af363972c90fa12930', '053b80143b5ef48b06a8c448d5ac1abaf9a49df8', $sourceAuthority, $preparedSourceAuthority, $scopedSourceAuthority)
+          $approvedSourceAuthority = 'ead467c3488c103546f316d137196b447a1ff58a'
+          $coreAuthorities = @('ea1d368ac7b36f838ce4c3af363972c90fa12930', '053b80143b5ef48b06a8c448d5ac1abaf9a49df8', $sourceAuthority, $preparedSourceAuthority, $scopedSourceAuthority, $approvedSourceAuthority)
           $candidateSourceAuthority = [string]$candidatePin.authority.commit
-          if ($candidateSourceAuthority -cnotin @($sourceAuthority, $preparedSourceAuthority, $scopedSourceAuthority)) {
+          if ($candidateSourceAuthority -cnotin @($sourceAuthority, $preparedSourceAuthority, $scopedSourceAuthority, $approvedSourceAuthority)) {
             throw 'Source validation cannot accept a Core-only candidate authority.'
           }
           $driverAuthority = [string]$pin.authority.commit
@@ -83,10 +84,17 @@ jobs:
           $scopedSourceIsValid = ($scopedSourceDefinitions.Count -eq 0 -and -not $scopedSourceRequired) -or
               ($scopedSourceDefinitions.Count -eq 1 -and $scopedSourcePins.Count -eq 1 -and
                   $scopedSourcePins[0].Groups['sha'].Value -ceq $scopedSourceAuthority)
+          $approvedSourceDefinitions = [regex]::Matches($driverText, '(?m)^[ \t]*\$script:ApprovedSourceAuthorityCommit\b[^\r\n]*\r?$')
+          $approvedSourcePins = [regex]::Matches($driverText, '(?m)^\$script:ApprovedSourceAuthorityCommit = ''(?<sha>[0-9a-f]{40})''\r?$')
+          $approvedSourceRequired = $candidateSourceAuthority -ceq $approvedSourceAuthority -or $driverAuthority -ceq $approvedSourceAuthority
+          $approvedSourceIsValid = ($approvedSourceDefinitions.Count -eq 0 -and -not $approvedSourceRequired) -or
+              ($approvedSourceDefinitions.Count -eq 1 -and $approvedSourcePins.Count -eq 1 -and
+                  $approvedSourcePins[0].Groups['sha'].Value -ceq $approvedSourceAuthority)
           if ($driverAuthority -cnotin $coreAuthorities -or $sourceDefinitions.Count -ne 1 -or $sourcePins.Count -ne 1 -or
               $sourcePins[0].Groups['sha'].Value -cne $sourceAuthority -or
               -not $preparedSourceIsValid -or
               -not $scopedSourceIsValid -or
+              -not $approvedSourceIsValid -or
               -not (Test-Path -LiteralPath (Join-Path $driver ('scripts/Invoke-Core' + 'Pester.ps1')) -PathType Leaf)) {
             throw 'The exact protected driver is not prepared for the approved source authority.'
           }
