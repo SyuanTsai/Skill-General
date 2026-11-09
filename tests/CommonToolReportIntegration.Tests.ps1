@@ -86,6 +86,103 @@ Describe 'General Static native failure propagation' {
         finally { Pop-Location }
     }
 
+    # Scenario: SkillSpector succeeds with a complete report and an empty stderr file.
+    # Purpose: StrictMode must treat empty native stderr as an empty string and accept the report.
+    It 'InterT25_accepts_a_complete_Static_report_when_stderr_is_empty' {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
+        if (-not $child.Success) { throw 'General child runner source was not found.' }
+        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
+        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $caseRoot)
+        $reportJson = [ordered]@{
+            execution_successful = $true
+            analysis_completeness = [ordered]@{ execution_successful = $true; is_complete = $true; status = 'complete'; coverage_percent = 100; ledger_exceptions = @(); scope_exclusions = @(); limitations = @() }
+            skill = [ordered]@{ name = 'demo'; source = $caseRoot }
+            components = @([ordered]@{ path = 'SKILL.md' })
+            issues = @()
+        } | ConvertTo-Json -Depth 10 -Compress
+        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
+        [IO.File]::WriteAllText($scannerScript, "Write-Output '$($reportJson.Replace("'", "''"))'; exit 0")
+        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
+        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
+        $fixture = New-Module -ScriptBlock {
+            Set-StrictMode -Version Latest
+            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
+            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
+            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
+            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
+            function Read-Json { param($Path, $Context) return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
+            function Assert-SkillSpectorReport {
+                param($Report, $SkillRoot, $SkillId, $Inventory)
+                if (-not $Report.execution_successful -or -not $Report.analysis_completeness.is_complete -or $Report.analysis_completeness.status -cne 'complete' -or $Report.analysis_completeness.coverage_percent -ne 100) {
+                    throw 'Fixture did not receive a complete SkillSpector report.'
+                }
+                return @()
+            }
+            function New-Envelope { param($ActiveSkills, $Findings, $Additional) return [pscustomobject]@{ decision = 'PASS'; analyzerCompleteness = $Additional.analyzerCompleteness } }
+        }
+        Push-Location $caseRoot
+        try {
+            $envelope = & $fixture { param($body, $path, $root)
+                $script:FixtureRoot = $root
+                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
+                $activeSkills = @('demo'); $SemanticRequired = 'false'
+                & ([scriptblock]::Create($body))
+            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot
+            $envelope.decision | Should -Be 'PASS'
+            $envelope.analyzerCompleteness | Should -Be 'complete'
+        }
+        finally { Pop-Location }
+    }
+
+    # Scenario: SkillSpector exits nonzero with stderr longer than the protected bound.
+    # Purpose: preserve the native failure text while proving it remains truncated to 4096 characters.
+    It 'InterT27_keeps_truncated_stderr_in_the_nonzero_Static_exit_error' {
+        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
+        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
+        if (-not $child.Success) { throw 'General child runner source was not found.' }
+        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
+        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $caseRoot)
+        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
+        [IO.File]::WriteAllText($scannerScript, '[Console]::Error.Write((''x'' * 4200) + ''tail-marker''); Write-Output ''{"decision":"PASS"}''; exit 7')
+        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
+        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
+        $fixture = New-Module -ScriptBlock {
+            Set-StrictMode -Version Latest
+            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
+            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
+            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
+            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
+            function Read-Json { param($Path, $Context) throw 'Static dispatch read stale report after native failure.' }
+            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
+            function New-Envelope { param($ActiveSkills, $Findings, $Additional) throw 'Static dispatch published PASS after native failure.' }
+        }
+        Push-Location $caseRoot
+        try {
+            $failure = $null
+            try {
+                & $fixture { param($body, $path, $root)
+                    $script:FixtureRoot = $root
+                    $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
+                    $activeSkills = @('demo'); $SemanticRequired = 'false'
+                    & ([scriptblock]::Create($body))
+                } $dispatch.Groups['body'].Value $scannerCommand $caseRoot
+            }
+            catch { $failure = $_ }
+            $null -ne $failure | Should -BeTrue
+            $failure.Exception.Message | Should -Match 'returned exit code 7'
+            $failure.Exception.Message | Should -Match ('x' * 4096 + '\[truncated\]')
+            $failure.Exception.Message | Should -Not -Match 'tail-marker'
+        }
+        finally { Pop-Location }
+    }
+
     # Scenario: a report from an earlier attempt occupies the deterministic stdout path.
     # Purpose: never overwrite prior evidence when creating a stdout report (V3).
     It 'InterT30_rejects_an_existing_Static_stdout_report_path' {
