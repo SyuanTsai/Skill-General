@@ -844,6 +844,12 @@ function Test-CoreRunSelected {
             $verifier = New-AuthorityVerifierModule
             $expectedFiles = (& $verifier { Get-ApprovedSourceAuthorityPin -Commit '8e627baf54bd6e47862e6291b25e71cc45a2f2b7' }).files
         }
+        elseif ($adapter.authority.commit -ceq 'ead467c3488c103546f316d137196b447a1ff58a') {
+            $expectedCommit = 'ead467c3488c103546f316d137196b447a1ff58a'
+            $expectedArchiveSha256 = 'ab304bc6caabe4bb9b605f403c852650e19e25f72999010db61bbad695e1c60b'
+            $verifier = New-AuthorityVerifierModule
+            $expectedFiles = (& $verifier { Get-ApprovedSourceAuthorityPin -Commit 'ead467c3488c103546f316d137196b447a1ff58a' }).files
+        }
         elseif ($adapter.authority.commit -ceq $script:ExpectedPreparedSourceAuthorityCommit) {
             $expectedCommit = $script:ExpectedPreparedSourceAuthorityCommit
             $expectedArchiveSha256 = $script:ExpectedPreparedSourceAuthorityArchiveSha256
@@ -1147,8 +1153,8 @@ function Test-CoreRunSelected {
         $wrapper | Should -Match '\(\$passed \+ \$skipped\) -ne \$total'
     }
 
-    # Scenario: A real wrapper child receives its own consumed bootstrap signal and a failed discovery container.
-    # Purpose: Keep discovery failure observable after transport cleanup rather than failing on parent metadata.
+    # Scenario: A real wrapper child uses the current Core launch contract and receives a failed discovery container.
+    # Purpose: Keep discovery failure observable without relying on obsolete bootstrap transport metadata.
     It 'InterT35_rejects_a_Pester_discovery_failure_even_when_its_other_test_passes' {
         $fixtureRoot = Join-Path $TestDrive 'core-pester-discovery-failure'
         $driverRunId = [guid]::NewGuid().ToString('N')
@@ -1169,12 +1175,6 @@ function Test-CoreRunSelected {
         $diagnostics = Join-Path $fixtureRoot 'diagnostics.err'
         $oldRunId = $env:STANDARD_VALIDATION_CORE_RUN_ID
         $oldCheckId = $env:STANDARD_VALIDATION_CORE_CHECK_ID
-        $oldReleasePath = $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH
-        $oldBootstrapCommand = $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND
-        $releasePath = Join-Path $candidateRoot ("b-{0}.sig" -f [guid]::NewGuid().ToString('N'))
-        [IO.File]::WriteAllText($releasePath, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-        $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH = $releasePath
-        $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND = $pwsh
         $env:STANDARD_VALIDATION_CORE_RUN_ID = $coreRunId
         $env:STANDARD_VALIDATION_CORE_CHECK_ID = 'repository-pester'
         Push-Location $candidateRoot
@@ -1187,8 +1187,6 @@ function Test-CoreRunSelected {
             $env:PSModulePath = $oldPath
             $env:STANDARD_VALIDATION_CORE_RUN_ID = $oldRunId
             $env:STANDARD_VALIDATION_CORE_CHECK_ID = $oldCheckId
-            $env:STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH = $oldReleasePath
-            $env:STANDARD_VALIDATION_BOOTSTRAP_COMMAND = $oldBootstrapCommand
         }
         $exitCode | Should -Be 1
         $output.Count | Should -Be 0 -Because 'a rejected discovery run must not emit a success-shaped machine report'
@@ -1552,6 +1550,9 @@ function Test-CoreRunSelected {
         $script:Workflow | Should -Match '''-PrepareSourceTools'', ''-SourceToolsPath'', \$preparedPath'
         $script:Workflow | Should -Match '''-SourceValidation'', ''-SourceToolsPath'', \$env:SOURCE_TOOLS_PATH'
         $script:Workflow | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
+        $script:Workflow | Should -Match 'Join-Path \$env:GITHUB_WORKSPACE ''authority/docs/standards/validation-security-gate\.json'''
+        $script:Workflow | Should -Match 'Where-Object \{ \[string\]\$_\.id -ceq ''skillspector-static'' \}'
+        $script:Workflow | Should -Match '(?s)Assert-StandardCoreSourceCheckReport -Report \$SourceReport.*?-ValidationSecurityPolicy \$skillSpectorStages\[0\]\.platformUnavailableException\)'
         $setup = $script:Workflow.IndexOf('Explicitly acquire and freeze source tools', [StringComparison]::Ordinal)
         $run = $script:Workflow.IndexOf('Validate exact candidate with the verified runtime', [StringComparison]::Ordinal)
         $gate = $script:Workflow.IndexOf('Assert-StandardCoreSourceCheckReport -Report $SourceReport', [StringComparison]::Ordinal)
@@ -1749,6 +1750,10 @@ function Test-CoreRunSelected {
         $validateStep.Groups['body'].Value | Should -Match '\$Report\.authority\.revision\s+-cne\s+\$ExpectedAuthorityRevision'
         $validateStep.Groups['body'].Value | Should -Match 'Assert-CoreSourceCheckReport .*?-ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION'
         $validateStep.Groups['body'].Value | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
+        $validateStep.Groups['body'].Value | Should -Match 'Join-Path \$env:GITHUB_WORKSPACE ''authority/docs/standards/validation-security-gate\.json'''
+        $validateStep.Groups['body'].Value | Should -Match 'Where-Object \{ \[string\]\$_\.id -ceq ''skillspector-static'' \}'
+        $validateStep.Groups['body'].Value | Should -Match '\$skillSpectorStages\.Count -ne 1 -or \$null -eq \$skillSpectorStages\[0\]\.platformUnavailableException'
+        $validateStep.Groups['body'].Value | Should -Match '(?s)Assert-StandardCoreSourceCheckReport -Report \$SourceReport.*?-ValidationSecurityPolicy \$skillSpectorStages\[0\]\.platformUnavailableException\)'
         $validateStep.Groups['body'].Value | Should -Not -Match '\$report\.authority\.revision\s+-cne\s+''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
     }
 

@@ -9,6 +9,14 @@ BeforeAll {
     $script:loadedPester = @(Get-Module -Name Pester | Where-Object { $_.Version -eq [version]'6.2.0' }) | Select-Object -First 1
     if ($null -eq $script:loadedPester) { throw 'Integrity tests require the explicitly prepared Pester 6.2.0 test host.' }
 
+    function Assert-TestThrowsLike {
+        param([scriptblock] $ScriptBlock, [string] $Pattern)
+        $caught = $null
+        try { & $ScriptBlock } catch { $caught = $_ }
+        $caught | Should -Not -BeNullOrEmpty
+        ([string]$caught.Exception.Message) | Should -BeLike $Pattern
+    }
+
     function New-IntegrityPackageFixture {
         param([Parameter(Mandatory)][string] $Path, [string] $Variant = 'valid')
 
@@ -57,67 +65,61 @@ BeforeAll {
     }
 }
 
-Describe 'Consumed Core process bootstrap signal' {
-    # Scenario: The owned bootstrap has released the child before its snapshot is bound.
-    # Purpose: Remove only the exact consumed transport file while hashing every source byte.
-    It 'UnitT10_restores_the_full_source_snapshot_and_preserves_other_signal_like_files' {
-        $root = Join-Path $TestDrive 'source-candidate'
-        [void](New-Item -ItemType Directory -Path $root)
-        $source = Join-Path $root 'b-11111111111111111111111111111111.sig'
-        [IO.File]::WriteAllText($source, 'tracked source bytes')
-        $before = Get-CorePesterTreeSnapshot -Root $root
-        $signal = Join-Path $root 'b-22222222222222222222222222222222.sig'
-        [IO.File]::WriteAllText($signal, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-        (Get-CorePesterTreeSnapshot -Root $root).Sha256 | Should -Not -Be $before.Sha256
-        Remove-CorePesterConsumedBootstrapSignal -CandidateRoot $root -ReleasePath $signal -BootstrapCommand 'C:/verified/pwsh.exe' -VerifiedPowerShellExecutable 'C:/verified/pwsh.exe'
-        Test-Path -LiteralPath $signal | Should -BeFalse
-        (Get-CorePesterTreeSnapshot -Root $root).Sha256 | Should -Be $before.Sha256
-        [IO.File]::ReadAllText($source) | Should -Be 'tracked source bytes'
-    }
-
-    # Scenario: Bootstrap metadata selects a foreign path, name, payload or command.
-    # Purpose: Fail closed without deleting any file rather than excluding it from integrity checks.
-    It 'UnitT20_rejects_invalid_bootstrap_metadata_<Variant>' -ForEach @(
-        @{ Variant = 'outside' }, @{ Variant = 'name' }, @{ Variant = 'bytes' },
-        @{ Variant = 'command' }, @{ Variant = 'missing' }, @{ Variant = 'directory' }
+Describe 'Legacy Core process bootstrap transport' {
+    # Scenario: Either obsolete bootstrap transport variable is present in the Core child environment.
+    # Purpose: Fail closed instead of consuming a candidate-root signal that the current authority never creates.
+    It 'UnitT10_rejects_present_legacy_bootstrap_variable_<VariableName>' -ForEach @(
+        @{ VariableName = 'STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH' },
+        @{ VariableName = 'STANDARD_VALIDATION_BOOTSTRAP_COMMAND' }
     ) {
-        $root = Join-Path $TestDrive ("invalid-$Variant-candidate")
-        [void](New-Item -ItemType Directory -Path $root)
-        $signal = Join-Path $root 'b-22222222222222222222222222222222.sig'
-        if ($Variant -eq 'outside') { $signal = Join-Path $TestDrive 'b-22222222222222222222222222222222.sig' }
-        if ($Variant -eq 'name') { $signal = Join-Path $root 'source.ps1' }
-        $bytes = if ($Variant -eq 'bytes') { 'wrong' } else { 'release' + [Environment]::NewLine }
-        if ($Variant -eq 'directory') { [void](New-Item -ItemType Directory -Path $signal) }
-        elseif ($Variant -ne 'missing') { [IO.File]::WriteAllText($signal, $bytes, [Text.UTF8Encoding]::new($false)) }
-        $command = if ($Variant -eq 'command') { 'C:/unverified/pwsh.exe' } else { 'C:/verified/pwsh.exe' }
-        { Remove-CorePesterConsumedBootstrapSignal -CandidateRoot $root -ReleasePath $signal -BootstrapCommand $command -VerifiedPowerShellExecutable 'C:/verified/pwsh.exe' } | Should -Throw '*Core Pester bootstrap*'
-        if ($Variant -ne 'missing') { Test-Path -LiteralPath $signal | Should -BeTrue }
-    }
-
-    # Scenario: A candidate directory is redirected through a junction.
-    # Purpose: Prevent consumed-signal cleanup from crossing a reparse ancestor.
-    It 'UnitT30_rejects_reparse_ancestry_without_deleting_the_signal' {
-        $outside = Join-Path $TestDrive 'outside'
-        [void](New-Item -ItemType Directory -Path $outside)
-        $link = Join-Path $TestDrive 'reparse-candidate'
-        New-Item -ItemType Junction -Path $link -Target $outside -ErrorAction Stop | Out-Null
-        $signal = Join-Path $link 'b-22222222222222222222222222222222.sig'
-        [IO.File]::WriteAllText($signal, ('release' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $names = @('STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH', 'STANDARD_VALIDATION_BOOTSTRAP_COMMAND')
+        $previous = @{}
         try {
-            { Remove-CorePesterConsumedBootstrapSignal -CandidateRoot $link -ReleasePath $signal -BootstrapCommand 'C:/verified/pwsh.exe' -VerifiedPowerShellExecutable 'C:/verified/pwsh.exe' } | Should -Throw '*Core Pester bootstrap*'
-            Test-Path -LiteralPath $signal | Should -BeTrue
+            foreach ($name in $names) {
+                $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            }
+            [Environment]::SetEnvironmentVariable($VariableName, 'unexpected-legacy-transport', 'Process')
+            Assert-TestThrowsLike { Assert-NoLegacyCorePesterBootstrapEnvironment } "*unexpected legacy bootstrap transport variable '$VariableName'*"
         }
-        finally { Remove-Item -LiteralPath $link -Force }
+        finally {
+            foreach ($name in $names) {
+                if ($null -eq $previous[$name]) {
+                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+                }
+                else {
+                    Set-Item -LiteralPath "Env:$name" -Value $previous[$name]
+                }
+            }
+        }
     }
 
-    # Scenario: The canonical wrapper binds its first full snapshot after trusted identity checks.
-    # Purpose: Keep transport cleanup before both before/after source integrity snapshots.
-    It 'UnitT40_cleans_consumed_signal_after_authority_verification_before_first_snapshot' {
+    # Scenario: The current owned-process Core launch contains no legacy bootstrap transport variables.
+    # Purpose: Accept the new authority contract without requiring or deleting a one-shot signal file.
+    It 'UnitT20_accepts_the_current_owned_process_environment_contract' {
+        $names = @('STANDARD_VALIDATION_BOOTSTRAP_RELEASE_PATH', 'STANDARD_VALIDATION_BOOTSTRAP_COMMAND')
+        $previous = @{}
+        try {
+            foreach ($name in $names) {
+                $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            }
+            { Assert-NoLegacyCorePesterBootstrapEnvironment } | Should -Not -Throw
+        }
+        finally {
+            foreach ($name in $names) {
+                if ($null -eq $previous[$name]) {
+                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+                }
+                else {
+                    Set-Item -LiteralPath "Env:$name" -Value $previous[$name]
+                }
+            }
+        }
+
         $wrapper = Get-Content -LiteralPath (Join-Path $script:repositoryRoot 'scripts/Invoke-CorePester.ps1') -Raw
-        $authority = $wrapper.IndexOf('$verifiedAuthoritySnapshotRoot = Get-VerifiedCoreAuthoritySnapshotPath', [StringComparison]::Ordinal)
-        $cleanup = $wrapper.IndexOf('Remove-CorePesterConsumedBootstrapSignal -CandidateRoot', [StringComparison]::Ordinal)
-        $snapshot = $wrapper.IndexOf('$candidateSnapshotBefore = Get-CorePesterTreeSnapshot', [StringComparison]::Ordinal)
-        ($authority -ge 0 -and $cleanup -gt $authority -and $snapshot -gt $cleanup) | Should -BeTrue
+        $wrapper | Should -Match 'Assert-NoLegacyCorePesterBootstrapEnvironment'
+        $wrapper | Should -Not -Match 'Remove-CorePesterConsumedBootstrapSignal|STANDARD_VALIDATION_BOOTSTRAP_(?:RELEASE_PATH|COMMAND)'
     }
 }
 
