@@ -1550,6 +1550,9 @@ function Test-CoreRunSelected {
         $script:Workflow | Should -Match '''-PrepareSourceTools'', ''-SourceToolsPath'', \$preparedPath'
         $script:Workflow | Should -Match '''-SourceValidation'', ''-SourceToolsPath'', \$env:SOURCE_TOOLS_PATH'
         $script:Workflow | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
+        $script:Workflow | Should -Match 'Join-Path \$env:GITHUB_WORKSPACE ''authority/docs/standards/validation-security-gate\.json'''
+        $script:Workflow | Should -Match 'Where-Object \{ \[string\]\$_\.id -ceq ''skillspector-static'' \}'
+        $script:Workflow | Should -Match '(?s)Assert-StandardCoreSourceCheckReport -Report \$SourceReport.*?-ValidationSecurityPolicy \$skillSpectorStages\[0\]\.platformUnavailableException\)'
         $setup = $script:Workflow.IndexOf('Explicitly acquire and freeze source tools', [StringComparison]::Ordinal)
         $run = $script:Workflow.IndexOf('Validate exact candidate with the verified runtime', [StringComparison]::Ordinal)
         $gate = $script:Workflow.IndexOf('Assert-StandardCoreSourceCheckReport -Report $SourceReport', [StringComparison]::Ordinal)
@@ -1747,6 +1750,10 @@ function Test-CoreRunSelected {
         $validateStep.Groups['body'].Value | Should -Match '\$Report\.authority\.revision\s+-cne\s+\$ExpectedAuthorityRevision'
         $validateStep.Groups['body'].Value | Should -Match 'Assert-CoreSourceCheckReport .*?-ExpectedAuthorityRevision \$env:APPROVED_AUTHORITY_REVISION'
         $validateStep.Groups['body'].Value | Should -Match 'Assert-StandardCoreSourceCheckReport -Report \$SourceReport'
+        $validateStep.Groups['body'].Value | Should -Match 'Join-Path \$env:GITHUB_WORKSPACE ''authority/docs/standards/validation-security-gate\.json'''
+        $validateStep.Groups['body'].Value | Should -Match 'Where-Object \{ \[string\]\$_\.id -ceq ''skillspector-static'' \}'
+        $validateStep.Groups['body'].Value | Should -Match '\$skillSpectorStages\.Count -ne 1 -or \$null -eq \$skillSpectorStages\[0\]\.platformUnavailableException'
+        $validateStep.Groups['body'].Value | Should -Match '(?s)Assert-StandardCoreSourceCheckReport -Report \$SourceReport.*?-ValidationSecurityPolicy \$skillSpectorStages\[0\]\.platformUnavailableException\)'
         $validateStep.Groups['body'].Value | Should -Not -Match '\$report\.authority\.revision\s+-cne\s+''ea1d368ac7b36f838ce4c3af363972c90fa12930'''
     }
 
