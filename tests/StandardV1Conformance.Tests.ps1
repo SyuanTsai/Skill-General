@@ -44,6 +44,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
             filesSha256 = 'aec3d84a1709b4435dc65f9a5ae471dafac3a9101d6469eeee607b911f872a75'
             fileCount = 51
         }
+        $script:ApprovedAuthoritySnapshots['472cbd6f533d3f6d0a5381862128ebcc87618a7c'] = @{
+            archiveSha256 = '357def24360566e9351af5c7b3bb8b8a7989f9ccb1eaf6f2401fa33e4069d8bf'
+            filesSha256 = '09764e501bb4e975fbacaf8e943abb6fadd9d86c82ac3d584d7443644b8a8c45'
+            fileCount = 51
+        }
         $script:GetAuthorityInventorySha256 = {
             param([object[]] $Files)
 
@@ -248,6 +253,17 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $approved.archiveSha256 | Should -BeExactly 'ab304bc6caabe4bb9b605f403c852650e19e25f72999010db61bbad695e1c60b'
         $approved.filesSha256 | Should -BeExactly 'aec3d84a1709b4435dc65f9a5ae471dafac3a9101d6469eeee607b911f872a75'
         $approved.fileCount | Should -Be 51
+    }
+
+    # Scenario: the protected driver prepares the refreshed 472cbd6 authority without adopting it.
+    # Purpose: bind the 472cbd6 archive and its expanded ordered runtime inventory for later source-pin selection.
+    It 'UnitT47_records_the_refreshed_472cbd6_authority_snapshot' {
+        $refreshedCommit = '472cbd6f533d3f6d0a5381862128ebcc87618a7c'
+        $refreshed = $script:ApprovedAuthoritySnapshots[$refreshedCommit]
+        $null -ne $refreshed | Should -BeTrue
+        $refreshed.archiveSha256 | Should -BeExactly '357def24360566e9351af5c7b3bb8b8a7989f9ccb1eaf6f2401fa33e4069d8bf'
+        $refreshed.filesSha256 | Should -BeExactly '09764e501bb4e975fbacaf8e943abb6fadd9d86c82ac3d584d7443644b8a8c45'
+        $refreshed.fileCount | Should -Be 51
     }
 
     # Scenario: local and CI validation enter through the repository's reviewed adapter.
@@ -461,8 +477,9 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$preparedSourceAuthority = ''ff85d5f80fe795b96354e753074b5ce59ad04ecd'''
         $workflow | Should -Match '\$scopedSourceAuthority = ''8e627baf54bd6e47862e6291b25e71cc45a2f2b7'''
         $workflow | Should -Match '\$approvedSourceAuthority = ''ead467c3488c103546f316d137196b447a1ff58a'''
-        $workflow | Should -Match '\$coreAuthorities = @\(''ea1d368ac7b36f838ce4c3af363972c90fa12930'', ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'', \$sourceAuthority, \$preparedSourceAuthority, \$scopedSourceAuthority, \$approvedSourceAuthority\)'
-        $workflow | Should -Match '\$candidateSourceAuthority -cnotin @\(\$sourceAuthority, \$preparedSourceAuthority, \$scopedSourceAuthority, \$approvedSourceAuthority\)'
+        $workflow | Should -Match '\$refreshedSourceAuthority = ''472cbd6f533d3f6d0a5381862128ebcc87618a7c'''
+        $workflow | Should -Match '\$coreAuthorities = @\(''ea1d368ac7b36f838ce4c3af363972c90fa12930'', ''053b80143b5ef48b06a8c448d5ac1abaf9a49df8'', \$sourceAuthority, \$preparedSourceAuthority, \$scopedSourceAuthority, \$approvedSourceAuthority, \$refreshedSourceAuthority\)'
+        $workflow | Should -Match '\$candidateSourceAuthority -cnotin @\(\$sourceAuthority, \$preparedSourceAuthority, \$scopedSourceAuthority, \$approvedSourceAuthority, \$refreshedSourceAuthority\)'
         $workflow | Should -Match 'Source validation cannot accept a Core-only candidate authority\.'
         $workflow | Should -Match '\$sourceDefinitions\.Count -ne 1'
         $workflow | Should -Match '\$sourcePins\.Count -ne 1'
@@ -477,6 +494,11 @@ Describe 'Skill-General Standard v1 reference implementation' {
         $workflow | Should -Match '\$approvedSourceRequired = \$candidateSourceAuthority -ceq \$approvedSourceAuthority -or \$driverAuthority -ceq \$approvedSourceAuthority'
         $workflow | Should -Match '\$approvedSourceDefinitions\.Count -eq 1 -and \$approvedSourcePins\.Count -eq 1'
         $workflow | Should -Match '\$approvedSourcePins\[0\]\.Groups\[''sha''\]\.Value -ceq \$approvedSourceAuthority'
+        $workflow | Should -Match '\$refreshedSourceDefinitions = \[regex\]::Matches'
+        $workflow | Should -Match '\$refreshedSourcePins = \[regex\]::Matches'
+        $workflow | Should -Match '\$refreshedSourceRequired = \$candidateSourceAuthority -ceq \$refreshedSourceAuthority -or \$driverAuthority -ceq \$refreshedSourceAuthority'
+        $workflow | Should -Match '\$refreshedSourceDefinitions\.Count -eq 1 -and \$refreshedSourcePins\.Count -eq 1'
+        $workflow | Should -Match '\$refreshedSourcePins\[0\]\.Groups\[''sha''\]\.Value -ceq \$refreshedSourceAuthority'
 
         $workflow | Should -Not -Match '\$baselineAuthority|\$mode = ''legacy'''
         $workflow | Should -Match '\$driverAuthority -cnotin \$coreAuthorities'

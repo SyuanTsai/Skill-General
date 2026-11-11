@@ -8,7 +8,7 @@ Describe 'Source validation request boundary' {
         if (@($errors).Count) { throw 'Validate.ps1 must parse before source request fixtures run.' }
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -cin @(
-                '$script:AuthorityRepository', '$script:NextAuthorityCommit', '$script:MergedAuthorityCommit', '$script:SourceAuthorityCommit', '$script:PreparedSourceAuthorityCommit', '$script:ScopedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityCommit',
+                '$script:AuthorityRepository', '$script:NextAuthorityCommit', '$script:MergedAuthorityCommit', '$script:SourceAuthorityCommit', '$script:PreparedSourceAuthorityCommit', '$script:ScopedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityCommit',
                 '$script:SourceRepository', '$childRunnerText')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -cin @(
                 'Test-LegacyRunRequested', 'Assert-OrdinaryCoreRunRequest', 'Assert-NoReparseAncestors',
@@ -489,6 +489,8 @@ Describe 'Canonical Standard v1 validation adapter' {
                 [int] $ScopedSourceDefinitionCount = 1,
                 [AllowNull()][object] $DriverApprovedSourceAuthority = $null,
                 [int] $ApprovedSourceDefinitionCount = 1,
+                [AllowNull()][object] $DriverRefreshedSourceAuthority = $null,
+                [int] $RefreshedSourceDefinitionCount = 1,
                 [switch] $ReturnSelection
             )
             $workspace = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
@@ -515,6 +517,11 @@ Describe 'Canonical Standard v1 validation adapter' {
             if ($null -ne $DriverApprovedSourceAuthority) {
                 for ($definition = 0; $definition -lt $ApprovedSourceDefinitionCount; $definition++) {
                     $driverSourceLines.Add("`$script:ApprovedSourceAuthorityCommit = '$DriverApprovedSourceAuthority'")
+                }
+            }
+            if ($null -ne $DriverRefreshedSourceAuthority) {
+                for ($definition = 0; $definition -lt $RefreshedSourceDefinitionCount; $definition++) {
+                    $driverSourceLines.Add("`$script:RefreshedSourceAuthorityCommit = '$DriverRefreshedSourceAuthority'")
                 }
             }
             if ($driverSourceLines.Count -eq 0) { $driverSourceLines.Add('# source driver preparation absent') }
@@ -599,7 +606,7 @@ exit /b 0
                 ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
                     $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
                         '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
-                        '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles',
+                        '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles',
                         '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles')) -or
                 ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                     $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin', 'Get-LegacyAuthorityPin'))
@@ -615,7 +622,7 @@ exit /b 0
             $constantNames = @(
                 '$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
                 '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
-                '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles',
+                '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles',
                 '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles'
             )
             $constants = @($ast.FindAll({
@@ -651,7 +658,7 @@ function Test-CoreRunSelected {
             $constantNames = @(
                 '$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
                 '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
-                '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles',
+                '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles',
                 '$script:MergedAuthorityCommit', '$script:MergedAuthorityArchiveSha256', '$script:MergedAuthorityFiles'
             )
             $constants = @($ast.FindAll({
@@ -883,7 +890,7 @@ function Test-CoreRunSelected {
         @($errors).Count | Should -Be 0
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
@@ -911,7 +918,7 @@ function Test-CoreRunSelected {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
                 $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles',
                     '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles',
-                    '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles')) -or
+                    '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
@@ -1028,7 +1035,7 @@ function Test-CoreRunSelected {
     # Scenario: any approved Core candidate enters the prepared driver while Semantic remains explicit.
     # Purpose: retain canonical Core routing and verify the execution authority selected before tools run.
     It 'UnitT18_routes_approved_Core_candidates_while_Semantic_setup_remains_separate' {
-        $script:Validator | Should -Match '\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit, \$script:PreparedSourceAuthorityCommit, \$script:ScopedSourceAuthorityCommit, \$script:ApprovedSourceAuthorityCommit\)'
+        $script:Validator | Should -Match '\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit, \$script:PreparedSourceAuthorityCommit, \$script:ScopedSourceAuthorityCommit, \$script:ApprovedSourceAuthorityCommit, \$script:RefreshedSourceAuthorityCommit\)'
         $script:Validator | Should -Match 'Assert-OrdinaryCoreRunRequest -ExecutionMode \$ExecutionMode -CandidateAuthority \$candidateAuthority -BoundParameters \$PSBoundParameters'
         $script:Validator | Should -Match 'Assert-StandardCoreAuthorityCheckout -GitPath \$gitPath -AuthorityRoot \$AuthorityRepositoryRoot -AuthorityPin \$executionAuthority'
         $script:Validator | Should -Match '''-AuthorityRevision'', \[string\]\$candidateAuthority\.commit'
@@ -1053,7 +1060,7 @@ function Test-CoreRunSelected {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
@@ -1201,7 +1208,7 @@ function Test-CoreRunSelected {
         $ast = [Management.Automation.Language.Parser]::ParseInput($script:Validator, [ref]$tokens, [ref]$errors)
         $parts = @($ast.EndBlock.Statements | Where-Object {
             ($_ -is [Management.Automation.Language.AssignmentStatementAst] -and
-                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles')) -or
+                $_.Left.Extent.Text -in @('$script:AuthorityRepository', '$script:AuthorityCommit', '$script:AuthorityArchiveSha256', '$script:AuthorityFiles', '$script:NextAuthorityCommit', '$script:NextAuthorityArchiveSha256', '$script:NextAuthorityFiles', '$script:SourceAuthorityCommit', '$script:SourceAuthorityArchiveSha256', '$script:SourceAuthorityFiles', '$script:PreparedSourceAuthorityCommit', '$script:PreparedSourceAuthorityArchiveSha256', '$script:PreparedSourceAuthorityFiles', '$script:ScopedSourceAuthorityCommit', '$script:ScopedSourceAuthorityArchiveSha256', '$script:ScopedSourceAuthorityFiles', '$script:ApprovedSourceAuthorityCommit', '$script:ApprovedSourceAuthorityArchiveSha256', '$script:ApprovedSourceAuthorityFiles', '$script:RefreshedSourceAuthorityCommit', '$script:RefreshedSourceAuthorityArchiveSha256', '$script:RefreshedSourceAuthorityFiles')) -or
             ($_ -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $_.Name -in @('Assert-ExactPropertySet', 'Assert-Sha256', 'Assert-AuthorityConfig', 'Get-ApprovedSourceAuthorityPin'))
         } | ForEach-Object { $_.Extent.Text })
@@ -1326,7 +1333,7 @@ function Test-CoreRunSelected {
         $coreArguments | Should -Match '\[string\]\$candidateAuthority\.commit'
         $coreArguments | Should -Match 'TrustedToolRoot.*, \$trustedRoot'
         $coreArguments | Should -Not -Match 'CandidateArchive|DevelopmentHarness|Semantic|Supervisor|Lifecycle|ExpectedPlanSha256'
-        $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and\s+\[string\]\$candidateAuthority\.repository -ceq \$script:AuthorityRepository -and\s+\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit, \$script:PreparedSourceAuthorityCommit, \$script:ScopedSourceAuthorityCommit, \$script:ApprovedSourceAuthorityCommit\)'
+        $script:Validator | Should -Match '(?s)\$coreRunSelected = \$ExecutionMode -eq ''Run'' -and\s+\[string\]\$candidateAuthority\.repository -ceq \$script:AuthorityRepository -and\s+\[string\]\$candidateAuthority\.commit -cin @\(\$script:NextAuthorityCommit, \$script:MergedAuthorityCommit, \$script:SourceAuthorityCommit, \$script:PreparedSourceAuthorityCommit, \$script:ScopedSourceAuthorityCommit, \$script:ApprovedSourceAuthorityCommit, \$script:RefreshedSourceAuthorityCommit\)'
         $preflightIndex = $script:Validator.IndexOf('Assert-OrdinaryCoreRunRequest -ExecutionMode $ExecutionMode')
         $preflightIndex | Should -BeGreaterThan -1
         $preflightIndex | Should -BeLessThan $branchIndex
@@ -2082,6 +2089,67 @@ function Test-CoreRunSelected {
             $old = & $verifier { Get-ApprovedSourceAuthorityPin -Commit '8e627baf54bd6e47862e6291b25e71cc45a2f2b7' }
             $old.archiveSha256 | Should -BeExactly '9aa4a7fc8fc7c7f0ff9e774c79c77a64077b4003212a523dda519d034ff99989'
             @($old.files.Keys).Count | Should -Be 32
+            $guard = New-OrdinaryRunGuardModule
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{} } $pin } | Should -Not -Throw
+            { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
+                SourceValidation = $true; SourceToolsPath = 'prepared.json'
+            } } $pin } | Should -Not -Throw
+        }
+
+        # Scenario: the refreshed source adoption (472cbd6) advances only after the protected base driver is prepared.
+        # Purpose: retain the ead467c pin and reject missing, duplicated, or substituted readiness markers.
+        It 'IntegrationT47_requires_the_exact_refreshed_source_driver_before_adoption' {
+            $previous = 'ead467c3488c103546f316d137196b447a1ff58a'
+            $refreshed = '472cbd6f533d3f6d0a5381862128ebcc87618a7c'
+            $common = @{
+                DriverAuthority = $previous
+                CandidateAuthority = $refreshed
+                ExpectedDriverSha = '2' * 40
+                ActualDriverSha = '2' * 40
+                DriverApprovedSourceAuthority = $previous
+            }
+            { Invoke-WorkflowSelectorFixture @common } | Should -Throw
+            { Invoke-WorkflowSelectorFixture @common -DriverRefreshedSourceAuthority ('9' * 40) } | Should -Throw
+            { Invoke-WorkflowSelectorFixture @common -DriverRefreshedSourceAuthority $refreshed -RefreshedSourceDefinitionCount 2 } | Should -Throw
+            $selection = Invoke-WorkflowSelectorFixture @common -DriverRefreshedSourceAuthority $refreshed -ReturnSelection
+            $selection.mode | Should -BeExactly 'core'
+            $selection.authorityRevision | Should -BeExactly $refreshed
+        }
+
+        # Scenario: callers select the refreshed 472cbd6 source runner while historical ead467c callers remain valid.
+        # Purpose: bind every ordered path/hash, including registry and platform runtime closure, before tool resolution.
+        It 'UnitT49_accepts_only_the_complete_refreshed_source_tuple' {
+            $verifier = New-AuthorityVerifierModule
+            $pin = & $verifier { Get-ApprovedSourceAuthorityPin -Commit '472cbd6f533d3f6d0a5381862128ebcc87618a7c' }
+            $pin.archiveSha256 | Should -BeExactly '357def24360566e9351af5c7b3bb8b8a7989f9ccb1eaf6f2401fa33e4069d8bf'
+            @($pin.files.Keys).Count | Should -Be 51
+            @($pin.files.Keys) | Should -Contain 'docs/standards/skillspector-approved-sources.json'
+            @($pin.files.Keys) | Should -Contain 'scripts/platform-runtime.psd1'
+            @($pin.files.Keys) | Should -Contain 'scripts/platform/WindowsInstallerMutation.cs'
+            $files = @(foreach ($entry in $pin.files.GetEnumerator()) {
+                [pscustomobject]@{ path = $entry.Key; sha256 = $entry.Value }
+            })
+            $canonical = (@($files | ForEach-Object { $_.path + [char]9 + $_.sha256 }) -join "`n") + "`n"
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canonical))).ToLowerInvariant() |
+                Should -BeExactly '09764e501bb4e975fbacaf8e943abb6fadd9d86c82ac3d584d7443644b8a8c45'
+            $config = [pscustomobject]@{ schemaVersion = 1; standardVersion = 'v1'; authority = [pscustomobject]@{
+                repository = $pin.repository; commit = $pin.commit; archiveUrl = $pin.archiveUrl
+                archiveSha256 = $pin.archiveSha256; files = $files
+            } }
+            { & $verifier { param($c) Assert-AuthorityConfig -Config $c -AllowNextAuthority } $config } | Should -Not -Throw
+            foreach ($mutation in @(
+                { param($c) $c.authority.archiveSha256 = '0' * 64 },
+                { param($c) $c.authority.files[0].sha256 = '0' * 64 },
+                { param($c) [array]::Reverse($c.authority.files) },
+                { param($c) $c.authority.files = @($c.authority.files | Select-Object -Skip 1) }
+            )) {
+                $altered = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+                & $mutation $altered
+                { & $verifier { param($c) Assert-AuthorityConfig -Config $c -AllowNextAuthority } $altered } | Should -Throw
+            }
+            $old = & $verifier { Get-ApprovedSourceAuthorityPin -Commit 'ead467c3488c103546f316d137196b447a1ff58a' }
+            $old.archiveSha256 | Should -BeExactly 'ab304bc6caabe4bb9b605f403c852650e19e25f72999010db61bbad695e1c60b'
+            @($old.files.Keys).Count | Should -Be 51
             $guard = New-OrdinaryRunGuardModule
             { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{} } $pin } | Should -Not -Throw
             { & $guard { param($p) Assert-OrdinaryCoreRunRequest -ExecutionMode Run -CandidateAuthority $p -BoundParameters @{
