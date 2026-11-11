@@ -297,6 +297,62 @@ $script:ApprovedSourceAuthorityFiles = [ordered]@{
     'scripts/platform/MacOS.psm1' = '8f25edfbee5ab36b5e1c42eb55c6dbab44db0bc29896c180612b1248920c7c47'
 }
 
+$script:RefreshedSourceAuthorityCommit = '472cbd6f533d3f6d0a5381862128ebcc87618a7c'
+$script:RefreshedSourceAuthorityArchiveSha256 = '357def24360566e9351af5c7b3bb8b8a7989f9ccb1eaf6f2401fa33e4069d8bf'
+$script:RefreshedSourceAuthorityFiles = [ordered]@{
+    'docs/standards/README.md' = '8aef64a9e69848c82d0ceba43f14c2876e3816cbc4761bac26a35e6f62aaf884'
+    'docs/standards/managed-skill-lifecycle.md' = '4e3f8595072d663f51d18aa28f42293fda5456362b49c0ea3f0157ae3dcf56dd'
+    'docs/standards/schemas/managed-skill-lifecycle-v1.schema.json' = '9a7f4c02588d2b88194e953a41766a72a9426fa89d4c3781c5750dcc22d35863'
+    'docs/standards/schemas/openai-agent-metadata.schema.json' = '23c1aaee28a54fea1946a61d6122a2097906ffa5bdd66c8014fc6b1625c9062a'
+    'docs/standards/schemas/source-inventory-v2.schema.json' = '084550944b4141ab5535f58fb6e99730a5c34b56103f6b59fd5a352679caa98e'
+    'docs/standards/schemas/validation-security-gate-v1.schema.json' = 'b924b28a791f4d6eedcc0aa1c01fb62687ec863c0c17048093bfdd99aaa55b74'
+    'docs/standards/skill-repository-review-matrix.md' = 'db0f898b2e59e0600abe3ec93684e561db339c82547d9035b18285f0285672ab'
+    'docs/standards/skill-repository-standard.md' = 'a831a4151f8ea31e90709487af7823256ca4b119784823216a89ee8fcc85da35'
+    'docs/standards/upstream-interoperability.md' = '8e48cc4831d151ffa4665433d79ad88e8871cb1d694861908dd0206406dcefe5'
+    'docs/standards/validation-security-gate.json' = '1ab4c1208885a3aeb74654d8133426367134446e2b7519f06e63de3a53b16067'
+    'docs/standards/validation-toolchain.json' = '001054854960563201d969a826db990f01ab93a2e87120ccc5ee42be8f8417d7'
+    'scripts/Invoke-StandardAuthorityGate.ps1' = 'b4972681e79f788485e3925b737a7b0faac38a63c617450472758f2cc33798ef'
+    'scripts/Resolve-PythonWheelClosure.py' = '45bd49b13acaee461ac38cbdd303016d74f516ae494d77cbd127366603c90681'
+    'scripts/Resolve-StandardValidationTool.ps1' = 'c0d68b227fc04e19d710a89c4559fe45e0cc979eead846006261dc2dc5bfa14f'
+    'docs/standards/schemas/standard-validation-adapter-v1.schema.json' = '11aa88fc25716d748bd4f514f1a44f02390ad1745dd5a5c5beee07f642fd5639'
+    'docs/standards/schemas/standard-validation-evidence-v1.schema.json' = 'e177a6832d055b51a440615fec65d01941b1b0c32bf468b962c8eb79750db924'
+    'docs/standards/standard-validation-contract-v1.json' = '2fa394ee48f940cdc2272c64199b90d95dea3665e1496df49cd0bd695cbdbe15'
+    'docs/standards/pr12-source-merge-adoption.json' = '4c5262f2a11d228195230c15fa4faaf9614af6b59f110e5d9c08f242ce809175'
+    'docs/standards/trust-anchors/human-approval-public-key.xml' = '1e46153b72d02f3ce2fb26becd449df4f1590d8e5cb441b1954006a5602bbd9b'
+    'docs/standards/trust-anchors/trusted-supervisor-public-key.xml' = '4d550851f43405920156f40c9fc648d99a69dd73efc200f6968d8a837e7fbf27'
+    'scripts/Invoke-StandardValidation.ps1' = '242b9e856d11dffffc512d03b60a7bd1f8ebad101d99cd97556488201b504350'
+    'docs/standards/schemas/standard-semantic-consent-evidence-v2.schema.json' = '109091979d0a47e2035d3d8b20963fcdb85680e5da737bf1f27121608115d430'
+    'scripts/StandardSemanticBridge.psm1' = '92595bdbb98ae77bdb2cc4dd7605ecc29f54e0a6746c9ee7d7636655f65665ef'
+    'docs/standards/schemas/upstream-adapter-v1.schema.json' = '3cff6246463188a91cc54c6a46315a949314767a759c6214e5b28e4db95ac8d7'
+    'docs/standards/upstream-adapter.json' = 'c4f5133b24841bb9c66182dc3d5a027596f864ec28e410d47249a67b3b97ad31'
+    'scripts/Validate-UpstreamAdapter.ps1' = '3b6e6474690b1ae9f9486544b68f50ca29b96f5dbe6aa8d6c6cd8570afad500b'
+    'docs/standards/standard-core-validation-v2.json' = 'dd3c3d1bb83a439895ed35a949ff376b9d59d25e69063c86714eb42edaad84df'
+    'docs/standards/schemas/standard-core-adapter-v2.schema.json' = '7399980e8765528b759a3734a133447eb9581ac24a9c4780dc8faadd6af0c1c5'
+    'docs/standards/schemas/standard-core-evidence-v2.schema.json' = '7c083b9603b75518220e7e70e5704728a7e3dee0d5b5cf09dc9c755f49d64153'
+    'docs/standards/third-party-raw-skill-sources.md' = '18649fd56eada4a94a5d47de778669b0ebcecfb85b84f5c581d283b21979f7ac'
+    'docs/standards/schemas/third-party-raw-skill-source-v1.schema.json' = '9d8585d95c606486f947a3f89e39341af840335376e86910eb7f4ed25bdc16ed'
+    'docs/standards/examples/third-party-raw-skill-source-v1.json' = 'decbf276cbeea33c60d8b36b7b16838babe951cd84d13ae4a8a7a8261dc6d9c8'
+    'docs/standards/skillspector-approved-sources.json' = 'baaaf2a66e98f2c28a48fddd04051f09cf5498ef6c7978cbf45f5d415b69a330'
+    'docs/standards/schemas/skillspector-approved-sources-v1.schema.json' = '20fa8516c9dcb7c9ae15f4682092dc583411db3149fac2641fef7b5182c3d12b'
+    'docs/standards/static-parser-host-ownership.json' = '994acd989327d094d22ce2c68ca20eceec609f4e494f4e5d252cfcdef742de2c'
+    'scripts/platform-runtime.psd1' = '7f112390d2995a105b9e9a916876df1779485dec6df21d7516243e2dcd1c4dca'
+    'scripts/platform-runtime.psm1' = 'ad051b2794ce4dc10108404201735d02f7b032ed0e633c5f22f73c884fb10370'
+    'scripts/installer-safe-mutation.psm1' = 'dc031edcc2f48968df83cd68ad52eacb7f7b05d3ca6a0cc622658cf6151c8293'
+    'scripts/WindowsDacl.psm1' = 'ffa1f85d94bb6bce9bf8353f8c7733bdbe59880a3d0d075191938cc28aebb5f6'
+    'scripts/platform/PlatformNative.cs' = 'f9da23bf3e6e3c8960b26d534e14873f6b4fc98b3d13f5b6cdfdd5f7716a4514'
+    'scripts/platform/UnixNative.cs' = '996a8e4cc1c795f4732a9d7368e597b838c801d0710e32629cafcbba89f8c004'
+    'scripts/platform/WindowsNative.cs' = '6eea8ca2701b6a6de88ee4a3348f053d07a0543d607832e667335c838bb7d433'
+    'scripts/platform/WindowsInstallerMutation.cs' = 'b88b4b09c7bb5c3e71b762ddc6ebe72007ed0cca99977ab7a7272529c3ff9218'
+    'scripts/platform/OwnedProcess.cs' = '097061ad5902f896ff74b3f60b0ecaf63f3d58f357aed8fdbf80a8586564de58'
+    'scripts/platform/UnixProcess.cs' = '125d2b3eecdad6a6c201d5f5d61a6efd0ad55ba93822c7b83a679a5397005db1'
+    'scripts/platform/WindowsProcess.cs' = '7b8a0cddd3b9809b861801fe1d6a618684e2ca6fa13f9334825c5c9da5b2d8d6'
+    'scripts/platform/Unix.psm1' = 'ec3b3bb0b39e1ce84d4c8f60a78c44fb40cb9d58c13ed88a6b9d9db978fcc147'
+    'scripts/platform/RuntimePreparation.psm1' = 'dc254c04e7e2caf280726e66f67434776bc7df12a210a38c80596e41344fd077'
+    'scripts/platform/Windows.psm1' = '9b7442178083a9b165ed3bf53367d5c3ce1b1f09d56f0f6efe964b524e17be0b'
+    'scripts/platform/Linux.psm1' = '52c261d577ee7b3946771d1112030996896fdd119e06ac3849e430a3d56fb38c'
+    'scripts/platform/MacOS.psm1' = '8f25edfbee5ab36b5e1c42eb55c6dbab44db0bc29896c180612b1248920c7c47'
+}
+
 function Assert-ExactPropertySet {
     param(
         [Parameter(Mandatory = $true)] $Value,
@@ -864,6 +920,11 @@ function Get-ApprovedSourceAuthorityPin {
             $selectedArchiveSha256 = $script:ApprovedSourceAuthorityArchiveSha256
             $selectedFiles = $script:ApprovedSourceAuthorityFiles
         }
+        elseif ($Commit -ceq $script:RefreshedSourceAuthorityCommit) {
+            $selectedCommit = $script:RefreshedSourceAuthorityCommit
+            $selectedArchiveSha256 = $script:RefreshedSourceAuthorityArchiveSha256
+            $selectedFiles = $script:RefreshedSourceAuthorityFiles
+        }
         else {
             throw 'Source authority commit must match one of the exact approved pins.'
         }
@@ -884,7 +945,7 @@ function Get-LegacyAuthorityPin {
         throw 'Legacy validation cannot change the approved authority repository.'
     }
     if ([string]$SelectedPin.commit -ceq $script:AuthorityCommit) { return $SelectedPin }
-    if ([string]$SelectedPin.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit)) {
+    if ([string]$SelectedPin.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit, $script:RefreshedSourceAuthorityCommit)) {
         throw 'Legacy validation requires one of the exact reviewed authority pins.'
     }
 
@@ -928,7 +989,7 @@ function Assert-OrdinaryCoreRunRequest {
         throw 'Explicit source setup or validation requires Run and SourceToolsPath.'
     }
     if (-not ($setup -or $source) -and (@($BoundParameters.Keys) -ccontains 'SourceToolsPath')) { throw 'Ordinary Core does not accept SourceToolsPath.' }
-    if ($source -and [string]$CandidateAuthority.commit -cnotin @($script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit)) {
+    if ($source -and [string]$CandidateAuthority.commit -cnotin @($script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit, $script:RefreshedSourceAuthorityCommit)) {
         throw 'Source validation requires the exact approved source authority pin.'
     }
     if ($ExecutionMode -ine 'Run') { return }
@@ -939,7 +1000,7 @@ function Assert-OrdinaryCoreRunRequest {
         throw 'Ordinary Run does not accept legacy tool-resolution or development-harness inputs; use PrepareSemantic or ResumeSemantic for explicit Semantic setup and execution.'
     }
     if ([string]$CandidateAuthority.repository -cne $script:AuthorityRepository -or
-        [string]$CandidateAuthority.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit)) {
+        [string]$CandidateAuthority.commit -cnotin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit, $script:RefreshedSourceAuthorityCommit)) {
         throw 'Ordinary Run requires one exact approved Core authority pin; it cannot fall back to legacy tool resolution.'
     }
 }
@@ -1207,6 +1268,7 @@ function Assert-AuthorityConfig {
         $approvedPins += Get-ApprovedSourceAuthorityPin -Commit $script:PreparedSourceAuthorityCommit
         $approvedPins += Get-ApprovedSourceAuthorityPin -Commit $script:ScopedSourceAuthorityCommit
         $approvedPins += Get-ApprovedSourceAuthorityPin -Commit $script:ApprovedSourceAuthorityCommit
+        $approvedPins += Get-ApprovedSourceAuthorityPin -Commit $script:RefreshedSourceAuthorityCommit
     }
     if ($AllowNextAuthority) { $approvedPins += Get-ApprovedSourceAuthorityPin }
     foreach ($approved in $approvedPins) {
@@ -2057,7 +2119,7 @@ try {
     $eventName = Get-EventName
     $coreRunSelected = $ExecutionMode -eq 'Run' -and
         [string]$candidateAuthority.repository -ceq $script:AuthorityRepository -and
-        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit)
+        [string]$candidateAuthority.commit -cin @($script:NextAuthorityCommit, $script:MergedAuthorityCommit, $script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit, $script:RefreshedSourceAuthorityCommit)
     if (-not $coreRunSelected -and $ExecutionMode -eq 'Run' -and
         ($PSBoundParameters.ContainsKey('AuthorityRepositoryRoot') -or $PSBoundParameters.ContainsKey('TrustedToolRoot'))) {
         throw 'AuthorityRepositoryRoot and TrustedToolRoot require the ordinary Core authority pin and cannot be combined with legacy Run inputs.'
@@ -2065,7 +2127,7 @@ try {
     if ($coreRunSelected) {
         if ([string]::IsNullOrWhiteSpace($AuthorityRepositoryRoot)) { throw 'Core Run requires -AuthorityRepositoryRoot for the pinned real Git authority checkout.' }
         $executionAuthority = if ($PrepareSourceTools) {
-            if ([string]$candidateAuthority.commit -cin @($script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit)) {
+            if ([string]$candidateAuthority.commit -cin @($script:SourceAuthorityCommit, $script:PreparedSourceAuthorityCommit, $script:ScopedSourceAuthorityCommit, $script:ApprovedSourceAuthorityCommit, $script:RefreshedSourceAuthorityCommit)) {
                 Get-ApprovedSourceAuthorityPin -Commit ([string]$candidateAuthority.commit)
             }
             else {
