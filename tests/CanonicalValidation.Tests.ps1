@@ -857,6 +857,12 @@ function Test-CoreRunSelected {
             $verifier = New-AuthorityVerifierModule
             $expectedFiles = (& $verifier { Get-ApprovedSourceAuthorityPin -Commit 'ead467c3488c103546f316d137196b447a1ff58a' }).files
         }
+        elseif ($adapter.authority.commit -ceq '472cbd6f533d3f6d0a5381862128ebcc87618a7c') {
+            $expectedCommit = '472cbd6f533d3f6d0a5381862128ebcc87618a7c'
+            $expectedArchiveSha256 = '357def24360566e9351af5c7b3bb8b8a7989f9ccb1eaf6f2401fa33e4069d8bf'
+            $verifier = New-AuthorityVerifierModule
+            $expectedFiles = (& $verifier { Get-ApprovedSourceAuthorityPin -Commit '472cbd6f533d3f6d0a5381862128ebcc87618a7c' }).files
+        }
         elseif ($adapter.authority.commit -ceq $script:ExpectedPreparedSourceAuthorityCommit) {
             $expectedCommit = $script:ExpectedPreparedSourceAuthorityCommit
             $expectedArchiveSha256 = $script:ExpectedPreparedSourceAuthorityArchiveSha256
