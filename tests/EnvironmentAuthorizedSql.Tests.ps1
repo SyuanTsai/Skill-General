@@ -118,4 +118,17 @@ Describe 'environment-authorized SQL v1 offline contracts' {
         $value = Read-Fixture 'success'; $value.result.rows[0] += 'extra-column'
         (Test-Envelope Response $value).valid | Should -BeFalse
     }
+
+    # Scenario: The package is prepared on a Windows, Linux, or macOS host.
+    # Purpose: Keep the offline contracts platform-neutral while recording the future service's Windows identity design as a known limitation.
+    It 'UnitT70_documents_platform_neutral_contracts_and_the_service_identity_limitation' {
+        $workflow = Get-Content -LiteralPath (Join-Path $script:SkillRoot 'references/workflow.md') -Raw
+        $workflow | Should -Match 'The offline contracts and `Test-Contract\.ps1` are platform-neutral'
+        $workflow | Should -Match 'Known limitation: the planned execution service''s design requires Windows identity, ACLs, and WAM'
+        $workflow | Should -Match 'a peer identity mechanism for other platforms has not been designed'
+        $restriction = '(?i)windows-only|only (supported )?on windows|only supported host|windows is the only|beyond windows|on windows|host .* is windows'
+        foreach ($file in @(Get-ChildItem -LiteralPath $script:SkillRoot -File -Recurse)) {
+            [IO.File]::ReadAllText($file.FullName) | Should -Not -Match $restriction -Because $file.FullName
+        }
+    }
 }

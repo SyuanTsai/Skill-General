@@ -12,6 +12,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+try {
+    [void][Markdig.Markdown]
+    $script:MarkdownPipeline = [Markdig.MarkdownPipelineBuilder]::new().Build()
+}
+catch {
+    throw ('Markdig is required to validate Markdown structure: {0}' -f $_.Exception.Message)
+}
+
 function Assert-ExactPropertySet {
     param(
         [Parameter(Mandatory = $true)] $Value,
@@ -211,7 +219,210 @@ function Read-SkillFrontmatter {
     if ([string]::IsNullOrWhiteSpace($description) -or $descriptionLength -gt 1024 -or $description.Contains('<') -or $description.Contains('>')) {
         throw "SKILL.md description for '$ExpectedSkillId' violates the Standard v1 text contract."
     }
+    if ($description -match $script:PlatformRestrictedDescriptionPattern) {
+        throw "SKILL.md description for '$ExpectedSkillId' must not begin with a platform-restricted declaration."
+    }
     return [pscustomobject]@{ name = $values['name']; description = $description }
+}
+
+# A description must not open with a host restriction such as "Windows-only Skill." or "Only on Linux".
+$script:PlatformRestrictedDescriptionPattern = '(?i)\A\s*(?:' +
+    '(?:windows|linux|mac\s?os|os\s?x|unix|wsl)[\s-]*(?:only|exclusive)\b' +
+    '|(?:windows|linux|mac\s?os|os\s?x|unix|wsl)\s+hosts?\s+only\b' +
+    '|(?:only|exclusively)\s+(?:supported\s+)?(?:on|for)\s+(?:windows|linux|mac\s?os|os\s?x|unix|wsl)\b' +
+    '|only\s+(?:windows|linux|mac\s?os|os\s?x|unix|wsl)(?:\s+hosts?)?\s+(?:is|are)\s+supported\b' +
+    '|(?:supported\s+)?on\s+(?:windows|linux|mac\s?os|os\s?x|unix|wsl)\s+(?:only|hosts?\s+only)\b' +
+    '|supported\s+only\s+on\s+(?:windows|linux|mac\s?os|os\s?x|unix|wsl)\b' +
+    '|for\s+(?:windows|linux|mac\s?os|os\s?x|unix|wsl)\s+hosts?\s+only\b' +
+    '|requires\s+(?:an?\s+)?(?:windows|linux|mac\s?os|os\s?x|unix|wsl)(?:\s+(?:execution\s+)?host\b|\s+to\s+run\b|(?=\s*(?:[.!?]|\z))))'
+
+# Reference files use a closed classification. Binary resources still participate in
+# the complete byte/hash inventory below, but they are not decoded.
+$script:MarkdownReferenceExtensions = @('.md', '.markdown')
+$script:ProgramReferenceExtensions = @('.ps1', '.psm1', '.psd1', '.py', '.sh')
+$script:OtherTextReferenceExtensions = @(
+    '.txt', '.rst', '.adoc', '.json', '.yaml', '.yml', '.toml', '.xml',
+    '.csv', '.html', '.htm', '.svg'
+)
+$script:BinaryReferenceExtensions = @('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico')
+$script:JsonSchemaReservedKeys = @('$schema', '$id', '$ref', '$defs', '$comment', '$anchor', '$vocabulary')
+$script:UnscannedFenceLanguages = @(
+    'powershell', 'pwsh', 'ps1', 'bash', 'sh', 'zsh', 'shell', 'python',
+    'py', 'sql', 'csharp', 'cs', 'javascript', 'js', 'typescript', 'ts'
+)
+$script:VariableScopePrefixes = @(
+    'env', 'script', 'global', 'local', 'private', 'using', 'variable', 'function', 'alias'
+)
+# Token boundaries exclude exactly [A-Za-z0-9_$\] before a token, and
+# [A-Za-z0-9_] or -[a-z0-9] after it. Punctuation remains a scannable boundary.
+$script:SkillInvocationTokenPattern = '(?<![A-Za-z0-9_$\x5C])\$[a-z0-9]+(?:-[a-z0-9]+)*(?![A-Za-z0-9_]|-[a-z0-9])'
+
+function Get-SkillInvocationTokenMatch {
+    param(
+        [Parameter(Mandatory = $true)][string] $Text,
+        [Parameter(Mandatory = $true)][regex] $TokenPattern
+    )
+
+    $match = $TokenPattern.Match($Text)
+    while ($match.Success) {
+        $prefix = $match.Value.Substring(1)
+        $suffixIndex = $match.Index + $match.Length
+        $hasVariableScopeSuffix = $script:VariableScopePrefixes -ccontains $prefix -and
+            $suffixIndex + 1 -lt $Text.Length -and
+            $Text[$suffixIndex] -ceq ':' -and
+            (($Text[$suffixIndex + 1] -cge 'A' -and $Text[$suffixIndex + 1] -cle 'Z') -or
+             ($Text[$suffixIndex + 1] -cge 'a' -and $Text[$suffixIndex + 1] -cle 'z') -or
+             $Text[$suffixIndex + 1] -ceq '_')
+        if (-not $hasVariableScopeSuffix) { return $match }
+        $match = $match.NextMatch()
+    }
+    return $null
+}
+
+function ConvertTo-MarkdownInvocationScanText {
+    param(
+        [Parameter(Mandatory = $true)][string] $Text,
+        [Parameter(Mandatory = $true)][string] $RelativePath,
+        [Parameter(Mandatory = $true)][string] $SkillId
+    )
+
+    $document = [Markdig.Markdown]::Parse($Text, $script:MarkdownPipeline)
+    $sourceLines = $Text.Split([char]"`n")
+    foreach ($node in [Markdig.Syntax.MarkdownObjectExtensions]::Descendants($document)) {
+        if ($node -isnot [Markdig.Syntax.FencedCodeBlock]) { continue }
+        $language = ([string]$node.Info).ToLowerInvariant()
+        if ($language -cnotin $script:UnscannedFenceLanguages) { continue }
+        if ($node.ClosingFencedCharCount -eq 0) {
+            throw ("Skill '{0}' file '{1}' has an unclosed code fence." -f $SkillId, $RelativePath)
+        }
+
+        $openingLine = [int]$node.Line
+        $closingLine = $openingLine + [int]$node.Lines.Count + 1
+        if ($openingLine -lt 0 -or $openingLine -ge $sourceLines.Count -or
+            $closingLine -le $openingLine -or $closingLine -ge $sourceLines.Count) {
+            throw ("Skill '{0}' file '{1}' has an invalid fence line mapping." -f $SkillId, $RelativePath)
+        }
+
+        $previousLine = $openingLine
+        for ($lineIndex = 0; $lineIndex -lt $node.Lines.Count; $lineIndex++) {
+            $stringLine = $node.Lines.Lines[$lineIndex]
+            $sourceLineNumber = [int]$stringLine.Line
+            if ($sourceLineNumber -lt 0 -or $sourceLineNumber -ge $sourceLines.Count -or
+                $sourceLineNumber -le $previousLine -or $sourceLineNumber -le $openingLine -or
+                $sourceLineNumber -ge $closingLine) {
+                throw ("Skill '{0}' file '{1}' has an invalid fence line mapping." -f $SkillId, $RelativePath)
+            }
+
+            $originalLine = $sourceLines[$sourceLineNumber]
+            $hasCarriageReturn = $originalLine.EndsWith("`r", [StringComparison]::Ordinal)
+            $source = if ($hasCarriageReturn) {
+                $originalLine.Substring(0, $originalLine.Length - 1)
+            }
+            else {
+                $originalLine
+            }
+            $content = $stringLine.Slice.ToString()
+            $core = $content.TrimStart([char[]]@(' ', "`t"))
+            if (-not $source.EndsWith($core, [StringComparison]::Ordinal)) {
+                throw ("Skill '{0}' file '{1}' has an invalid fence line mapping." -f $SkillId, $RelativePath)
+            }
+
+            $prefix = $source.Substring(0, $source.Length - $core.Length)
+            foreach ($prefixCharacter in $prefix.ToCharArray()) {
+                if ($prefixCharacter -cne '>' -and $prefixCharacter -cne ' ' -and $prefixCharacter -cne "`t") {
+                    throw ("Skill '{0}' file '{1}' has an invalid fence line mapping." -f $SkillId, $RelativePath)
+                }
+            }
+
+            $maskedLine = ' ' * $source.Length
+            if ($hasCarriageReturn) { $maskedLine += "`r" }
+            $sourceLines[$sourceLineNumber] = $maskedLine
+            $previousLine = $sourceLineNumber
+        }
+    }
+    return $sourceLines -join "`n"
+}
+
+function Assert-NoJsonSkillInvocationToken {
+    param(
+        [Parameter(Mandatory = $true)][System.Text.Json.JsonElement] $Element,
+        [Parameter(Mandatory = $true)][string] $RelativePath,
+        [Parameter(Mandatory = $true)][string] $SkillId,
+        [Parameter(Mandatory = $true)][regex] $TokenPattern
+    )
+
+    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        foreach ($property in $Element.EnumerateObject()) {
+            if ($property.Name -cnotin $script:JsonSchemaReservedKeys) {
+                $match = Get-SkillInvocationTokenMatch -Text $property.Name -TokenPattern $TokenPattern
+                if ($null -ne $match) {
+                    throw ("Skill '{0}' file '{1}' contains host-specific invocation token '{2}'; only agents/openai.yaml may use it." -f $SkillId, $RelativePath, $match.Value)
+                }
+            }
+            Assert-NoJsonSkillInvocationToken -Element $property.Value -RelativePath $RelativePath -SkillId $SkillId -TokenPattern $TokenPattern
+        }
+    }
+    elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        foreach ($item in $Element.EnumerateArray()) {
+            Assert-NoJsonSkillInvocationToken -Element $item -RelativePath $RelativePath -SkillId $SkillId -TokenPattern $TokenPattern
+        }
+    }
+    elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::String) {
+        $match = Get-SkillInvocationTokenMatch -Text $Element.GetString() -TokenPattern $TokenPattern
+        if ($null -ne $match) {
+            throw ("Skill '{0}' file '{1}' contains host-specific invocation token '{2}'; only agents/openai.yaml may use it." -f $SkillId, $RelativePath, $match.Value)
+        }
+    }
+}
+
+function Assert-NoSkillInvocationToken {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $RelativePath,
+        [Parameter(Mandatory = $true)][string] $SkillId,
+        [Parameter(Mandatory = $true)][regex] $TokenPattern
+    )
+
+    $extension = [IO.Path]::GetExtension($Path).ToLowerInvariant()
+    if ($extension -cin $script:BinaryReferenceExtensions) { return }
+    $isMarkdown = $extension -cin $script:MarkdownReferenceExtensions
+    $isProgram = $extension -cin $script:ProgramReferenceExtensions
+    $isOtherText = $extension -cin $script:OtherTextReferenceExtensions
+    if (-not $isMarkdown -and -not $isProgram -and -not $isOtherText) {
+        throw ("Skill '{0}' file '{1}' is not covered by the reference file classification in scripts/Test-SkillGeneral.ps1." -f $SkillId, $RelativePath)
+    }
+    try {
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString([IO.File]::ReadAllBytes($Path))
+    }
+    catch [Text.DecoderFallbackException] {
+        throw ("Skill '{0}' instruction file '{1}' must be valid UTF-8." -f $SkillId, $RelativePath)
+    }
+    if ($isProgram) { return }
+    if ($extension -ceq '.json') {
+        try {
+            $document = [System.Text.Json.JsonDocument]::Parse($text)
+        }
+        catch [System.Text.Json.JsonException] {
+            throw ("Skill '{0}' instruction file '{1}' must be valid JSON: {2}" -f $SkillId, $RelativePath, $_.Exception.Message)
+        }
+        try {
+            Assert-NoJsonSkillInvocationToken -Element $document.RootElement -RelativePath $RelativePath -SkillId $SkillId -TokenPattern $TokenPattern
+        }
+        finally {
+            $document.Dispose()
+        }
+        return
+    }
+
+    $scanText = $text
+    if ($isMarkdown) {
+        $scanText = ConvertTo-MarkdownInvocationScanText -Text $text -RelativePath $RelativePath -SkillId $SkillId
+    }
+
+    $match = Get-SkillInvocationTokenMatch -Text $scanText -TokenPattern $TokenPattern
+    if ($null -ne $match) {
+        throw ("Skill '{0}' file '{1}' contains host-specific invocation token '{2}'; only agents/openai.yaml may use it." -f $SkillId, $RelativePath, $match.Value)
+    }
 }
 
 function Read-OpenAiMetadata {
@@ -516,6 +727,10 @@ if (($actualSkillIds -join "`n") -cne ($skillIds -join "`n")) {
     throw 'catalog/source.json inventory does not exactly match skills/ directories.'
 }
 
+$skillTokenPattern = [regex]::new(
+    $script:SkillInvocationTokenPattern,
+    [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+
 $packages = @()
 foreach ($skillId in $skillIds) {
     $skillRoot = Join-Path $skillsRoot $skillId
@@ -526,7 +741,16 @@ foreach ($skillId in $skillIds) {
     }
     [void](Read-SkillFrontmatter -Path $skillFile -ExpectedSkillId $skillId)
     [void](Read-OpenAiMetadata -Path $metadataFile -ExpectedSkillId $skillId)
+    # Inventory first: it rejects reparse points and non-regular entries before any reference text is read.
     $packages += Get-ContentInventory -RepositoryRoot $repoRoot -SkillId $skillId -ReadOnlySnapshot:$ReadOnlySnapshot
+    Assert-NoSkillInvocationToken -Path $skillFile -RelativePath 'SKILL.md' -SkillId $skillId -TokenPattern $skillTokenPattern
+    $referencesRoot = Join-Path $skillRoot 'references'
+    if (Test-Path -LiteralPath $referencesRoot -PathType Container) {
+        foreach ($referenceFile in @(Get-ChildItem -LiteralPath $referencesRoot -File -Recurse -Force)) {
+            $referenceRelative = [IO.Path]::GetRelativePath($skillRoot, $referenceFile.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/')
+            Assert-NoSkillInvocationToken -Path $referenceFile.FullName -RelativePath $referenceRelative -SkillId $skillId -TokenPattern $skillTokenPattern
+        }
+    }
 }
 
 $result = [pscustomobject][ordered]@{

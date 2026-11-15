@@ -1,8 +1,6 @@
 <!-- SPDX-FileCopyrightText: 2026 SyuanTsai; SPDX-License-Identifier: Apache-2.0 -->
 # Acceptance evidence
 
-Run local acceptance preparation and execution only on Windows; CI also runs only on Windows. The remote Azure SQL service's operating system is outside this local-host restriction.
-
 ## First-stage package acceptance
 
 Record exact source/authority revisions, candidate content inventory/hashes, actual tool versions, real commands, target kind, exit codes and reports. Verify discriminating routing, all required references, canonical source inventory and self-contained resource paths. Run the strict authorization/request/response diagnostics against positive synthetic envelopes and negative override, unknown-version, duplicate/case-colliding field, raw write, purpose mismatch, parameter binding, environment matrix, dependency and uncertainty cases. A valid envelope proves shape/consistency only.
@@ -15,6 +13,6 @@ Follow central source validation and review/release requirements. In the explici
 
 Additionally exercise every operation/environment combination in the real service: DEV SELECT/UPDATE/DELETE, UAT SELECT/UPDATE and deny DELETE, PRD SELECT and deny all writes, with all unlisted operations denied everywhere. PRD access requires its own explicit read authorization; first prove write denial offline/DEV. Use recoverable DEV data and a verified restoration plan for write scenarios.
 
-Windows identity/ACL and token isolation require actual low-privilege peer tests; mocks or separate working directories under the same user are insufficient. Entra/MFA/token renewal, current DB principal/target, transaction rollback, triggers/cascades, real cancellation/output limits and no per-call approval require deployed-runtime/DB evidence. No DB role/account/GRANT/REVOKE, company Entra policy change or PRD write is authorized by this package.
+The planned execution service's Windows identity/ACL and token isolation require actual low-privilege peer tests (see the known limitation in [workflow](workflow.md)); mocks or separate working directories under the same user are insufficient. Entra/MFA/token renewal, current DB principal/target, transaction rollback, triggers/cascades, real cancellation/output limits and no per-call approval require deployed-runtime/DB evidence. No DB role/account/GRANT/REVOKE, company Entra policy change or PRD write is authorized by this package.
 
 For each real runtime case retain command, host identity, actual DB target type, program/policy/contract revision, sanitized audit reference, result and remaining uncertainty. Never put Tokens, passwords, sensitive rows or full credential-bearing connection strings in evidence.

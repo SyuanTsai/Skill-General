@@ -1,15 +1,9 @@
 ---
 name: review-agent-skills
-description: Windows-only Skill. Review Agent Skill packages for routing, instruction quality, resource organization, tool and safety boundaries, testability, and maintainability. Use for SKILL.md or Skill repository reviews; not ordinary application-code review.
+description: Review Agent Skill packages for routing, instruction quality, resource organization, tool and safety boundaries, testability, and maintainability. Use for SKILL.md or Skill repository reviews; not ordinary application-code review.
 ---
-<!--
-SPDX-FileCopyrightText: 2026 SyuanTsai
-SPDX-License-Identifier: Apache-2.0
--->
 
 # Review Agent Skills
-
-Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
 
 Review the requested Skill package against its repository instructions, current diff, and direct dependencies. Preserve the requested scope and do not publish comments or change files unless the user asks.
 

@@ -48,6 +48,30 @@ Describe 'manage-task-handoff Skill contract' {
         $script:Contract.memoryTargetSelection.coreSelectsStorageSourceOrProvider | Should -BeFalse
     }
 
+    It 'ContractT12_separates_private_and_work_targets_before_any_caller_delegated_external_IO' {
+        $skillText = Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')
+        $skillText | Should -Match 'first load \[environment separation\]\(references/environment-separation\.md\)'
+        $skillText | Should -Match 'Before any caller-delegated external target or source I/O, both reads and writes, first load'
+        $skillText | Should -Match 'regardless of provider'
+        $skillText | Should -Match 'pure record core performs no I/O and does not require this reference for caller-supplied data alone'
+        $skillText | Should -Not -Match 'When a Notion or Jira target is involved'
+        $skillText | Should -Not -Match 'first URL or site, then issue-key prefix|write or move data across environments'
+        $referenceText=Get-Content -Raw (Join-Path $script:Skill 'references/environment-separation.md')
+        $referenceText | Should -Match 'before any external record, file, or source access, both reads and writes, for every provider'
+        $referenceText | Should -Match 'includes targets other than Notion or Jira'
+        $referenceText | Should -Match 'Notion sites and Jira sites, tenants, projects, and issue-key prefixes'
+        $referenceText | Should -Match 'URL or site, issue-key prefix, repository configuration, then the user''s explicit selection'
+        $referenceText | Should -Match 'user-local configuration outside the repository'
+        $referenceText | Should -Match 'environment remains unknown or any signals conflict, stop and ask'
+        $referenceText | Should -Match 'If a work request selects a private target or a private request selects a work target, stop before any access'
+        $referenceText | Should -Match 'Before every access, verify that the selected target, its site or tenant when applicable, and every applicable project belong to the resolved environment'
+        $referenceText | Should -Match 'If the target, site or tenant, or any applicable project does not match, stop before access'
+        $referenceText | Should -Match 'never switch or fall back to another connection method automatically'
+        $referenceText | Should -Match 'Never read, write, copy, or move data across environments'
+        $referenceText | Should -Match 'write preview must identify both the resolved environment and the selected target, including its site when applicable'
+        $referenceText | Should -Not -Match '(?i)https?://[^\s)`]+|[a-z0-9-]+\.atlassian\.net'
+    }
+
     # Contract decision-table test only: interpret structured cases without connectors or E2E calls.
     It 'ContractT80_storage_selection_decision_table' {
         $selectionContract = $script:Contract.storageSelection
@@ -637,7 +661,11 @@ Describe 'manage-task-handoff Skill contract' {
         @($script:Contract.security.excludedContent) | Should -Contain 'secrets'
         $yaml = Get-Content -Raw (Join-Path $script:Skill 'agents/openai.yaml')
         $yaml | Should -Match '\$manage-task-handoff'
+        $yaml | Should -Match 'short_description: "Interruption-safe task Handoff continuity"'
+        $yaml | Should -Not -Match '(?i)windows-only|on windows'
         $yaml | Should -Not -Match '(?m)^\s*value:\s*"(?:notion|jira|github)"\s*$'
+        $skillText = Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')
+        $skillText | Should -Not -Match '(?i)windows-only|windows is the only|beyond windows|\$manage-task-handoff\b'
     }
 
     # Scenario: A connector returns the same complete legacy change set in different query or page order.

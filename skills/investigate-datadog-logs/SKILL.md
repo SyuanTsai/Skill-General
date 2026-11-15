@@ -1,17 +1,13 @@
 ---
 name: investigate-datadog-logs
-description: Windows-only Skill. Investigate Datadog error logs/APM through a configured connector. Use when given Logs Explorer, trace, or investigation-widget URLs; to analyze logs/spans or correlated patterns and trends. Not solely for incident records, dashboards, or notebooks.
+description: Investigate Datadog error logs/APM through a configured connector. Use when given Logs Explorer, trace, or investigation-widget URLs; to analyze logs/spans or correlated patterns and trends. Not solely for incident records, dashboards, or notebooks.
 ---
-<!--
-SPDX-FileCopyrightText: 2026 SyuanTsai
-SPDX-License-Identifier: Apache-2.0
--->
 
 # Investigate Datadog Logs
 
-Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
-
 ## Prepare
+
+This Skill applies only to a work environment. Before accessing Datadog, confirm that the selected site belongs to that environment; stop and ask if the request indicates a private environment or if environment signals conflict. Use the connection method configured for the work environment.
 
 1. Use the configured Datadog connector before any general-purpose Browser tool.
 2. If the exact guide name is not already known from the current turn, list Datadog guides before loading one; do not guess its name.
@@ -31,7 +27,7 @@ Apply time ranges in this order:
 
 1. Use an explicit user, URL, or incident time range unchanged.
 2. Otherwise start at `now-4h` and end at `now`. This default covers the typical three-to-four-hour delay between a problem and its report; disclose that it was applied.
-3. Shorten that range only when the query times out or its volume is too large, and report the narrower range and reason.
+3. Shorten that range, or narrow the grouping, only when the query times out or its volume is too large, and report the narrower scope and reason.
 
 Ask only when an ambiguous absolute time or timezone would materially change the result.
 
@@ -40,7 +36,7 @@ Ask only when an ambiguous absolute time or timezone would materially change the
 - For a transparent Logs Explorer URL, extract supported query, time, index, storage, and timezone state and pass those values to the connector. Ignore presentation-only state.
 - For a trace URL, extract and validate the trace ID, then retrieve the trace. Use explicit URL time or observed trace timestamps for related log searches.
 - For a supported widget, share, or focused-dashboard URL used in the investigation, load the visualization guide and pass the exact `widget_url` to the widget tool.
-- For an opaque non-widget short link or session-only UI state, try no invented translation. Fall back to a Browser only if the connector cannot resolve the required state.
+- For an opaque non-widget short link or session-only UI state, try no invented translation. Follow [Fallback and Report](#fallback-and-report).
 
 A Datadog URL does not by itself require web UI operation and does not switch the connector to another organization. Do not substitute a different site or dataset when a mismatch is known.
 
@@ -48,7 +44,7 @@ A Datadog URL does not by itself require web UI operation and does not switch th
 
 - Use raw log search for individual events, exact messages, stack traces, request or correlation IDs, and small samples.
 - Use log patterns when many similar entries need clustering; group only by supplied or discovered fields.
-- Use raw log search with `extra_fields` to discover attributes or tags before referencing unknown fields in analysis. Translate discovered field names according to the logs guide.
+- Use raw log search with `extra_fields`, or raw span search for spans, to discover attributes or tags before referencing unknown fields in analysis; never invent attribute names. Translate discovered field names according to the logs guide.
 - Use log analysis with DDSQL for counts, trends, distributions, group-by analysis, and top values. Follow the analysis tool's schema when generic DDSQL examples differ.
 - Use raw span search for individual failing or slow spans and attribute discovery.
 - Use span aggregation for APM counts, percentiles, trends, and grouping.
@@ -58,18 +54,7 @@ When correlating logs and traces, retain the same semantic time and identifiers 
 
 ## Example
 
-```text
-User request:
-"Using this Logs Explorer URL, find the top error patterns during its encoded time range and correlate one sample with its trace."
-
-Expected workflow:
-1. Preserve the URL query, indexes, timezone, and time range.
-2. Load the logs and DDSQL guides, then run pattern or grouped analysis.
-3. Retrieve one representative event and its related trace using translated trace filters.
-4. Report observed evidence, inference, uncertainty, and the exact effective scope.
-```
-
-Example evidence summary:
+Evidence summary format:
 
 ```text
 Scope: 2026-08-19 01:00–02:00 UTC
@@ -79,17 +64,9 @@ Trace sample: request latency dominated by dependency span
 Inference: dependency latency is the leading candidate, not yet proven root cause
 ```
 
-## Error Handling
-
-- If a connector query times out or returns excessive volume, narrow only the time range or grouping necessary to make the request tractable and disclose the changed scope.
-- If a required field is unknown, discover it from raw events or spans before using it in grouped analysis; do not invent attribute names.
-- If a URL contains opaque state the connector cannot resolve, use a Browser only when an authorized session can expose the required state and preserve the original query scope.
-- If the connector is unavailable or unauthorized, state that limitation before using an approved fallback.
-- If neither the connector nor an authorized fallback can access the requested telemetry, report the missing capability or access instead of inventing results.
-
 ## Fallback and Report
 
-Use a Browser only when the connector is unavailable, unauthorized, cannot perform the required operation, cannot resolve necessary opaque URL state, or the user explicitly requests UI interaction. State the connector limitation before falling back and preserve the original scope in an existing authorized session.
+Use a Browser only when the work-environment configuration explicitly permits Browser access and a fresh check confirms that the Browser session's site belongs to that same environment. Connector unavailability, missing authorization, an unsupported operation, unresolved opaque URL state, or a request for UI interaction does not waive either check. When either check cannot be completed, stop and report the connector limitation or missing authorization without switching connection methods. When both checks pass, state the connector limitation before using the authorized Browser session and preserve the original scope.
 
 If neither path can access the requested scope, report the missing access or capability instead of inventing results.
 

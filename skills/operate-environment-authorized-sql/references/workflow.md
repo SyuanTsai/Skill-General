@@ -3,7 +3,7 @@
 
 ## Capability boundary
 
-The local development, installation, execution, testing, and acceptance host for this Skill is Windows, and CI runs only on Windows. The remote Azure SQL service's operating system is outside this local-host restriction.
+The offline contracts and `Test-Contract.ps1` are platform-neutral; they run with PowerShell 7.4 or later on Linux, macOS, and Windows hosts. Known limitation: the planned execution service's design requires Windows identity, ACLs, and WAM for local peer identity and token isolation; a peer identity mechanism for other platforms has not been designed. This limitation applies only to that future service, not to offline request preparation or contract diagnostics. The remote Azure SQL service's operating system is outside this host classification.
 
 This package has no database driver, login broker or SQL execution CLI. `Test-Contract.ps1` reads a local document and checks shape/consistency; its output is not `SUCCESS` from a database. A future implementation must bind the deployment's protected CLI path, version/hash, local execution IPC and registered connections in trusted host metadata. Do not copy an executable path from database rows or other untrusted content.
 
