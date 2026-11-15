@@ -831,7 +831,7 @@ Describe 'Skill-General repository contract' {
     # Purpose: reject Skill host restrictions and tokens, and preserve the exact documented validation scope.
     It 'keeps canonical Skill text free of host-restriction declarations and invocation tokens' {
         $restriction = '(?i)windows-only|only (supported )?on windows|only supported host|windows is the only|beyond windows|on windows|host .* is windows'
-        { & $script:ValidatorPath -RepositoryRoot $script:RepositoryRoot } | Should -Not -Throw
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
         $platformAssignments = @($script:ValidatorAst.FindAll({ param($node)
             $node -is [Management.Automation.Language.AssignmentStatementAst] -and
             $node.Left.Extent.Text -ceq '$script:PlatformRestrictedDescriptionPattern'
