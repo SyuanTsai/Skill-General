@@ -22,7 +22,7 @@ SPDX-License-Identifier: Apache-2.0
 | `manage-ai-memory` | Find, create, update and recall AI memory through the adopter's connected record and file targets |
 | `review-agent-skills` | Review Agent Skill packages for routing, instruction quality, safety boundaries, testability and maintainability |
 
-All Skills run on a Windows host.
+The Skills are platform-neutral and target Windows, Linux, and macOS hosts. CI currently uses a single Windows runner; a three-platform matrix will be introduced by a later change.
 
 **In practice:** an AI-assisted Datadog log and APM workflow built on these Skills has cut my production issue investigation time by at least half.
 
@@ -46,7 +46,7 @@ Installed and version-pinned through [SyuanTsai-AI-Instructions](https://github.
 | `manage-ai-memory` | 透過採用端連接的紀錄與檔案目標，查詢、建立、更新與回想 AI 記憶 |
 | `review-agent-skills` | 審查 Agent Skill 套件的路由、指令品質、安全邊界、可測試性與可維護性 |
 
-所有 Skills 都在 Windows 主機上執行。
+Skills 內容與平台無關，目標主機為 Windows、Linux 與 macOS。CI 目前在 Windows 執行；三平台 matrix 由後續變更導入。
 
 **實際效果：** 以這些 Skills 建立的 AI 輔助 Datadog 日誌與 APM 調查流程，讓我調查正式環境問題的時間至少減少一半。
 
@@ -99,13 +99,13 @@ tests/
 | `verify-data-access-performance` | Query-count and data-access performance verification |
 | `investigate-datadog-logs` | Datadog log and APM investigation |
 | `manage-ai-memory` | Durable record and file memory through adopter-selected connected targets |
-| `manage-task-handoff` | Task Handoff records and peer branches (Windows-only local host) |
+| `manage-task-handoff` | Task Handoff records and peer branches |
 | `operate-environment-authorized-sql` | Controlled Azure SQL workflows and v1 offline contracts; execution runtime remains separate |
 | `review-agent-skills` | Agent Skill package review |
 
-Windows is the only supported host for local development, installation, execution, testing, and acceptance. Windows is also the only supported CI host. Operating systems used by external SaaS and remote services are outside this local-host restriction.
+The Skill content targets Windows, Linux, and macOS hosts. The repository validation toolchain and CI currently run on Windows; cross-platform validation will be introduced by a later change. A Skill that depends on a platform-specific external tool documents that dependency and its scope in its own instructions or references; for example, the planned execution service behind `operate-environment-authorized-sql` currently has a peer identity design that requires Windows.
 
-`manage-task-handoff` retains a provider/storage-neutral core: it receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. Provider/storage neutrality does not expand local host support beyond Windows. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
+`manage-task-handoff` retains a provider/storage-neutral core: it receives, validates and returns caller-supplied records and proposed field-change intents without selecting storage, calling a connector, or claiming durable persistence. For explicitly delegated source I/O, a clear current user choice takes precedence over an older setting; otherwise the caller reuses one unambiguous trusted host or project setting, and asks only when the destination or scope is unclear. Trusted caller or adopter configuration binds the target to its source. The selected source owns authorization, persistence, conditional updates and operation-ID idempotency, opaque revisions, conflict handling, merging, retries, and readback; a matching readback is source-reported evidence, while Core `Durable` remains false. Git-ref Handoff storage is retired and explicitly unsupported without source I/O or fallback; existing Git data remains untouched. The package retains exact legacy Notion read-only continuation under its original authorization. No provider or local backend is mandatory for core recording.
 
 ## Canonical validation
 

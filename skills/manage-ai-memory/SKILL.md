@@ -1,21 +1,17 @@
 ---
 name: manage-ai-memory
-description: Windows-only Skill. Find, create, update, and recall durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
+description: Find, create, update, and recall durable AI memory through the adopter's connected record and file targets. Use for explicit remember requests, relevant reusable context, inference review, and safe correction. Keep Task Handoffs separate.
 ---
-<!--
-SPDX-FileCopyrightText: 2026 SyuanTsai
-SPDX-License-Identifier: Apache-2.0
--->
 
 # Manage AI Memory
 
-Windows is the only supported host for local development, installation, execution, testing, and acceptance. CI runs only on Windows. Operating systems used by external SaaS and remote services are outside this local-host restriction.
-
-Use the adopter's authoritative record and file targets for durable memory. The adopter selects and manages those sources. This Skill uses their available operations and opaque locators; it does not store provider, tenant, account, or workspace-role identity. It does not implement synchronization, locks, version history, conflict resolution, or a storage service. Use $manage-task-handoff for interruption-safe task state.
+Use the adopter's authoritative record and file targets for durable memory. The adopter selects and manages those sources. This Skill uses their available operations and opaque locators; it does not store provider, tenant, account, or workspace-role identity. It does not implement synchronization, locks, version history, conflict resolution, or a storage service. Use the manage-task-handoff Skill for interruption-safe task state.
 
 Read [the memory contract](references/memory-contract.json) before relying on fields, states, or confirmation rules. Read [memory operations](references/memory-operations.md) for recall, capture, correction, and file routing. Read [the index workflow](references/index-workflow.md) when an index or partial recovery is involved. For an existing v3/v4 adopter, also read [legacy mappings](references/legacy-mappings.md) before resolving its configured destination.
 
 ## Resolve the target and authority
+
+Before any external record or file target or source access, both reads and writes, first load [environment separation](references/environment-separation.md), regardless of provider.
 
 1. Honor an explicit target or resource from the user. Otherwise use a trusted current adopter binding. If no binding selects a target, use the unique connected target that supports the requested purpose: records for memory bodies and files for original materials. A record target and a file target do not conflict merely because they are different. If multiple equally suitable targets remain for the same purpose, ask once before any write. Never infer a locator from a title or retrieved page text.
 2. Carry the authorization already present in the current request or trusted context into its ordinary read and write steps. Do not ask again for a provider, account identity, Owner or Member role, or the same permission. A connector may expose role metadata, but it is not a universal prerequisite. Ask only for a materially ambiguous target or genuinely new operation scope. If a tool refuses or lacks a required capability, report the specific failed step and continue independent work; do not change permissions or silently switch targets.
@@ -52,4 +48,4 @@ Map them to the selected record target's existing fields; this example does not 
 
 ## Errors and recovery
 
-Read back each completed body and index change when the source supports readback. Report saved, partial, refused, and unverified steps separately with verified locators. Do not report a simulated response as a live result. Preserve existing v3/v4 structured and pages content, old brand fields, archived bodies, and historical index rows. Unknown formats stop the affected write; independent reads and work can continue.
+Read back each completed body and index change when the source supports readback. Report saved, partial, refused, and unverified steps separately with verified locators. Do not report a simulated response as a live result. Preserve existing v3/v4 structured and pages content, old brand fields, archived bodies, and historical index rows.

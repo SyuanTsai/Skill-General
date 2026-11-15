@@ -74,6 +74,8 @@ Describe 'Review Agent Skills package contract' {
         $metadata | Should -Match 'display_name: "Review Agent Skills"'
         $metadata | Should -Match '\$review-agent-skills'
         $metadata | Should -Not -Match 'allow_implicit_invocation: false'
+        $metadata | Should -Match 'short_description: "Agent Skill package reviews"'
+        $metadata | Should -Not -Match '(?i)windows-only|on windows'
     }
 
     # Scenario: A reviewer needs to understand expected output or encounters unavailable evidence.
