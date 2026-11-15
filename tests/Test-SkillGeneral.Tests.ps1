@@ -490,7 +490,7 @@ Describe 'Skill-General repository contract' {
         $actualFingerprint = [BitConverter]::ToString($fingerprintBytes).Replace('-', '').ToLowerInvariant()
         # This fingerprint is a change warning, not a semantic guarantee: it blocks substantive edits for review,
         # while the production-path 43-case matrix verifies semantics; an unchanged fingerprint does not prove correctness.
-        $expectedFingerprint = 'e52b8689ae795dd67970aaef9002089eb340a7faaf77c15c80642457897219cd'
+        $expectedFingerprint = '925d873cea114d5bd432d1a0b7c66580727ea75afbb15c65c777bf6a577fff9d'
         $fingerprintReason = 'Actual: {0}; expected: {1}. 函式有變更時，請重新審查遮蔽規則（只以原文行號遮蔽，並保留一致性斷言），再更新指紋。' -f $actualFingerprint, $expectedFingerprint
         $actualFingerprint | Should -BeExactly $expectedFingerprint -Because $fingerprintReason
     }
@@ -742,6 +742,46 @@ Describe 'Skill-General repository contract' {
         if ($LASTEXITCODE -ne 0) { throw 'Could not stage the reserved JSON string value fixture.' }
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
             Should -Throw "*'references/reserved-token-value.json' contains host-specific invocation token '`$schema'*"
+    }
+
+    It 'accepts empty strings in JSON reference values' {
+        $relativePath = 'skills/manage-ai-memory/references/empty-values.json'
+        $referencePath = Join-Path $fixtureRoot $relativePath
+        [IO.File]::WriteAllText($referencePath, '{"default":"","examples":[""]}', [Text.UTF8Encoding]::new($false))
+        & $script:GitPath -C $fixtureRoot add -- $relativePath
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty JSON value fixture.' }
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
+    }
+
+    It 'accepts an empty JSON property name' {
+        $relativePath = 'skills/manage-ai-memory/references/empty-property-name.json'
+        $referencePath = Join-Path $fixtureRoot $relativePath
+        [IO.File]::WriteAllText($referencePath, '{"":"plain"}', [Text.UTF8Encoding]::new($false))
+        & $script:GitPath -C $fixtureRoot add -- $relativePath
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty JSON property name fixture.' }
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
+    }
+
+    It 'accepts an empty classified text reference: <Extension>' -ForEach @(
+        @{ Extension = '.md' }
+        @{ Extension = '.txt' }
+    ) {
+        $relativePath = 'skills/manage-ai-memory/references/empty' + $Extension
+        $referencePath = Join-Path $fixtureRoot $relativePath
+        [IO.File]::WriteAllBytes($referencePath, [byte[]]@())
+        & $script:GitPath -C $fixtureRoot add -- $relativePath
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty classified text reference fixture.' }
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
+    }
+
+    It 'still rejects an invocation token beside empty JSON values' {
+        $relativePath = 'skills/manage-ai-memory/references/empty-values-with-token.json'
+        $referencePath = Join-Path $fixtureRoot $relativePath
+        [IO.File]::WriteAllText($referencePath, '{"default":"","examples":[""],"x":"Use $work-with-jira."}', [Text.UTF8Encoding]::new($false))
+        & $script:GitPath -C $fixtureRoot add -- $relativePath
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty JSON values with token fixture.' }
+        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+            Should -Throw "*'references/empty-values-with-token.json' contains host-specific invocation token '`$work-with-jira'*"
     }
 
     It 'rejects invalid JSON syntax' {

@@ -259,7 +259,7 @@ $script:SkillInvocationTokenPattern = '(?<![A-Za-z0-9_$\x5C])\$[a-z0-9]+(?:-[a-z
 
 function Get-SkillInvocationTokenMatch {
     param(
-        [Parameter(Mandatory = $true)][string] $Text,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Text,
         [Parameter(Mandatory = $true)][regex] $TokenPattern
     )
 
@@ -281,7 +281,7 @@ function Get-SkillInvocationTokenMatch {
 
 function ConvertTo-MarkdownInvocationScanText {
     param(
-        [Parameter(Mandatory = $true)][string] $Text,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Text,
         [Parameter(Mandatory = $true)][string] $RelativePath,
         [Parameter(Mandatory = $true)][string] $SkillId
     )

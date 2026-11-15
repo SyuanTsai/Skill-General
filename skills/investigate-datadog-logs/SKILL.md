@@ -64,6 +64,22 @@ Trace sample: request latency dominated by dependency span
 Inference: dependency latency is the leading candidate, not yet proven root cause
 ```
 
+## Error Handling
+
+- If a query times out or returns too much data, narrow only the necessary time range or grouping as specified in [Establish Scope](#establish-scope), then disclose the narrower scope and reason.
+- If a query needs an unknown field, inspect raw events or spans first as specified in [Choose the Data Path](#choose-the-data-path); never invent an attribute name.
+- If opaque URL state cannot be resolved, do not translate it by guesswork. Apply both Browser checks in [Fallback and Report](#fallback-and-report).
+- If the connector is unavailable, unauthorized, or lacks a required operation, report that limitation. Browser use remains subject to both checks in [Fallback and Report](#fallback-and-report).
+- If the requested data cannot be obtained, identify the missing capability or permission and do not fabricate results.
+
+Failure report format:
+
+```text
+Unavailable: requested telemetry scope
+Reason: missing connector authorization or capability
+Result: no data obtained; no findings inferred
+```
+
 ## Fallback and Report
 
 Use a Browser only when the work-environment configuration explicitly permits Browser access and a fresh check confirms that the Browser session's site belongs to that same environment. Connector unavailability, missing authorization, an unsupported operation, unresolved opaque URL state, or a request for UI interaction does not waive either check. When either check cannot be completed, stop and report the connector limitation or missing authorization without switching connection methods. When both checks pass, state the connector limitation before using the authorized Browser session and preserve the original scope.
