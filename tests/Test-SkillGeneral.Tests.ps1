@@ -28,17 +28,25 @@ Describe 'Skill-General repository contract' {
             if ($assignments.Count -ne 1) { throw "Expected one validator assignment for $leftText." }
             $script:ValidatorConstants[$constantName] = & ([scriptblock]::Create($assignments[0].Right.Extent.Text))
         }
+
+        $script:NewSkillGeneralTestFixture = {
+            param([string]$TestDrivePath)
+
+            $newFixtureRoot = Join-Path $TestDrivePath ([guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $newFixtureRoot | Out-Null
+            Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'catalog') -Destination $newFixtureRoot -Recurse
+            Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'config') -Destination $newFixtureRoot -Recurse
+            Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -Destination $newFixtureRoot -Recurse
+            & $script:GitPath -C $newFixtureRoot init --quiet
+            & $script:GitPath -C $newFixtureRoot add -- catalog/source.json skills
+            if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the repository contract fixture.' }
+
+            $newFixtureRoot
+        }
     }
 
     BeforeEach {
-        $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
-        Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'catalog') -Destination $fixtureRoot -Recurse
-        Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'config') -Destination $fixtureRoot -Recurse
-        Copy-Item -LiteralPath (Join-Path $script:RepositoryRoot 'skills') -Destination $fixtureRoot -Recurse
-        & $script:GitPath -C $fixtureRoot init --quiet
-        & $script:GitPath -C $fixtureRoot add -- catalog/source.json skills
-        if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the repository contract fixture.' }
+        $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
     }
 
     It 'accepts the current schema v2 inventory and canonical Skill packages' {
@@ -212,52 +220,74 @@ Describe 'Skill-General repository contract' {
 
     # Scenario: a SKILL.md description opens with a host restriction.
     # Purpose: Standard section 1 forbids platform-limited declarations at the start of a description.
-    It 'rejects a description that begins with a platform-restricted declaration: <Prefix>' -ForEach @(
-        @{ Prefix = 'Windows-only Skill. ' }
-        @{ Prefix = 'Linux-only Skill. ' }
-        @{ Prefix = 'macOS only. ' }
-        @{ Prefix = 'Only on Windows. ' }
-        @{ Prefix = 'Supported on Windows only. ' }
-        @{ Prefix = 'Requires Windows. ' }
-        @{ Prefix = 'Windows hosts only. Test. ' }
-        @{ Prefix = 'Only Windows is supported. Test. ' }
-        @{ Prefix = 'Linux only. ' }
-        @{ Prefix = 'Only Windows hosts are supported. ' }
-        @{ Prefix = 'Supported only on Windows. ' }
-        @{ Prefix = 'For Windows hosts only. ' }
-        @{ Prefix = 'Linux hosts only. ' }
-        @{ Prefix = 'Only macOS is supported. ' }
-        @{ Prefix = 'Only Unix hosts are supported. ' }
-        @{ Prefix = 'Supported only on WSL. ' }
-        @{ Prefix = 'For OS X hosts only. ' }
-        @{ Prefix = 'Requires a Windows host. ' }
-        @{ Prefix = 'Requires Linux to run. ' }
-        @{ Prefix = 'Requires an OS X execution host. ' }
-    ) {
-        $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
-        $skill = Get-Content -LiteralPath $skillPath -Raw
-        $skill = $skill -replace '(?m)^description: ', ('description: ' + $Prefix)
-        Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
+    It 'rejects platform-restricted description prefixes' {
+        $cases = @(
+            @{ Prefix = 'Windows-only Skill. ' }
+            @{ Prefix = 'Linux-only Skill. ' }
+            @{ Prefix = 'macOS only. ' }
+            @{ Prefix = 'Only on Windows. ' }
+            @{ Prefix = 'Supported on Windows only. ' }
+            @{ Prefix = 'Requires Windows. ' }
+            @{ Prefix = 'Windows hosts only. Test. ' }
+            @{ Prefix = 'Only Windows is supported. Test. ' }
+            @{ Prefix = 'Linux only. ' }
+            @{ Prefix = 'Only Windows hosts are supported. ' }
+            @{ Prefix = 'Supported only on Windows. ' }
+            @{ Prefix = 'For Windows hosts only. ' }
+            @{ Prefix = 'Linux hosts only. ' }
+            @{ Prefix = 'Only macOS is supported. ' }
+            @{ Prefix = 'Only Unix hosts are supported. ' }
+            @{ Prefix = 'Supported only on WSL. ' }
+            @{ Prefix = 'For OS X hosts only. ' }
+            @{ Prefix = 'Requires a Windows host. ' }
+            @{ Prefix = 'Requires Linux to run. ' }
+            @{ Prefix = 'Requires an OS X execution host. ' }
+        )
+        $cases.Count | Should -Be 20 -Because 'the platform-restricted description matrix has 20 reviewed rows'
 
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw '*must not begin with a platform-restricted declaration*'
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Prefix: {0}' -f $case.Prefix
+            $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
+            $skill = Get-Content -LiteralPath $skillPath -Raw
+            $skill = $skill -replace '(?m)^description: ', ('description: ' + $case.Prefix)
+            Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
+
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw '*must not begin with a platform-restricted declaration*' -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 20 -Because 'all 20 platform-restricted description rows must execute'
     }
 
     # Scenario: a description mentions platform-specific subject matter without limiting the host.
     # Purpose: the restriction check must not reject legitimate domain wording.
-    It 'accepts a description that names a platform without restricting the host: <Prefix>' -ForEach @(
-        @{ Prefix = 'Windows Event Log and Linux service changes are in scope. ' }
-        @{ Prefix = 'Requires Windows Event Log access from a remote source. ' }
-        @{ Prefix = 'Requires a Linux kernel crash dump to analyze offline. ' }
-    ) {
-        $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
-        $skill = Get-Content -LiteralPath $skillPath -Raw
-        $skill = $skill -replace '(?m)^description: ', ('description: ' + $Prefix)
-        Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
-        & $script:GitPath -C $fixtureRoot add -- skills/plan-production-change/SKILL.md
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the platform-neutral description fixture.' }
+    It 'accepts platform-naming description prefixes' {
+        $cases = @(
+            @{ Prefix = 'Windows Event Log and Linux service changes are in scope. ' }
+            @{ Prefix = 'Requires Windows Event Log access from a remote source. ' }
+            @{ Prefix = 'Requires a Linux kernel crash dump to analyze offline. ' }
+        )
+        $cases.Count | Should -Be 3 -Because 'the platform-naming description matrix has 3 reviewed rows'
 
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Prefix: {0}' -f $case.Prefix
+            $skillPath = Join-Path $fixtureRoot 'skills/plan-production-change/SKILL.md'
+            $skill = Get-Content -LiteralPath $skillPath -Raw
+            $skill = $skill -replace '(?m)^description: ', ('description: ' + $case.Prefix)
+            Set-Content -LiteralPath $skillPath -Value $skill -Encoding utf8NoBOM -NoNewline
+            & $script:GitPath -C $fixtureRoot add -- skills/plan-production-change/SKILL.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the platform-neutral description fixture.' }
+
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 3 -Because 'all 3 platform-naming description rows must execute'
     }
 
     It 'locks the fence, reference, JSON, and invocation constants to the reviewed contract' {
@@ -308,20 +338,31 @@ Describe 'Skill-General repository contract' {
 
     # Scenario: a shared SKILL.md uses one AI host's invocation syntax.
     # Purpose: Standard section 4.5 keeps the exact $<skill-id> token inside agents/openai.yaml only.
-    It 'rejects a host-specific Skill invocation token in SKILL.md: <Token>' -ForEach @(
-        @{ Token = '$manage-task-handoff' }
-        @{ Token = '$work-with-jira' }
-        @{ Token = '$configure-jira-api-access' }
-        @{ Token = '$pdf' }
-        @{ Token = '$value' }
-    ) {
-        $skillPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/SKILL.md'
-        Add-Content -LiteralPath $skillPath -Value ([Environment]::NewLine + 'Use ' + $Token + ' for task state.')
-        & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/SKILL.md
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the invocation token fixture.' }
+    It 'rejects SKILL.md invocation tokens' {
+        $cases = @(
+            @{ Token = '$manage-task-handoff' }
+            @{ Token = '$work-with-jira' }
+            @{ Token = '$configure-jira-api-access' }
+            @{ Token = '$pdf' }
+            @{ Token = '$value' }
+        )
+        $cases.Count | Should -Be 5 -Because 'the SKILL.md invocation token matrix has 5 reviewed rows'
 
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw ("*'SKILL.md' contains host-specific invocation token '{0}'*" -f $Token)
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Token: {0}' -f $case.Token
+            $skillPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/SKILL.md'
+            Add-Content -LiteralPath $skillPath -Value ([Environment]::NewLine + 'Use ' + $case.Token + ' for task state.')
+            & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/SKILL.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the invocation token fixture.' }
+
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw ("*'SKILL.md' contains host-specific invocation token '{0}'*" -f $case.Token) -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 5 -Because 'all 5 SKILL.md invocation token rows must execute'
     }
 
     # Scenario: a Skill reference uses one AI host's invocation syntax.
@@ -363,20 +404,31 @@ Describe 'Skill-General repository contract' {
             Should -Throw "*'SKILL.md' contains host-specific invocation token '`$value-suffix'*"
     }
 
-    It 'rejects invocation punctuation and invalid scope syntax: <Label>' -ForEach @(
-        @{ Label = 'colon punctuation'; Text = 'Use $work-with-jira: then continue.'; Token = '$work-with-jira' }
-        @{ Label = 'opening parenthesis punctuation'; Text = 'Use $work-with-jira(next).'; Token = '$work-with-jira' }
-        @{ Label = 'opening brace punctuation'; Text = 'Use {$work-with-jira} now.'; Token = '$work-with-jira' }
-        @{ Label = 'non-scope prefix'; Text = 'Use $work-with-jira:x now.'; Token = '$work-with-jira' }
-        @{ Label = 'scope prefix without variable name'; Text = 'Use $env: now.'; Token = '$env' }
-        @{ Label = 'scope exception followed by invocation'; Text = 'Read $env:PATH, then use $work-with-jira.'; Token = '$work-with-jira' }
-    ) {
-        $skillPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/SKILL.md'
-        Add-Content -LiteralPath $skillPath -Value ([Environment]::NewLine + $Text)
-        & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/SKILL.md
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the invocation-boundary fixture.' }
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw ("*'SKILL.md' contains host-specific invocation token '{0}'*" -f $Token)
+    It 'rejects invocation punctuation and invalid scope syntax' {
+        $cases = @(
+            @{ Label = 'colon punctuation'; Text = 'Use $work-with-jira: then continue.'; Token = '$work-with-jira' }
+            @{ Label = 'opening parenthesis punctuation'; Text = 'Use $work-with-jira(next).'; Token = '$work-with-jira' }
+            @{ Label = 'opening brace punctuation'; Text = 'Use {$work-with-jira} now.'; Token = '$work-with-jira' }
+            @{ Label = 'non-scope prefix'; Text = 'Use $work-with-jira:x now.'; Token = '$work-with-jira' }
+            @{ Label = 'scope prefix without variable name'; Text = 'Use $env: now.'; Token = '$env' }
+            @{ Label = 'scope exception followed by invocation'; Text = 'Read $env:PATH, then use $work-with-jira.'; Token = '$work-with-jira' }
+        )
+        $cases.Count | Should -Be 6 -Because 'the invocation punctuation matrix has 6 reviewed rows'
+
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Label: {0}' -f $case.Label
+            $skillPath = Join-Path $fixtureRoot 'skills/manage-ai-memory/SKILL.md'
+            Add-Content -LiteralPath $skillPath -Value ([Environment]::NewLine + $case.Text)
+            & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/SKILL.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the invocation-boundary fixture.' }
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw ("*'SKILL.md' contains host-specific invocation token '{0}'*" -f $case.Token) -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 6 -Because 'all 6 invocation punctuation rows must execute'
     }
 
     # Scenario: a SKILL.md names another Skill in prose.
@@ -419,19 +471,30 @@ Describe 'Skill-General repository contract' {
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
     }
 
-    It 'rejects an invocation token in a scanned Markdown fence: <Label>' -ForEach @(
-        @{ Label = 'unlabeled'; Opening = '```'; Token = '$work-with-jira' }
-        @{ Label = 'markdown'; Opening = '```markdown'; Token = '$work-with-jira' }
-        @{ Label = 'text'; Opening = '```text'; Token = '$configure-jira-api-access' }
-        @{ Label = 'unlisted-language'; Opening = '```ruby'; Token = '$work-with-jira' }
-    ) {
-        $referencePath = Join-Path $fixtureRoot 'skills/manage-ai-memory/references/fenced.md'
-        $example = @($Opening, $Token, '```') -join [Environment]::NewLine
-        [IO.File]::WriteAllText($referencePath, $example, [Text.UTF8Encoding]::new($false))
-        & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/references/fenced.md
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the scanned fence fixture.' }
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw ("*'references/fenced.md' contains host-specific invocation token '{0}'*" -f $Token)
+    It 'rejects invocation tokens in scanned Markdown fences' {
+        $cases = @(
+            @{ Label = 'unlabeled'; Opening = '```'; Token = '$work-with-jira' }
+            @{ Label = 'markdown'; Opening = '```markdown'; Token = '$work-with-jira' }
+            @{ Label = 'text'; Opening = '```text'; Token = '$configure-jira-api-access' }
+            @{ Label = 'unlisted-language'; Opening = '```ruby'; Token = '$work-with-jira' }
+        )
+        $cases.Count | Should -Be 4 -Because 'the scanned Markdown fence matrix has 4 reviewed rows'
+
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Label: {0}' -f $case.Label
+            $referencePath = Join-Path $fixtureRoot 'skills/manage-ai-memory/references/fenced.md'
+            $example = @($case.Opening, $case.Token, '```') -join [Environment]::NewLine
+            [IO.File]::WriteAllText($referencePath, $example, [Text.UTF8Encoding]::new($false))
+            & $script:GitPath -C $fixtureRoot add -- skills/manage-ai-memory/references/fenced.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the scanned fence fixture.' }
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw ("*'references/fenced.md' contains host-specific invocation token '{0}'*" -f $case.Token) -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 4 -Because 'all 4 scanned Markdown fence rows must execute'
     }
 
     It 'rejects an unclosed recognized program-language fence' {
@@ -495,7 +558,8 @@ Describe 'Skill-General repository contract' {
         $actualFingerprint | Should -BeExactly $expectedFingerprint -Because $fingerprintReason
     }
 
-    It 'follows Markdig CommonMark fenced-code decisions: <Label>' -ForEach @(
+    It 'follows Markdig CommonMark fenced-code decisions' {
+        $cases = @(
         @{
             Label = 'backtick delimiter'; Lines = @('```powershell', 'Use $work-with-jira.', '```'); NewLine = "`n"; Outcome = 'pass'
             Reason = 'CommonMark recognizes a closed backtick fence and the reviewed language is program code.'
@@ -632,29 +696,39 @@ Describe 'Skill-General repository contract' {
             Label = 'review4 long quote-tab reproduction'; Lines = @('Use $work-with-jira.', '> ```powershell', ('>' + "`t" + ('x' * 80)), '> ```'); NewLine = "`n"; Outcome = 'token'
             Reason = 'The 80-character Review4 reproduction must retain and reject the invocation token before the fence.'
         }
-    ) {
-        $relativePath = 'skills/manage-ai-memory/references/markdig-matrix.md'
-        $referencePath = Join-Path $fixtureRoot $relativePath
-        $content = $Lines -join $NewLine
-        [IO.File]::WriteAllText($referencePath, $content, [Text.UTF8Encoding]::new($false))
-        & $script:GitPath -C $fixtureRoot add -- $relativePath
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the Markdig matrix fixture.' }
+        )
+        $cases.Count | Should -Be 34 -Because 'the Markdig decision matrix has 34 reviewed rows'
 
-        $errorRecord = $null
-        try { & $script:ValidatorPath -RepositoryRoot $fixtureRoot | Out-Null }
-        catch { $errorRecord = $_ }
-        if ($Outcome -ceq 'pass') {
-            $errorRecord | Should -BeNullOrEmpty -Because $Reason
-        }
-        else {
-            $errorRecord | Should -Not -BeNullOrEmpty -Because $Reason
-            if ($Outcome -ceq 'unclosed') {
-                $errorRecord.Exception.Message | Should -BeLike "*'references/markdig-matrix.md'*unclosed code fence*" -Because $Reason
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Label: {0}. {1}' -f $case.Label, $case.Reason
+            $relativePath = 'skills/manage-ai-memory/references/markdig-matrix.md'
+            $referencePath = Join-Path $fixtureRoot $relativePath
+            $content = $case.Lines -join $case.NewLine
+            [IO.File]::WriteAllText($referencePath, $content, [Text.UTF8Encoding]::new($false))
+            & $script:GitPath -C $fixtureRoot add -- $relativePath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the Markdig matrix fixture.' }
+
+            $errorRecord = $null
+            try { & $script:ValidatorPath -RepositoryRoot $fixtureRoot | Out-Null }
+            catch { $errorRecord = $_ }
+            if ($case.Outcome -ceq 'pass') {
+                $errorRecord | Should -BeNullOrEmpty -Because $because
             }
             else {
-                $errorRecord.Exception.Message | Should -BeLike "*'references/markdig-matrix.md'*host-specific invocation token '`$work-with-jira'*" -Because $Reason
+                $errorRecord | Should -Not -BeNullOrEmpty -Because $because
+                if ($case.Outcome -ceq 'unclosed') {
+                    $errorRecord.Exception.Message | Should -BeLike "*'references/markdig-matrix.md'*unclosed code fence*" -Because $because
+                }
+                else {
+                    $errorRecord.Exception.Message | Should -BeLike "*'references/markdig-matrix.md'*host-specific invocation token '`$work-with-jira'*" -Because $because
+                }
             }
+            $executed++
         }
+
+        $executed | Should -Be 34 -Because 'all 34 Markdig decision rows must execute'
     }
 
     It 'accepts a binary PDF reference and retains its inventory hash and index binding' {
@@ -680,20 +754,31 @@ Describe 'Skill-General repository contract' {
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Throw "*'references/invalid.md' must be valid UTF-8*"
     }
 
-    It 'rejects classified text references containing invocation tokens: <Extension>' -ForEach @(
-        @{ Extension = '.markdown'; Token = '$work-with-jira' }
-        @{ Extension = '.rst'; Token = '$work-with-jira' }
-        @{ Extension = '.svg'; Token = '$work-with-jira' }
-        @{ Extension = '.MD'; Token = '$pdf' }
-    ) {
-        $relativePath = 'skills/manage-ai-memory/references/guide' + $Extension
-        $referencePath = Join-Path $fixtureRoot $relativePath
-        $content = if ($Extension -ceq '.svg') { '<svg><text>' + $Token + '</text></svg>' } else { 'Use ' + $Token + '.' }
-        [IO.File]::WriteAllText($referencePath, $content, [Text.UTF8Encoding]::new($false))
-        & $script:GitPath -C $fixtureRoot add -- $relativePath
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the classified text reference fixture.' }
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw ("*contains host-specific invocation token '{0}'*" -f $Token)
+    It 'rejects classified text reference invocation tokens' {
+        $cases = @(
+            @{ Extension = '.markdown'; Token = '$work-with-jira' }
+            @{ Extension = '.rst'; Token = '$work-with-jira' }
+            @{ Extension = '.svg'; Token = '$work-with-jira' }
+            @{ Extension = '.MD'; Token = '$pdf' }
+        )
+        $cases.Count | Should -Be 4 -Because 'the classified text reference matrix has 4 reviewed rows'
+
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Extension: {0}' -f $case.Extension
+            $relativePath = 'skills/manage-ai-memory/references/guide' + $case.Extension
+            $referencePath = Join-Path $fixtureRoot $relativePath
+            $content = if ($case.Extension -ceq '.svg') { '<svg><text>' + $case.Token + '</text></svg>' } else { 'Use ' + $case.Token + '.' }
+            [IO.File]::WriteAllText($referencePath, $content, [Text.UTF8Encoding]::new($false))
+            & $script:GitPath -C $fixtureRoot add -- $relativePath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the classified text reference fixture.' }
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw ("*contains host-specific invocation token '{0}'*" -f $case.Token) -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 4 -Because 'all 4 classified text reference rows must execute'
     }
 
     It 'rejects invalid UTF-8 in an RST reference' {
@@ -762,16 +847,27 @@ Describe 'Skill-General repository contract' {
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
     }
 
-    It 'accepts an empty classified text reference: <Extension>' -ForEach @(
-        @{ Extension = '.md' }
-        @{ Extension = '.txt' }
-    ) {
-        $relativePath = 'skills/manage-ai-memory/references/empty' + $Extension
-        $referencePath = Join-Path $fixtureRoot $relativePath
-        [IO.File]::WriteAllBytes($referencePath, [byte[]]@())
-        & $script:GitPath -C $fixtureRoot add -- $relativePath
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty classified text reference fixture.' }
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
+    It 'accepts empty classified text references' {
+        $cases = @(
+            @{ Extension = '.md' }
+            @{ Extension = '.txt' }
+        )
+        $cases.Count | Should -Be 2 -Because 'the empty classified text reference matrix has 2 reviewed rows'
+
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Extension: {0}' -f $case.Extension
+            $relativePath = 'skills/manage-ai-memory/references/empty' + $case.Extension
+            $referencePath = Join-Path $fixtureRoot $relativePath
+            [IO.File]::WriteAllBytes($referencePath, [byte[]]@())
+            & $script:GitPath -C $fixtureRoot add -- $relativePath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the empty classified text reference fixture.' }
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 2 -Because 'all 2 empty classified text reference rows must execute'
     }
 
     It 'still rejects an invocation token beside empty JSON values' {
@@ -814,17 +910,28 @@ Describe 'Skill-General repository contract' {
         { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } | Should -Not -Throw
     }
 
-    It 'rejects an unclassified reference file: <Name>' -ForEach @(
-        @{ Name = 'guide.foo' }
-        @{ Name = 'NOTES' }
-    ) {
-        $relativePath = 'skills/manage-ai-memory/references/' + $Name
-        $referencePath = Join-Path $fixtureRoot $relativePath
-        [IO.File]::WriteAllText($referencePath, 'plain text', [Text.UTF8Encoding]::new($false))
-        & $script:GitPath -C $fixtureRoot add -- $relativePath
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stage the unclassified reference fixture.' }
-        { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
-            Should -Throw ("*Skill 'manage-ai-memory'*'references/{0}'*reference file classification*" -f $Name)
+    It 'rejects unclassified reference files' {
+        $cases = @(
+            @{ Name = 'guide.foo' }
+            @{ Name = 'NOTES' }
+        )
+        $cases.Count | Should -Be 2 -Because 'the unclassified reference matrix has 2 reviewed rows'
+
+        $executed = 0
+        foreach ($case in $cases) {
+            $fixtureRoot = & $script:NewSkillGeneralTestFixture -TestDrivePath $TestDrive
+            $because = 'Name: {0}' -f $case.Name
+            $relativePath = 'skills/manage-ai-memory/references/' + $case.Name
+            $referencePath = Join-Path $fixtureRoot $relativePath
+            [IO.File]::WriteAllText($referencePath, 'plain text', [Text.UTF8Encoding]::new($false))
+            & $script:GitPath -C $fixtureRoot add -- $relativePath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stage the unclassified reference fixture.' }
+            { & $script:ValidatorPath -RepositoryRoot $fixtureRoot } |
+                Should -Throw ("*Skill 'manage-ai-memory'*'references/{0}'*reference file classification*" -f $case.Name) -Because $because
+            $executed++
+        }
+
+        $executed | Should -Be 2 -Because 'all 2 unclassified reference rows must execute'
     }
 
     # Scenario: Skill content targets three platforms while the current validation toolchain uses Windows.
