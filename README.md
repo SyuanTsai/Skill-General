@@ -119,7 +119,7 @@ Repository-owned validation consists of `scripts/Test-SkillGeneral.ps1`, invoked
 
 For an ordinary source change:
 
-1. Review the exact diff and run local checks that directly exercise its changed behavior. Use complete local `-SourceValidation` only when it is needed to investigate a specific failure.
+1. Review the exact diff and run local checks that directly exercise its changed behavior. To investigate a gate failure, read the consumer-gate evidence artifacts for that run and run the affected repository-owned check (`scripts/Test-SkillGeneral.ps1 -ReadOnlySnapshot` or the relevant `tests/` file) directly.
 2. Commit the candidate and open a normal protected pull request. The consumer gate runs the exact candidate on Windows, Linux and macOS and produces all three required contexts. Inspect the complete source report and evidence.
 3. Follow the central Standard's separate review, approval, release, installation, and rollback requirements when those actions are requested.
 
