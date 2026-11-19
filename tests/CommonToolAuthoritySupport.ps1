@@ -1,115 +1,131 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
 
-function Get-VerifiedCandidateAuthorityRoot {
-    [CmdletBinding()]
+function Assert-ConsumerJsonNoDuplicateProperties {
     param(
-        [Parameter(Mandatory = $true)][string] $RepositoryRoot,
-        [Parameter(Mandatory = $true)][object] $AuthorityPin,
-        [string] $CoreRunId,
-        [string] $CoreCheckId,
-        [string] $ScopedAuthorityRoot,
-        [string] $TempRoot = [IO.Path]::GetTempPath()
+        [Parameter(Mandatory)][Text.Json.JsonElement] $Element,
+        [Parameter(Mandatory)][string] $Context
     )
 
-    $coreContextPresent = -not [string]::IsNullOrWhiteSpace($CoreRunId) -or
-        -not [string]::IsNullOrWhiteSpace($CoreCheckId)
-    if ($coreContextPresent) {
-        if ($CoreRunId -cnotmatch '^[0-9a-f]{32}$' -or $CoreCheckId -cne 'repository-pester') {
-            throw 'Common tool report Core context is incomplete or invalid.'
-        }
-        if ([string]::IsNullOrWhiteSpace($ScopedAuthorityRoot)) {
-            throw 'Common tool report Core run has no scoped verified authority snapshot.'
-        }
-        $moduleRoot = [IO.Path]::GetFullPath($ScopedAuthorityRoot)
-    }
-    elseif (-not [string]::IsNullOrWhiteSpace($ScopedAuthorityRoot)) {
-        # Explicit local setup is accepted only after the same complete immutable-pin verification.
-        $moduleRoot = [IO.Path]::GetFullPath($ScopedAuthorityRoot)
-    }
-    else {
-        if ([string]$AuthorityPin.commit -cnotmatch '^[0-9a-f]{40}$') {
-            throw 'Legacy authority transport requires a canonical immutable commit pin.'
-        }
-        $tempRootFull = [IO.Path]::GetFullPath($TempRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
-        $cursor = $tempRootFull
-        while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-            $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw 'Legacy TEMP authority transport contains a reparse ancestor.'
-            }
-            $parent = Split-Path -Parent $cursor
-            if ($parent -ceq $cursor) { break }
-            $cursor = $parent
-        }
-        $moduleRoot = [IO.Path]::GetFullPath((Join-Path $tempRootFull ('syp154-authority-' + [string]$AuthorityPin.commit)))
-        if (-not $moduleRoot.StartsWith($tempRootFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Legacy authority snapshot escaped its TEMP transport directory.'
-        }
-        if (-not (Test-Path -LiteralPath $moduleRoot -PathType Container)) {
-            throw 'Legacy authority snapshot is missing; validation never downloads or creates runtime authority.'
+    if ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Object) {
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $seen.Add($property.Name)) { throw "$Context has duplicate or case-conflicting keys." }
+            Assert-ConsumerJsonNoDuplicateProperties -Element $property.Value -Context "$Context.$($property.Name)"
         }
     }
+    elseif ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Array) {
+        $index = 0
+        foreach ($item in $Element.EnumerateArray()) {
+            Assert-ConsumerJsonNoDuplicateProperties -Element $item -Context "$Context[$index]"
+            $index++
+        }
+    }
+}
 
-    if (-not (Test-Path -LiteralPath $moduleRoot -PathType Container)) {
-        throw 'Integration authority snapshot is missing.'
-    }
-    $cursor = $moduleRoot
-    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-        $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            throw 'Integration authority snapshot contains a reparse ancestor.'
-        }
-        $parent = Split-Path -Parent $cursor
-        if ($parent -ceq $cursor) { break }
-        $cursor = $parent
-    }
+function Read-ConsumerTestJson {
+    param([Parameter(Mandatory)][string] $LiteralPath)
 
-    $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-    $safeDirectory = 'safe.directory=' + $moduleRoot
-    $gitRoot = @(& $gitPath -c $safeDirectory -C $moduleRoot rev-parse --show-toplevel)
-    if ($LASTEXITCODE -ne 0 -or $gitRoot.Count -ne 1 -or
-        -not [IO.Path]::GetFullPath([string]$gitRoot[0]).Equals($moduleRoot, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Integration authority root is not the root of a Git checkout.'
+    [byte[]]$bytes = [IO.File]::ReadAllBytes($LiteralPath)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) {
+        throw 'Consumer JSON must not contain a UTF-8 BOM.'
     }
-    $head = @(& $gitPath -c $safeDirectory -C $moduleRoot rev-parse --verify HEAD)
-    if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or [string]$head[0] -cne [string]$AuthorityPin.commit) {
-        throw 'Integration authority checkout HEAD differs from the immutable candidate pin.'
+    $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+    $document = [Text.Json.JsonDocument]::Parse($text)
+    try { Assert-ConsumerJsonNoDuplicateProperties -Element $document.RootElement -Context '$' }
+    finally { $document.Dispose() }
+    $text | ConvertFrom-Json -Depth 50 -ErrorAction Stop
+}
+
+function Get-ConsumerWorkflowNames {
+    param([Parameter(Mandatory)][string] $WorkflowDirectory)
+
+    [string[]]$names = @(Get-ChildItem -LiteralPath $WorkflowDirectory -File -Force | ForEach-Object Name)
+    [Array]::Sort($names, [StringComparer]::Ordinal)
+    return $names
+}
+
+function Assert-ConsumerWorkflowLayout {
+    param([Parameter(Mandatory)][string] $WorkflowDirectory)
+
+    $items = @(Get-ChildItem -LiteralPath $WorkflowDirectory -Recurse -Force)
+    if (@($items | Where-Object PSIsContainer).Count -ne 0) {
+        throw 'The workflow directory contains an unsupported file set.'
     }
-    $origins = @(& $gitPath -c $safeDirectory -C $moduleRoot config --local --get-all remote.origin.url)
-    $expectedOrigin = ([string]$AuthorityPin.repository).Trim().TrimEnd('/') -replace '\.git$', ''
-    $actualOrigin = if ($origins.Count -eq 1) { (([string]$origins[0]).Trim().TrimEnd('/') -replace '\.git$', '') } else { '' }
-    if ($LASTEXITCODE -ne 0 -or $origins.Count -ne 1 -or
-        -not $actualOrigin.Equals($expectedOrigin, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Integration authority checkout origin differs from the immutable candidate pin.'
-    }
-    $authorityDirty = @(& $gitPath -c $safeDirectory -C $moduleRoot status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $authorityDirty.Count -ne 0) {
-        throw 'Integration authority checkout must be clean and immutable.'
-    }
-    foreach ($entry in @($AuthorityPin.files)) {
-        $relativePath = [string]$entry.path
-        if ([string]::IsNullOrWhiteSpace($relativePath) -or $relativePath.StartsWith('/') -or
-            $relativePath -match '(^|/)\.\.?(/|$)' -or $relativePath.Contains('\')) {
-            throw 'Integration authority inventory contains an unsafe relative path.'
+    foreach ($file in @($items)) {
+        if ([IO.Path]::GetRelativePath($WorkflowDirectory, $file.FullName).Contains([IO.Path]::DirectorySeparatorChar)) {
+            throw 'The workflow directory contains an unsupported file set.'
         }
-        $path = [IO.Path]::GetFullPath((Join-Path $moduleRoot ($relativePath -replace '/', [IO.Path]::DirectorySeparatorChar)))
-        if (-not $path.StartsWith($moduleRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Integration authority inventory escaped its pinned checkout.'
-        }
-        $cursor = $path
-        while ($cursor -cne $moduleRoot) {
-            $entryInfo = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-            if ($entryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw "Integration authority inventory traverses a reparse point: $relativePath"
+    }
+    [string[]]$actual = @(Get-ConsumerWorkflowNames -WorkflowDirectory $WorkflowDirectory)
+    [string[]]$permanentOnly = @('consumer-gate.yml')
+    [string[]]$conversion = @('consumer-gate-transition.yml', 'consumer-gate.yml')
+    [Array]::Sort($conversion, [StringComparer]::Ordinal)
+    $actualText = $actual -join "`n"
+    if ($actualText -cne ($permanentOnly -join "`n") -and $actualText -cne ($conversion -join "`n")) {
+        throw 'The workflow directory contains an unsupported file set.'
+    }
+}
+
+function Complete-ConsumerReuseAnnotation {
+    param(
+        [Parameter(Mandatory)][Collections.IDictionary] $Current,
+        [Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.List[object]] $Annotations
+    )
+
+    [string[]]$actual = @($Current.Keys)
+    [string[]]$expected = @('SPDX-FileCopyrightText', 'SPDX-License-Identifier', 'path', 'precedence')
+    [Array]::Sort($actual, [StringComparer]::Ordinal)
+    [Array]::Sort($expected, [StringComparer]::Ordinal)
+    if (($actual -join "`n") -cne ($expected -join "`n")) {
+        throw 'REUSE annotation does not contain exactly the four required keys.'
+    }
+    $Annotations.Add([pscustomobject]$Current)
+}
+
+function Read-ConsumerReuseAnnotations {
+    param([Parameter(Mandatory)][string] $LiteralPath)
+
+    $annotations = [Collections.Generic.List[object]]::new()
+    $current = $null
+    $versionSeen = $false
+    $lineNumber = 0
+    foreach ($rawLine in Get-Content -LiteralPath $LiteralPath -Encoding utf8) {
+        $lineNumber++
+        $line = $rawLine.Trim()
+        if ($line.Length -eq 0 -or $line.StartsWith('#', [StringComparison]::Ordinal)) { continue }
+        if ($line -eq 'version = 1') {
+            if ($versionSeen -or $null -ne $current -or $annotations.Count -gt 0) {
+                throw "Invalid REUSE version declaration at line $lineNumber."
             }
-            $cursor = Split-Path -Parent $cursor
+            $versionSeen = $true
+            continue
         }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
-            ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -or
-            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$entry.sha256) {
-            throw "Integration authority file identity differs from the immutable candidate pin: $relativePath"
+        if ($line -eq '[[annotations]]') {
+            if ($null -ne $current) { Complete-ConsumerReuseAnnotation -Current $current -Annotations $annotations }
+            $current = [ordered]@{}
+            continue
         }
+        if ($null -eq $current -or $line -notmatch '^(?<Key>path|precedence|SPDX-FileCopyrightText|SPDX-License-Identifier)\s*=\s*(?<Value>"(?:[^"\\]|\\.)*")$') {
+            throw "Unsupported REUSE syntax at line $lineNumber."
+        }
+        $key = [string]$Matches.Key
+        if ($current.Contains($key)) { throw "Duplicate REUSE key at line $lineNumber." }
+        $current[$key] = [string](ConvertFrom-Json -InputObject ([string]$Matches.Value) -ErrorAction Stop)
     }
-    return $moduleRoot
+    if (-not $versionSeen) { throw 'REUSE version declaration is missing.' }
+    if ($null -ne $current) { Complete-ConsumerReuseAnnotation -Current $current -Annotations $annotations }
+    if ($annotations.Count -eq 0) { throw 'REUSE annotations are missing.' }
+    return @($annotations)
+}
+
+function Get-ConsumerRepositoryFiles {
+    param([Parameter(Mandatory)][string] $RepositoryRoot)
+
+    return @(Get-ChildItem -LiteralPath $RepositoryRoot -Recurse -File -Force | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($RepositoryRoot, $_.FullName).Replace('\', '/')
+            if ($relative -cne '.git' -and -not $relative.StartsWith('.git/', [StringComparison]::Ordinal)) {
+                [pscustomobject]@{ FullName = $_.FullName; RelativePath = $relative }
+            }
+        })
 }

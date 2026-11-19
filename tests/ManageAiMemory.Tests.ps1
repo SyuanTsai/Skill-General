@@ -76,7 +76,7 @@ Describe 'manage-ai-memory provider-neutral contract' {
         $source=Get-Content -Raw (Join-Path $script:Root 'catalog/source.json')|ConvertFrom-Json
         $source.skillsRoot | Should -BeExactly 'skills'
         @($source.skills) | Should -Not -Contain 'shared'
-        (Get-Content -Raw (Join-Path $script:Root '.github/workflows/validate.yml')) | Should -Not -Match 'Sync-SharedReferences\.ps1'
+        (Get-Content -Raw (Join-Path $script:Root '.github/workflows/consumer-gate.yml')) | Should -Not -Match 'Sync-SharedReferences\.ps1'
     }
 
     It 'UnitT07_runs_the_complete_shared_reference_generator_and_writes_only_changed_fixed_targets' {

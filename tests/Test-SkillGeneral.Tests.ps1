@@ -955,8 +955,8 @@ Describe 'Skill-General repository contract' {
         $readmeText | Should -Match ([regex]::Escape('The Skills are platform-neutral and target Windows, Linux, and macOS hosts.'))
         $readmeText | Should -Match ([regex]::Escape('Skills 內容與平台無關，目標主機為 Windows、Linux 與 macOS。'))
         $readmeText | Should -Match ([regex]::Escape('The Skill content targets Windows, Linux, and macOS hosts.'))
-        $validationScope = 'The repository validation toolchain and CI currently run on Windows; cross-platform validation will be introduced by a later change.'
-        $driverInstruction = 'Run local development, installation, execution, testing, acceptance, and any local source-validation run on Windows.'
+        $validationScope = 'The consumer gate runs the exact candidate on Windows, Linux and macOS and produces all three required contexts.'
+        $driverInstruction = 'Repository-owned validation consists of `scripts/Test-SkillGeneral.ps1`, invoked against the read-only candidate snapshot, and the complete `tests/` tree under Pester 6.2.0.'
         foreach ($statement in @($validationScope, $driverInstruction)) {
             ([regex]::Matches($readmeText, [regex]::Escape($statement))).Count | Should -Be 1
         }
