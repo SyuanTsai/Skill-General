@@ -246,9 +246,11 @@ Export-ModuleMember -Function @()
                 throw 'Injected Unix shared-reference writer failure.'
             }
             try{{& $fixture.Script}|Should -Throw '*Injected Unix shared-reference writer failure*'}finally{
-                Remove-Item Function:\global:Invoke-SGSharedReferenceWriterTestSeam -Force
+                Remove-Item -LiteralPath Function:\Invoke-SGSharedReferenceWriterTestSeam -Force
                 Remove-Variable SGSharedReferenceWriterFailurePath -Scope Global -Force
             }
+            Get-Command Invoke-SGSharedReferenceWriterTestSeam -CommandType Function -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+            Get-Variable SGSharedReferenceWriterFailurePath -Scope Global -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
             $afterFiles=@(Get-ChildItem -LiteralPath $fixture.Root -Recurse -File)
             @($afterFiles|ForEach-Object{[IO.Path]::GetRelativePath($fixture.Root,$_.FullName)}|Sort-Object)|Should -Be @($before.Keys|Sort-Object)
             [IO.File]::ReadAllBytes($fixture.Memory).Length|Should -BeLessThan $fixture.SourceBytes.Length
