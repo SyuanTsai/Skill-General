@@ -1,393 +1,52 @@
 # SPDX-FileCopyrightText: 2026 SyuanTsai
 # SPDX-License-Identifier: Apache-2.0
 
-# Keep the shared helper in the test-file scope for both independent Describe containers.
-. (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
-
-Describe 'General Static native failure propagation' {
-    # Scenario: SkillSpector exits nonzero after emitting plausible JSON.
-    # Purpose: the actual Static dispatch must reject native failure before reading PASS bytes (V3).
-    It 'InterT10_rejects_nonzero_Static_exit_before_reading_stdout_report' {
-        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
-        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $child.Success) { throw 'General child runner source was not found.' }
-        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
-        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $caseRoot)
-        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
-        [IO.File]::WriteAllText($scannerScript, '[Console]::Error.WriteLine(''fixture stderr''); Write-Output ''{"decision":"PASS"}''; exit 7')
-        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
-        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
-        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
-        $fixture = New-Module -ScriptBlock {
-            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
-            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
-            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
-            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
-            function Read-Json { param($Path, $Context) throw 'Static dispatch read stale report after native failure.' }
-            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
-            function New-Envelope { param($ActiveSkills, $Findings, $Additional) throw 'Static dispatch published PASS after native failure.' }
-        }
-        Push-Location $caseRoot
-        try {
-            { & $fixture { param($body, $path, $root)
-                $script:FixtureRoot = $root
-                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
-                $activeSkills = @('demo'); $SemanticRequired = 'false'
-                & ([scriptblock]::Create($body))
-            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot } | Should -Throw -ExpectedMessage '*returned exit code 7*fixture stderr*'
-        }
-        finally { Pop-Location }
-    }
-
-    # Scenario: SkillSpector v2.13.3 emits its JSON report only to stdout.
-    # Purpose: preserve a new, complete report and record the actual no--output invocation (V3).
-    It 'InterT20_redirects_SkillSpector_stdout_to_a_new_report_without_output_argument' {
-        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
-        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $child.Success) { throw 'General child runner source was not found.' }
-        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
-        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $caseRoot)
-        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
-        [IO.File]::WriteAllText($scannerScript, 'Write-Output ''{"decision":"PASS"}''; exit 0')
-        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
-        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
-        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
-        $fixture = New-Module -ScriptBlock {
-            $script:Reports = @()
-            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
-            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
-            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
-            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) $script:Reports += [pscustomobject]@{ arguments = @($Arguments); path = $Path; exitCode = $ExitCode } }
-            function Read-Json { param($Path, $Context) return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
-            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
-            function New-Envelope { param($ActiveSkills, $Findings, $Additional) return }
-        }
-        Push-Location $caseRoot
-        try {
-            $reports = @(& $fixture { param($body, $path, $root)
-                $script:FixtureRoot = $root
-                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
-                $activeSkills = @('demo'); $SemanticRequired = 'false'
-                & ([scriptblock]::Create($body))
-                return $script:Reports
-            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot)
-            $reports.Count | Should -Be 1
-            $reports[0].exitCode | Should -Be 0
-            @($reports[0].arguments) | Should -Not -Contain '--output'
-            $reports[0].path | Should -Be (Join-Path $caseRoot 'skillspector-demo.json')
-            $reportPath = Join-Path $caseRoot 'skillspector-demo.json'
-            Test-Path -LiteralPath $reportPath -PathType Leaf | Should -BeTrue
-            (Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json).decision | Should -Be 'PASS'
-        }
-        finally { Pop-Location }
-    }
-
-    # Scenario: SkillSpector succeeds with a complete report and an empty stderr file.
-    # Purpose: StrictMode must treat empty native stderr as an empty string and accept the report.
-    It 'InterT25_accepts_a_complete_Static_report_when_stderr_is_empty' {
-        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
-        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $child.Success) { throw 'General child runner source was not found.' }
-        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
-        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $caseRoot)
-        $reportJson = [ordered]@{
-            execution_successful = $true
-            analysis_completeness = [ordered]@{ execution_successful = $true; is_complete = $true; status = 'complete'; coverage_percent = 100; ledger_exceptions = @(); scope_exclusions = @(); limitations = @() }
-            skill = [ordered]@{ name = 'demo'; source = $caseRoot }
-            components = @([ordered]@{ path = 'SKILL.md' })
-            issues = @()
-        } | ConvertTo-Json -Depth 10 -Compress
-        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
-        [IO.File]::WriteAllText($scannerScript, "Write-Output '$($reportJson.Replace("'", "''"))'; exit 0")
-        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
-        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
-        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
-        $fixture = New-Module -ScriptBlock {
-            Set-StrictMode -Version Latest
-            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
-            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
-            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
-            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
-            function Read-Json { param($Path, $Context) return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
-            function Assert-SkillSpectorReport {
-                param($Report, $SkillRoot, $SkillId, $Inventory)
-                if (-not $Report.execution_successful -or -not $Report.analysis_completeness.is_complete -or $Report.analysis_completeness.status -cne 'complete' -or $Report.analysis_completeness.coverage_percent -ne 100) {
-                    throw 'Fixture did not receive a complete SkillSpector report.'
-                }
-                return @()
-            }
-            function New-Envelope { param($ActiveSkills, $Findings, $Additional) return [pscustomobject]@{ decision = 'PASS'; analyzerCompleteness = $Additional.analyzerCompleteness } }
-        }
-        Push-Location $caseRoot
-        try {
-            $envelope = & $fixture { param($body, $path, $root)
-                $script:FixtureRoot = $root
-                $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
-                $activeSkills = @('demo'); $SemanticRequired = 'false'
-                & ([scriptblock]::Create($body))
-            } $dispatch.Groups['body'].Value $scannerCommand $caseRoot
-            $envelope.decision | Should -Be 'PASS'
-            $envelope.analyzerCompleteness | Should -Be 'complete'
-        }
-        finally { Pop-Location }
-    }
-
-    # Scenario: SkillSpector exits nonzero with stderr longer than the protected bound.
-    # Purpose: preserve the native failure text while proving it remains truncated to 4096 characters.
-    It 'InterT27_keeps_truncated_stderr_in_the_nonzero_Static_exit_error' {
-        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
-        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $child.Success) { throw 'General child runner source was not found.' }
-        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
-        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $caseRoot)
-        $scannerScript = Join-Path $caseRoot 'scanner.ps1'
-        [IO.File]::WriteAllText($scannerScript, '[Console]::Error.Write((''x'' * 4200) + ''tail-marker''); Write-Output ''{"decision":"PASS"}''; exit 7')
-        $scannerCommand = Join-Path $caseRoot 'scanner.cmd'
-        $scannerCommandText = "@echo off`r`n`"$(Join-Path $PSHOME 'pwsh.exe')`" -NoProfile -NonInteractive -File `"$scannerScript`" %*`r`nexit /b %ERRORLEVEL%`r`n"
-        [IO.File]::WriteAllText($scannerCommand, $scannerCommandText, [Text.ASCIIEncoding]::new())
-        $fixture = New-Module -ScriptBlock {
-            Set-StrictMode -Version Latest
-            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
-            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
-            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
-            function Add-NativeReport { param($Command, $Arguments, $ExitCode, $Path, $SkillId) }
-            function Read-Json { param($Path, $Context) throw 'Static dispatch read stale report after native failure.' }
-            function Assert-SkillSpectorReport { param($Report, $SkillRoot, $SkillId, $Inventory) return @() }
-            function New-Envelope { param($ActiveSkills, $Findings, $Additional) throw 'Static dispatch published PASS after native failure.' }
-        }
-        Push-Location $caseRoot
-        try {
-            $failure = $null
-            try {
-                & $fixture { param($body, $path, $root)
-                    $script:FixtureRoot = $root
-                    $toolchain = @{ skillSpectorPath = $path; skillSpectorSha256 = ('a' * 64) }
-                    $activeSkills = @('demo'); $SemanticRequired = 'false'
-                    & ([scriptblock]::Create($body))
-                } $dispatch.Groups['body'].Value $scannerCommand $caseRoot
-            }
-            catch { $failure = $_ }
-            $null -ne $failure | Should -BeTrue
-            $failure.Exception.Message | Should -Match 'returned exit code 7'
-            $failure.Exception.Message | Should -Match ('x' * 4096 + '\[truncated\]')
-            $failure.Exception.Message | Should -Not -Match 'tail-marker'
-        }
-        finally { Pop-Location }
-    }
-
-    # Scenario: a report from an earlier attempt occupies the deterministic stdout path.
-    # Purpose: never overwrite prior evidence when creating a stdout report (V3).
-    It 'InterT30_rejects_an_existing_Static_stdout_report_path' {
-        $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1') -Raw
-        $child = [regex]::Match($source, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $child.Success) { throw 'General child runner source was not found.' }
-        $dispatch = [regex]::Match($child.Groups['body'].Value, '(?ms)^        ''static'' \{\r?\n(?<body>.*?)^        \}\r?\n        ''repository-general'' \{')
-        if (-not $dispatch.Success) { throw 'General Static dispatch source was not found.' }
-        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $caseRoot)
-        [IO.File]::WriteAllText((Join-Path $caseRoot 'skillspector-demo.json'), '{"decision":"PASS"}')
-        $fixture = New-Module -ScriptBlock {
-            function Assert-FileIdentity { param($Path, $Sha256, $Context) }
-            function Get-SkillRoot { param($SkillId) return $script:FixtureRoot }
-            function Get-InventoryPaths { param($SkillRoot) return @('SKILL.md') }
-        }
-        Push-Location $caseRoot
-        try {
-            { & $fixture { param($body, $root)
-                $script:FixtureRoot = $root
-                $toolchain = @{ skillSpectorPath = 'not-invoked'; skillSpectorSha256 = ('a' * 64) }
-                $activeSkills = @('demo'); $SemanticRequired = 'false'
-                & ([scriptblock]::Create($body))
-            } $dispatch.Groups['body'].Value $caseRoot } | Should -Throw -ExpectedMessage '*report path already exists*'
-        }
-        finally { Pop-Location }
-    }
-}
-
-Describe 'Candidate-pinned Common Tool authority transport' {
+Describe 'Consumer configuration integration' {
     BeforeAll {
         . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
-        $script:transportRepositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-        $script:transportPin = (Get-Content -LiteralPath (Join-Path $script:transportRepositoryRoot 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json).authority
+        $script:RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+        $script:GatePath = Join-Path $script:RepositoryRoot 'config/consumer-gate.json'
+        $script:SourcePath = Join-Path $script:RepositoryRoot 'catalog/source.json'
     }
 
-    # Scenario: Core identity is supplied but the wrapper's scoped snapshot is absent.
-    # Purpose: Core must fail closed instead of selecting an adjacent legacy TEMP cache.
-    It 'InterT00_fails_closed_when_Core_context_lacks_its_scoped_snapshot_even_if_TEMP_has_a_cache' {
-        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-core-no-fallback-' + [guid]::NewGuid().ToString('N'))
-        $candidate = Join-Path $tempRoot ('syp154-authority-' + [string]$script:transportPin.commit)
-        [void](New-Item -ItemType Directory -Path $candidate -Force)
-        try {
-            {
-                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
-                    -CoreRunId ('a' * 32) -CoreCheckId 'repository-pester' -ScopedAuthorityRoot '' -TempRoot $tempRoot
-            } | Should -Throw -ExpectedMessage '*Core run has no scoped verified authority snapshot*'
-        }
-        finally {
-            Remove-Item -LiteralPath $tempRoot -Recurse -Force
-        }
+    It 'uses the exact consumer configuration property set' {
+        $gate = Read-ConsumerTestJson -LiteralPath $script:GatePath
+        [string[]]$actual = @($gate.PSObject.Properties.Name)
+        [string[]]$expected = @('activeSkills', 'repositoryChecks', 'repositoryId', 'schemaVersion', 'sourceRepository')
+        [Array]::Sort($actual, [StringComparer]::Ordinal)
+        [Array]::Sort($expected, [StringComparer]::Ordinal)
+        ($actual -join "`n") | Should -BeExactly ($expected -join "`n")
+        $gate.schemaVersion | Should -Be 1
+        $gate.repositoryId | Should -BeExactly 'skill-general'
+        $gate.sourceRepository | Should -BeExactly 'https://github.com/SyuanTsai/Skill-General.git'
     }
 
-    # Scenario: a sanitized legacy child has no custom SYP or Core environment.
-    # Purpose: derive only the exact commit-named TEMP transport and fail if setup was omitted.
-    It 'InterT10_fails_closed_when_the_exact_legacy_TEMP_snapshot_is_missing' {
-        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-legacy-missing-' + [guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $tempRoot -Force)
-        try {
-            {
-                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
-                    -CoreRunId '' -CoreCheckId '' -ScopedAuthorityRoot '' -TempRoot $tempRoot
-            } | Should -Throw -ExpectedMessage '*Legacy authority snapshot is missing*'
-        }
-        finally {
-            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    It 'binds every declared check to an existing repository path' {
+        $gate = Read-ConsumerTestJson -LiteralPath $script:GatePath
+        foreach ($check in @($gate.repositoryChecks)) {
+            [string[]]$actual = @($check.PSObject.Properties.Name)
+            [string[]]$expected = @('id', 'kind', 'path')
+            [Array]::Sort($actual, [StringComparer]::Ordinal)
+            [Array]::Sort($expected, [StringComparer]::Ordinal)
+            ($actual -join "`n") | Should -BeExactly ($expected -join "`n")
+            Test-Path -LiteralPath (Join-Path $script:RepositoryRoot ([string]$check.path)) | Should -BeTrue
         }
     }
 
-    # Scenario: setup provides a named local cache but one of its pinned files changes.
-    # Purpose: existing cache content is read-only evidence and must fail closed without repair.
-    It 'InterT20_rejects_a_tampered_existing_legacy_TEMP_snapshot_without_repair' {
-        $sourceRoot = [Environment]::GetEnvironmentVariable('SYP154_CANDIDATE_AUTHORITY_ROOT', 'Process')
-        if ([string]::IsNullOrWhiteSpace($sourceRoot)) {
-            $sourceRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-authority-' + [string]$script:transportPin.commit)
-        }
-        Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
-            -ScopedAuthorityRoot $sourceRoot | Should -Be $sourceRoot
-        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('st-' + [guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $tempRoot -Force)
-        $snapshotRoot = Join-Path $tempRoot ('syp154-authority-' + [string]$script:transportPin.commit)
-        $gitPath = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
-        $safeSource = 'safe.directory=' + [IO.Path]::GetFullPath($sourceRoot)
-        try {
-            $cloneOutput = @(& $gitPath -c $safeSource -c core.longpaths=true clone --config core.autocrlf=false --local --no-hardlinks $sourceRoot $snapshotRoot 2>&1)
-            if ($LASTEXITCODE -ne 0) { throw ('Could not create isolated transport fixture from the already verified pin: ' + ($cloneOutput -join ' ')) }
-            & $gitPath -C $snapshotRoot remote set-url origin ([string]$script:transportPin.repository)
-            if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture origin.' }
-            & $gitPath -c core.longpaths=true -C $snapshotRoot checkout --detach ([string]$script:transportPin.commit)
-            if ($LASTEXITCODE -ne 0) { throw 'Could not bind isolated transport fixture commit.' }
-            $tamperEntry = @($script:transportPin.files)[0]
-            $tamperPath = Join-Path $snapshotRoot ([string]$tamperEntry.path -replace '/', [IO.Path]::DirectorySeparatorChar)
-            [IO.File]::AppendAllText($tamperPath, "`n")
-            {
-                Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $script:transportRepositoryRoot -AuthorityPin $script:transportPin `
-                    -ScopedAuthorityRoot '' -TempRoot $tempRoot
-            } | Should -Throw -ExpectedMessage '*must be clean and immutable*'
-            Test-Path -LiteralPath $tamperPath -PathType Leaf | Should -BeTrue
-        }
-        finally {
-            Remove-Item -LiteralPath $tempRoot -Recurse -Force
-        }
-    }
-}
-
-Describe 'General child uses central package tool report rules' {
-    BeforeAll {
-        . (Join-Path $PSScriptRoot 'CommonToolAuthoritySupport.ps1')
-        $validationPath = if ([string]::IsNullOrWhiteSpace($env:SYP154_TEST_VALIDATE_SOURCE)) { Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/Validate.ps1' } else { [string]$env:SYP154_TEST_VALIDATE_SOURCE }
-        $script:validationSource = Get-Content -LiteralPath $validationPath -Raw
-        $script:childMatch = [regex]::Match($script:validationSource, '(?ms)^\$childRunnerText = @''\r?\n(?<body>.*?)^''@')
-        if (-not $script:childMatch.Success) { throw 'General child runner source was not found.' }
-        $script:testRoot = Join-Path ([IO.Path]::GetTempPath()) ('syp154-report-' + [guid]::NewGuid().ToString('N'))
-        $script:skillRoot = Join-Path $script:testRoot 'skills/demo'
-        [void](New-Item -ItemType Directory -Path $script:skillRoot -Force)
-        [IO.File]::WriteAllText((Join-Path $script:skillRoot 'SKILL.md'), '# Demo')
-        $script:childPath = Join-Path $script:testRoot 'child.ps1'
-        [IO.File]::WriteAllText($script:childPath, $script:childMatch.Groups['body'].Value)
-        $script:fakeToolPath = Join-Path $script:testRoot 'skill-validator.ps1'
-        [IO.File]::WriteAllText($script:fakeToolPath, 'Get-Content -LiteralPath $env:SYP154_TEST_TOOL_REPORT -Raw; $global:LASTEXITCODE = 0')
-        $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-        $authority = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'config/standard-v1.json') -Raw -Encoding utf8 | ConvertFrom-Json).authority
-        $script:moduleRoot = Get-VerifiedCandidateAuthorityRoot -RepositoryRoot $repositoryRoot -AuthorityPin $authority `
-            -CoreRunId ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_CORE_RUN_ID', 'Process')) `
-            -CoreCheckId ([Environment]::GetEnvironmentVariable('STANDARD_VALIDATION_CORE_CHECK_ID', 'Process')) `
-            -ScopedAuthorityRoot ([Environment]::GetEnvironmentVariable('SYP154_CANDIDATE_AUTHORITY_ROOT', 'Process'))
-        $script:runnerPath = Join-Path $moduleRoot 'scripts/Invoke-StandardValidation.ps1'
-        $script:pwshPath = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
-        $script:priorEnv = @{}
-        foreach ($name in @('STANDARD_VALIDATION_ACTIVE_SKILLS', 'STANDARD_VALIDATION_SKILLS_ROOT', 'STANDARD_VALIDATION_SKILL_ID', 'STANDARD_VALIDATION_CANDIDATE_ID', 'STANDARD_VALIDATION_CANDIDATE_ROOT', 'STANDARD_VALIDATION_SKILL_INVENTORY_SHA256', 'SYP154_TEST_TOOL_REPORT')) {
-            $script:priorEnv[$name] = [Environment]::GetEnvironmentVariable($name)
-        }
-        $env:STANDARD_VALIDATION_ACTIVE_SKILLS = 'demo'
-        $env:STANDARD_VALIDATION_SKILLS_ROOT = Join-Path $script:testRoot 'skills'
-        $env:STANDARD_VALIDATION_SKILL_ID = 'demo'
-        $env:STANDARD_VALIDATION_CANDIDATE_ID = ('a' * 64)
-        $env:STANDARD_VALIDATION_CANDIDATE_ROOT = $script:testRoot
-        $env:STANDARD_VALIDATION_SKILL_INVENTORY_SHA256 = ('b' * 64)
-        $toolchain = [ordered]@{
-            centralRunnerPath = $script:runnerPath
-            centralRunnerSha256 = if (Test-Path -LiteralPath $script:runnerPath -PathType Leaf) { (Get-FileHash -Algorithm SHA256 -LiteralPath $script:runnerPath).Hash.ToLowerInvariant() } else { '0' * 64 }
-            skillValidatorPath = $script:fakeToolPath
-            skillValidatorSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $script:fakeToolPath).Hash.ToLowerInvariant()
-        }
-        $script:toolchainPath = Join-Path $script:testRoot 'toolchain.json'
-        [IO.File]::WriteAllText($script:toolchainPath, ($toolchain | ConvertTo-Json -Compress))
-        $script:toolchainHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $script:toolchainPath).Hash.ToLowerInvariant()
+    It 'keeps source and gate identities aligned case-sensitively' {
+        $gate = Read-ConsumerTestJson -LiteralPath $script:GatePath
+        $source = Read-ConsumerTestJson -LiteralPath $script:SourcePath
+        $gate.sourceRepository | Should -BeExactly $source.repository
+        (@($gate.activeSkills) -join "`n") | Should -BeExactly (@($source.skills) -join "`n")
     }
 
-    BeforeEach { Push-Location -LiteralPath $script:testRoot }
-    AfterEach { Pop-Location }
+    It 'rejects duplicate keys and a UTF-8 BOM before materialization' {
+        $duplicatePath = Join-Path $TestDrive 'duplicate.json'
+        [IO.File]::WriteAllText($duplicatePath, '{"schemaVersion":1,"SchemaVersion":1}', [Text.UTF8Encoding]::new($false))
+        { Read-ConsumerTestJson -LiteralPath $duplicatePath } | Should -Throw '*duplicate or case-conflicting keys*'
 
-    AfterAll {
-        foreach ($name in $script:priorEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $script:priorEnv[$name]) }
-        $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
-        $actualParent = [IO.Path]::GetFullPath((Split-Path -Parent $script:testRoot)).TrimEnd([IO.Path]::DirectorySeparatorChar)
-        if ($actualParent -cne $expectedParent -or (Split-Path -Leaf $script:testRoot) -cnotmatch '^syp154-report-[0-9a-f]{32}$') {
-            throw 'Integration test cleanup root is not the allocated temporary directory.'
-        }
-        Remove-Item -LiteralPath $script:testRoot -Recurse -Force
-    }
-
-    # Scenario: a package tool emits a success report with a string error count.
-    # Purpose: the General child must reject malformed counts through the shared authority rule.
-    It 'InterT10_rejects_string_error_count_from_the_real_General_child' {
-        $reportPath = Join-Path $script:testRoot 'report.json'
-        [IO.File]::WriteAllText($reportPath, (@{ skill_dir = $script:skillRoot; passed = $true; errors = '0'; warnings = 0; results = @(@{ level = 'pass'; file = 'SKILL.md' }) } | ConvertTo-Json -Depth 10 -Compress))
-        $env:SYP154_TEST_TOOL_REPORT = $reportPath
-        $output = & $script:pwshPath -NoProfile -NonInteractive -File $script:childPath -Mode skill-validator -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainHash 2>&1
-        $LASTEXITCODE | Should -Be 1
-        ($output -join "`n") | Should -Match 'typed nonnegative integer'
-    }
-
-    # Scenario: the same candidate-bound tool returns typed zero counts.
-    # Purpose: the shared report rule must allow the normal General envelope path.
-    It 'InterT20_accepts_typed_zero_counts_through_the_real_General_child' {
-        $reportPath = Join-Path $script:testRoot 'report.json'
-        [IO.File]::WriteAllText($reportPath, (@{ skill_dir = $script:skillRoot; passed = $true; errors = 0; warnings = 0; results = @(@{ level = 'pass'; file = 'SKILL.md' }) } | ConvertTo-Json -Depth 10 -Compress))
-        $env:SYP154_TEST_TOOL_REPORT = $reportPath
-        $output = & $script:pwshPath -NoProfile -NonInteractive -File $script:childPath -Mode skill-validator -ToolchainPath $script:toolchainPath -ToolchainSha256 $script:toolchainHash 2>&1
-        $LASTEXITCODE | Should -Be 0 -Because ($output -join "`n")
-        $envelope = ($output -join "`n") | ConvertFrom-Json -Depth 10
-        $envelope.decision | Should -Be 'PASS'
-        $envelope.candidateIdentity | Should -Be ('a' * 64)
-        @($envelope.nativeReports).Count | Should -Be 1
-        $native = $envelope.nativeReports[0]
-        $native.skillId | Should -Be 'demo'
-        $native.command | Should -Be $script:fakeToolPath
-        $native.exitCode | Should -Be 0
-        $native.path | Should -Be (Join-Path $script:testRoot 'native-skill-validator-demo.json')
-        $native.sha256 | Should -Be (Get-FileHash -LiteralPath $native.path -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-
-    # Scenario: the same report is supplied with a forged central runner digest.
-    # Purpose: a candidate cannot substitute an unverified shared validator and still receive PASS.
-    It 'InterT30_rejects_a_mismatched_central_runner_before_tool_execution' {
-        $reportPath = Join-Path $script:testRoot 'report.json'
-        [IO.File]::WriteAllText($reportPath, (@{ skill_dir = $script:skillRoot; passed = $true; errors = 0; warnings = 0; results = @(@{ level = 'pass'; file = 'SKILL.md' }) } | ConvertTo-Json -Depth 10 -Compress))
-        $env:SYP154_TEST_TOOL_REPORT = $reportPath
-        $toolchain = Get-Content -LiteralPath $script:toolchainPath -Raw | ConvertFrom-Json
-        $toolchain.centralRunnerSha256 = '0' * 64
-        [IO.File]::WriteAllText($script:toolchainPath, ($toolchain | ConvertTo-Json -Compress))
-        $forgedToolchainHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $script:toolchainPath).Hash.ToLowerInvariant()
-        $output = & $script:pwshPath -NoProfile -NonInteractive -File $script:childPath -Mode skill-validator -ToolchainPath $script:toolchainPath -ToolchainSha256 $forgedToolchainHash 2>&1
-        $LASTEXITCODE | Should -Be 1
-        ($output -join "`n") | Should -Match 'central validation runner changed or is missing'
+        $bomPath = Join-Path $TestDrive 'bom.json'
+        [IO.File]::WriteAllText($bomPath, '{"schemaVersion":1}', [Text.UTF8Encoding]::new($true))
+        { Read-ConsumerTestJson -LiteralPath $bomPath } | Should -Throw '*must not contain a UTF-8 BOM*'
     }
 }
