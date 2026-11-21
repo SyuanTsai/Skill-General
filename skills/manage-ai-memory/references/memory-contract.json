@@ -17,6 +17,28 @@
     "locatorPolicy": "source-returned-opaque-locator-only",
     "storesProviderOrAccountIdentity": false
   },
+  "writeRules": {
+    "appliesTo": "new-memory-body",
+    "sources": ["explicit-user-entry", "trusted-adopter-configuration"],
+    "requiredFields": ["granularity", "parentLocator", "pageNaming"],
+    "granularityValues": ["per-ticket", "per-topic"],
+    "pageNamingPlaceholders": ["{ticketKey}", "{topic}", "{memoryKey}", "{scope}"],
+    "granularityRequiredPlaceholder": {"per-ticket": "{ticketKey}", "per-topic": "{topic}"},
+    "parentLocatorPolicy": "source-returned-opaque-locator-only",
+    "missingOrInvalidAction": "stop-affected-write-and-ask-user",
+    "writesWhenMissing": 0,
+    "forbiddenInferenceSources": ["index-locator-convention", "existing-page-title-or-text", "other-memory-locations", "unique-workspace-connection"],
+    "uniqueConnectedTargetSuppliesPlacement": false,
+    "legacyConfiguredAreaIsWriteRule": true,
+    "pagesFormatWithoutAdopterConfigAction": "stop-affected-write-and-ask-user",
+    "handoffBoundary": {
+      "parentMayBeHandoffLocation": false,
+      "handoffLocationParentAction": "stop-affected-write-and-ask-user",
+      "handoffRecordsOwner": "manage-task-handoff"
+    },
+    "newPageIndexPointsToNewPage": true,
+    "existingDataMigrationNeedsAuthorization": true
+  },
   "authority": {
     "ordinaryAuthorizedOperationNeedsRoleProbe": false,
     "ordinaryAuthorizedOperationNeedsRepeatedConfirmation": false,
