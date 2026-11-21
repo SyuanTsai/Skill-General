@@ -27,6 +27,16 @@ Describe 'manage-ai-memory provider-neutral contract' {
             [IO.File]::WriteAllText($unrelatedPath,"unrelated sentinel`n",[Text.UTF8Encoding]::new($false))
             return [pscustomobject]@{Root=$Root;Script=Join-Path $Root 'scripts/Sync-SharedReferences.ps1';Source=$sourcePath;SourceBytes=$sourceBytes;Memory=$memoryPath;Handoff=$handoffPath;Unrelated=$unrelatedPath}
         }
+        function Get-OptionalProperty {
+            param(
+                [AllowNull()][object]$InputObject,
+                [Parameter(Mandatory)][string]$Name
+            )
+            if ($null -eq $InputObject) { return $null }
+            $property = $InputObject.PSObject.Properties[$Name]
+            if ($null -eq $property) { return $null }
+            return $property.Value
+        }
         function Test-MemoryWriteRule {
             param(
                 [AllowNull()][object]$Rule,
@@ -73,9 +83,9 @@ Describe 'manage-ai-memory provider-neutral contract' {
             param(
                 [Parameter(Mandatory)][object]$Rule
             )
-            $rendered = [string]$Rule.pageNaming
+            $rendered = [string](Get-OptionalProperty -InputObject $Rule -Name 'pageNaming')
             foreach ($placeholder in @('ticketKey', 'topic', 'memoryKey', 'scope')) {
-                $value = [string]$Rule.$placeholder
+                $value = [string](Get-OptionalProperty -InputObject $Rule -Name $placeholder)
                 $rendered = $rendered.Replace('{' + $placeholder + '}', $value)
             }
             return $rendered
@@ -361,7 +371,9 @@ Export-ModuleMember -Function @()
         $case.fixedToolResponses[5].arguments.locator | Should -Be $pending.locator
         $case.fixedToolResponses[6].response.status | Should -Be 'Superseded'
         $case.fixedToolResponses[6].response.source | Should -Be $pending.source
-        $case.oracle.expected.unrelatedInferenceUnchanged | Should -BeTrue
+        $oracle = Get-OptionalProperty -InputObject $case -Name 'oracle'
+        $expected = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'unrelatedInferenceUnchanged'
+        $expected | Should -BeTrue
     }
 
     # Scenario: The index has no row for a key whose body is already present.
@@ -503,15 +515,17 @@ Export-ModuleMember -Function @()
         $ids = @($script:AgentInputs.scenarios | ForEach-Object id)
         $ids | Should -Be @((1..22) | ForEach-Object { 'AC{0:d2}' -f $_ })
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
-            $scenario.scenario | Should -Match '^Scenario: '
-            $scenario.purpose | Should -Match '^Purpose: '
-            $scenario.userInput | Should -Not -BeNullOrEmpty
-            $scenario.oracle.expected | Should -Not -BeNullOrEmpty
-            @($scenario.fixedToolResponses).Count | Should -BeGreaterThan 0
-            foreach ($call in @($scenario.fixedToolResponses)) {
-                $call.tool | Should -Not -BeNullOrEmpty
-                $call.arguments | Should -Not -BeNullOrEmpty
-                $call.response | Should -Not -BeNullOrEmpty
+            (Get-OptionalProperty -InputObject $scenario -Name 'scenario') | Should -Match '^Scenario: '
+            (Get-OptionalProperty -InputObject $scenario -Name 'purpose') | Should -Match '^Purpose: '
+            (Get-OptionalProperty -InputObject $scenario -Name 'userInput') | Should -Not -BeNullOrEmpty
+            $oracle = Get-OptionalProperty -InputObject $scenario -Name 'oracle'
+            (Get-OptionalProperty -InputObject $oracle -Name 'expected') | Should -Not -BeNullOrEmpty
+            $fixedToolResponses = @(Get-OptionalProperty -InputObject $scenario -Name 'fixedToolResponses')
+            $fixedToolResponses.Count | Should -BeGreaterThan 0
+            foreach ($call in $fixedToolResponses) {
+                (Get-OptionalProperty -InputObject $call -Name 'tool') | Should -Not -BeNullOrEmpty
+                (Get-OptionalProperty -InputObject $call -Name 'arguments') | Should -Not -BeNullOrEmpty
+                (Get-OptionalProperty -InputObject $call -Name 'response') | Should -Not -BeNullOrEmpty
             }
         }
     }
@@ -534,7 +548,9 @@ Export-ModuleMember -Function @()
         $case.expected.inferredFromIndexLocator | Should -BeFalse
         $scenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC19')[0]
         @($scenario.fixedToolResponses | Where-Object tool -In @('records.create', 'records.update')).Count | Should -Be 0
-        $scenario.oracle.expected.askUserForWriteRule | Should -BeTrue
+        $oracle = Get-OptionalProperty -InputObject $scenario -Name 'oracle'
+        $expected = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'askUserForWriteRule'
+        $expected | Should -BeTrue
     }
 
     # Scenario: Candidate rules include valid granularities and each specified invalid shape.
@@ -562,35 +578,82 @@ Export-ModuleMember -Function @()
     # Purpose: Create and verify the named page, then bind the index to that exact new locator.
     It 'UnitT77_creates_a_new_page_under_the_configured_parent_and_indexes_it' {
         $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC20')[0]
+        @($case.PSObject.Properties.Name) | Should -Contain 'writeRule'
+        @($case.writeRule.PSObject.Properties.Name) | Should -Contain 'parentLocator'
+        $calls = @($case.fixedToolResponses)
+        $sameKeyIndex = -1
+        $placementIndex = -1
+        $createIndex = -1
+        for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
+            $call = $calls[$indexOfCall]
+            $arguments = Get-OptionalProperty -InputObject $call -Name 'arguments'
+            if ($call.tool -EQ 'records.search' -and (Get-OptionalProperty -InputObject $arguments -Name 'key') -EQ 'project:example.project:write-placement' -and (Get-OptionalProperty -InputObject $arguments -Name 'scope') -EQ 'example.project') {
+                $sameKeyIndex = $indexOfCall
+            }
+            if ($call.tool -EQ 'records.search' -and (Get-OptionalProperty -InputObject $arguments -Name 'parent') -EQ $case.writeRule.parentLocator -and (Get-OptionalProperty -InputObject $arguments -Name 'title') -EQ 'Memory - SYP-507') {
+                $placementIndex = $indexOfCall
+            }
+            if ($call.tool -EQ 'records.create') {
+                $createIndex = $indexOfCall
+            }
+        }
+        ($sameKeyIndex -ge 0) | Should -BeTrue
+        $sameKeyResponse = Get-OptionalProperty -InputObject $calls[$sameKeyIndex] -Name 'response'
+        @((Get-OptionalProperty -InputObject $sameKeyResponse -Name 'matches')).Count | Should -Be 0
+        $sameKeyIndex | Should -BeLessThan $placementIndex
+        $sameKeyIndex | Should -BeLessThan $createIndex
         $created = @($case.fixedToolResponses | Where-Object tool -EQ 'records.create')[0]
+        @($created.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+        @($created.arguments.PSObject.Properties.Name) | Should -Contain 'title'
+        @($created.response.PSObject.Properties.Name) | Should -Contain 'locator'
         $created.arguments.parent | Should -BeExactly $case.writeRule.parentLocator
         $created.arguments.title | Should -BeExactly 'Memory - SYP-507'
         $readback = @($case.fixedToolResponses | Where-Object tool -EQ 'records.read')[0]
+        @($readback.arguments.PSObject.Properties.Name) | Should -Contain 'locator'
+        @($readback.response.PSObject.Properties.Name) | Should -Contain 'locator'
         $readback.arguments.locator | Should -BeExactly $created.response.locator
         $readback.response.locator | Should -BeExactly $created.response.locator
         foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            @($created.arguments.PSObject.Properties.Name) | Should -Contain $field
+            @($readback.response.PSObject.Properties.Name) | Should -Contain $field
             $readback.response.$field | Should -BeExactly $created.arguments.$field -Because "AC20 must read back $field before indexing"
         }
         $index = @($case.fixedToolResponses | Where-Object tool -EQ 'index.upsert')[0]
+        $indexFields = @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
+        @($index.arguments.PSObject.Properties.Name) | Should -Be $indexFields
+        $index.arguments.Status | Should -BeExactly $readback.response.status
         $index.arguments.Locator | Should -BeExactly $created.response.locator
-        $case.oracle.expected.readback | Should -BeTrue
+        $index.arguments.Target | Should -BeExactly $created.response.locator
+        $indexReadback = @($case.fixedToolResponses | Where-Object tool -EQ 'index.read')[0]
+        @($indexReadback.response.PSObject.Properties.Name) | Should -Be $indexFields
+        foreach ($field in $indexFields) {
+            $indexReadback.response.$field | Should -BeExactly $index.arguments.$field -Because "AC20 index readback must match $field"
+        }
+        $oracle = Get-OptionalProperty -InputObject $case -Name 'oracle'
+        $expectedReadback = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'readback'
+        $expectedReadback | Should -BeTrue
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
-            $rule = $scenario.writeRule
-            if ($null -eq $rule -or $rule.source -in @($script:Contract.writeRules.legacyExemptions)) { continue }
+            $rule = Get-OptionalProperty -InputObject $scenario -Name 'writeRule'
+            $ruleSource = Get-OptionalProperty -InputObject $rule -Name 'source'
+            if ($null -eq $rule -or $ruleSource -in @($script:Contract.writeRules.legacyExemptions)) { continue }
             $renderedName = Format-MemoryPageName -Rule $rule
             $calls = @($scenario.fixedToolResponses)
             for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
                 $call = $calls[$indexOfCall]
                 if ($call.tool -ne 'records.create') { continue }
-                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $rule.source).Valid | Should -BeTrue -Because $scenario.id
+                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $ruleSource).Valid | Should -BeTrue -Because $scenario.id
+                @($call.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+                @($call.arguments.PSObject.Properties.Name) | Should -Contain 'title'
                 $call.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
                 $call.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
                 $indexOfCall | Should -BeGreaterThan 0 -Because "$($scenario.id) needs a placement lookup before creation"
                 $placementLookup = $calls[$indexOfCall - 1]
                 $placementLookup.tool | Should -BeExactly 'records.search' -Because $scenario.id
+                @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+                @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'title'
                 $placementLookup.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
                 $placementLookup.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
-                @($placementLookup.response.matches).Count | Should -Be 0 -Because $scenario.id
+                @((Get-OptionalProperty -InputObject $placementLookup.response -Name 'matches')).Count | Should -Be 0 -Because $scenario.id
             }
         }
     }
@@ -609,6 +672,8 @@ Export-ModuleMember -Function @()
         $script:Contract.writeRules.handoffBoundary.handoffLocationParentAction | Should -BeExactly 'stop-affected-write-and-ask-user'
         $script:Contract.writeRules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly 'stop-affected-write-and-ask-user'
         $handoffScenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC21')[0]
+        @($handoffScenario.PSObject.Properties.Name) | Should -Contain 'writeRule'
+        @($handoffScenario.writeRule.PSObject.Properties.Name) | Should -Contain 'parentLocator'
         $handoffLocator = [string]$handoffScenario.writeRule.parentLocator
         foreach ($call in @($handoffScenario.fixedToolResponses)) {
             @($call.arguments.PSObject.Properties.Value) | Should -Not -Contain $handoffLocator

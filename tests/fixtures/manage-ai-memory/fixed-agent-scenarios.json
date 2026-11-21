@@ -1115,6 +1115,16 @@
         {
           "tool": "records.search",
           "arguments": {
+            "key": "project:example.project:write-placement",
+            "scope": "example.project"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
+          "tool": "records.search",
+          "arguments": {
             "parent": "parent-memory-pages",
             "title": "Memory - SYP-507",
             "match": "exact"
@@ -1157,13 +1167,31 @@
         {
           "tool": "index.upsert",
           "arguments": {
+            "Topic": "write-placement",
+            "Scope": "example.project",
             "Memory Key": "project:example.project:write-placement",
             "Locator": "record://memory/SYP-507",
-            "Target": "record://memory/SYP-507"
+            "Target": "record://memory/SYP-507",
+            "Status": "Active"
           },
           "response": {
             "ok": true,
             "Locator": "record://memory/SYP-507"
+          }
+        },
+        {
+          "tool": "index.read",
+          "arguments": {
+            "key": "project:example.project:write-placement",
+            "scope": "example.project"
+          },
+          "response": {
+            "Topic": "write-placement",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:write-placement",
+            "Locator": "record://memory/SYP-507",
+            "Target": "record://memory/SYP-507",
+            "Status": "Active"
           }
         }
       ],
