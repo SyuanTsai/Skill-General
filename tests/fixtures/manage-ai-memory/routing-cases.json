@@ -12,6 +12,11 @@
           "connected": true
         }
       ],
+      "writeRule": {
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}"
+      },
       "expected": {
         "target": "records-main",
         "sameKeyLookup": true,
@@ -259,6 +264,76 @@
         "realUserScopeChanged": false,
         "realAdopterChanged": false,
         "label": "candidate validated / not deployed"
+      }
+    },
+    {
+      "id": "AC19",
+      "scenario": "no adopter configuration or write rule; workspace-wide connection; index locators all point to one existing shared page",
+      "input": "Remember a new project decision.",
+      "targets": [
+        {
+          "id": "records-workspace",
+          "purpose": "records",
+          "connected": true,
+          "scope": "workspace-wide"
+        }
+      ],
+      "indexLocators": [
+        "record://shared/1",
+        "record://shared/1"
+      ],
+      "expected": {
+        "writeCount": 0,
+        "appendToExistingPage": false,
+        "askUserForWriteRule": true,
+        "missingFields": [
+          "granularity",
+          "parentLocator",
+          "pageNaming"
+        ],
+        "inferredFromIndexLocator": false
+      }
+    },
+    {
+      "id": "AC20",
+      "scenario": "trusted write rule per-ticket",
+      "input": "Remember the SYP-507 write-placement decision.",
+      "writeRule": {
+        "granularity": "per-ticket",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {ticketKey}"
+      },
+      "expected": {
+        "createdAsOwnPage": true,
+        "parentLocator": "parent-memory-pages",
+        "renderedPageName": "Memory - SYP-507",
+        "readback": true,
+        "indexLocatorEqualsNewPageLocator": true
+      }
+    },
+    {
+      "id": "AC21",
+      "scenario": "write rule parent is a Handoff location",
+      "input": "Remember a decision under the configured parent.",
+      "writeRule": {
+        "granularity": "per-topic",
+        "parentLocator": "handoff://active",
+        "pageNaming": "Memory - {topic}"
+      },
+      "expected": {
+        "writeCount": 0,
+        "askUser": true
+      }
+    },
+    {
+      "id": "AC22",
+      "scenario": "legacy pages-format target without adopter file",
+      "input": "Remember a decision in the legacy pages target.",
+      "format": "pages",
+      "adopterFile": null,
+      "expected": {
+        "writeCount": 0,
+        "askUser": true
       }
     }
   ]

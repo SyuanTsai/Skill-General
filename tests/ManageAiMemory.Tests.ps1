@@ -27,6 +27,69 @@ Describe 'manage-ai-memory provider-neutral contract' {
             [IO.File]::WriteAllText($unrelatedPath,"unrelated sentinel`n",[Text.UTF8Encoding]::new($false))
             return [pscustomobject]@{Root=$Root;Script=Join-Path $Root 'scripts/Sync-SharedReferences.ps1';Source=$sourcePath;SourceBytes=$sourceBytes;Memory=$memoryPath;Handoff=$handoffPath;Unrelated=$unrelatedPath}
         }
+        function Get-OptionalProperty {
+            param(
+                [AllowNull()][object]$InputObject,
+                [Parameter(Mandatory)][string]$Name
+            )
+            if ($null -eq $InputObject) { return $null }
+            $property = $InputObject.PSObject.Properties[$Name]
+            if ($null -eq $property) { return $null }
+            return $property.Value
+        }
+        function Test-MemoryWriteRule {
+            param(
+                [AllowNull()][object]$Rule,
+                [Parameter(Mandatory)][object]$Contract,
+                [AllowNull()][string]$RuleSource
+            )
+            if (-not [string]::IsNullOrWhiteSpace($RuleSource) -and $RuleSource -in @($Contract.legacyExemptions)) {
+                return [pscustomobject]@{
+                    Valid = $true
+                    MissingFields = @()
+                    Action = 'legacy-write-rule-valid'
+                }
+            }
+            $missing = [Collections.Generic.List[string]]::new()
+            foreach ($field in @($Contract.requiredFields)) {
+                $property = if ($null -eq $Rule) { $null } else { $Rule.PSObject.Properties[$field] }
+                if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                    $missing.Add($field)
+                }
+            }
+            if ($missing.Count -eq 0) {
+                $granularity = [string]$Rule.granularity
+                if ($granularity -notin @($Contract.granularityValues)) {
+                    $missing.Add('granularity')
+                } else {
+                    $requiredPlaceholder = [string]$Contract.granularityRequiredPlaceholder.$granularity
+                    if (-not ([string]$Rule.pageNaming).Contains($requiredPlaceholder)) {
+                        $missing.Add('pageNaming')
+                    }
+                    $usedPlaceholders = @([regex]::Matches([string]$Rule.pageNaming, '\{[^{}]+\}') | ForEach-Object Value)
+                    if (@($usedPlaceholders | Where-Object { $_ -notin @($Contract.pageNamingPlaceholders) }).Count -gt 0 -and $missing -notcontains 'pageNaming') {
+                        $missing.Add('pageNaming')
+                    }
+                }
+            }
+            $valid = $missing.Count -eq 0
+            [pscustomobject]@{
+                Valid = $valid
+                MissingFields = @($missing)
+                Action = if ($valid) { 'write-rule-valid' } else { [string]$Contract.missingOrInvalidAction }
+            }
+        }
+        function Format-MemoryPageName {
+            param(
+                [Parameter(Mandatory)][object]$Rule
+            )
+            $rendered = [string](Get-OptionalProperty -InputObject $Rule -Name 'pageNaming')
+            foreach ($placeholder in @('ticketKey', 'topic', 'memoryKey', 'scope')) {
+                $value = [string](Get-OptionalProperty -InputObject $Rule -Name $placeholder)
+                $rendered = $rendered.Replace('{' + $placeholder + '}', $value)
+            }
+            return $rendered
+        }
     }
 
     # Scenario: The renamed package is discovered as one stable source identity.
@@ -298,17 +361,19 @@ Export-ModuleMember -Function @()
         $operations | Should -Match 'already held in a Pending body'
         $operations | Should -Match 'read it back, then mark the Pending body Superseded'
         $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC07')[0]
-        @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.create','records.read','records.update','records.read')
+        @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.search','records.create','records.read','records.update','records.read')
         $pending = $case.fixedToolResponses[1].response
-        $confirmed = $case.fixedToolResponses[3].response
+        $confirmed = $case.fixedToolResponses[4].response
         $pending.content | Should -Be $confirmed.content
         $pending.status | Should -Be 'Pending'
         $confirmed.status | Should -Be 'Active'
         $confirmed.confidence | Should -Be 'Confirmed'
-        $case.fixedToolResponses[4].arguments.locator | Should -Be $pending.locator
-        $case.fixedToolResponses[5].response.status | Should -Be 'Superseded'
-        $case.fixedToolResponses[5].response.source | Should -Be $pending.source
-        $case.oracle.expected.unrelatedInferenceUnchanged | Should -BeTrue
+        $case.fixedToolResponses[5].arguments.locator | Should -Be $pending.locator
+        $case.fixedToolResponses[6].response.status | Should -Be 'Superseded'
+        $case.fixedToolResponses[6].response.source | Should -Be $pending.source
+        $oracle = Get-OptionalProperty -InputObject $case -Name 'oracle'
+        $expected = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'unrelatedInferenceUnchanged'
+        $expected | Should -BeTrue
     }
 
     # Scenario: The index has no row for a key whose body is already present.
@@ -448,18 +513,221 @@ Export-ModuleMember -Function @()
         $script:AgentInputs.fixtureVersion | Should -Be 2
         $script:AgentInputs.fixtureAuthorizesLiveWrites | Should -BeFalse
         $ids = @($script:AgentInputs.scenarios | ForEach-Object id)
-        $ids | Should -Be @((1..18) | ForEach-Object { 'AC{0:d2}' -f $_ })
+        $ids | Should -Be @((1..22) | ForEach-Object { 'AC{0:d2}' -f $_ })
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
-            $scenario.scenario | Should -Match '^Scenario: '
-            $scenario.purpose | Should -Match '^Purpose: '
-            $scenario.userInput | Should -Not -BeNullOrEmpty
-            $scenario.oracle.expected | Should -Not -BeNullOrEmpty
-            @($scenario.fixedToolResponses).Count | Should -BeGreaterThan 0
-            foreach ($call in @($scenario.fixedToolResponses)) {
-                $call.tool | Should -Not -BeNullOrEmpty
-                $call.arguments | Should -Not -BeNullOrEmpty
-                $call.response | Should -Not -BeNullOrEmpty
+            (Get-OptionalProperty -InputObject $scenario -Name 'scenario') | Should -Match '^Scenario: '
+            (Get-OptionalProperty -InputObject $scenario -Name 'purpose') | Should -Match '^Purpose: '
+            (Get-OptionalProperty -InputObject $scenario -Name 'userInput') | Should -Not -BeNullOrEmpty
+            $oracle = Get-OptionalProperty -InputObject $scenario -Name 'oracle'
+            (Get-OptionalProperty -InputObject $oracle -Name 'expected') | Should -Not -BeNullOrEmpty
+            $fixedToolResponses = @(Get-OptionalProperty -InputObject $scenario -Name 'fixedToolResponses')
+            $fixedToolResponses.Count | Should -BeGreaterThan 0
+            foreach ($call in $fixedToolResponses) {
+                (Get-OptionalProperty -InputObject $call -Name 'tool') | Should -Not -BeNullOrEmpty
+                (Get-OptionalProperty -InputObject $call -Name 'arguments') | Should -Not -BeNullOrEmpty
+                (Get-OptionalProperty -InputObject $call -Name 'response') | Should -Not -BeNullOrEmpty
             }
         }
+    }
+
+    # Scenario: A workspace-wide target has no trusted or explicit placement rule and all index locators share one page.
+    # Purpose: Stop the affected new-body write without treating index conventions or one connection as placement authority.
+    It 'UnitT75_requires_a_complete_write_rule_before_creating_a_new_body' {
+        $rules = $script:Contract.writeRules
+        @($rules.requiredFields) | Should -Be @('granularity', 'parentLocator', 'pageNaming')
+        @($rules.granularityValues) | Should -Be @('per-ticket', 'per-topic')
+        $rules.missingOrInvalidAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $rules.writesWhenMissing | Should -Be 0
+        $rules.uniqueConnectedTargetSuppliesPlacement | Should -BeFalse
+        @($rules.forbiddenInferenceSources) | Should -Contain 'index-locator-convention'
+        $case = @($script:Cases.cases | Where-Object id -EQ 'AC19')[0]
+        $case.expected.writeCount | Should -Be 0
+        $case.expected.appendToExistingPage | Should -BeFalse
+        $case.expected.askUserForWriteRule | Should -BeTrue
+        @($case.expected.missingFields) | Should -Be @('granularity', 'parentLocator', 'pageNaming')
+        $case.expected.inferredFromIndexLocator | Should -BeFalse
+        $scenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC19')[0]
+        @($scenario.fixedToolResponses | Where-Object tool -In @('records.create', 'records.update')).Count | Should -Be 0
+        $oracle = Get-OptionalProperty -InputObject $scenario -Name 'oracle'
+        $expected = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'askUserForWriteRule'
+        $expected | Should -BeTrue
+    }
+
+    # Scenario: Candidate rules include valid granularities and each specified invalid shape.
+    # Purpose: Derive write-rule validation and the stop action only from the installed contract.
+    It 'UnitT76_validates_write_rule_inputs_with_the_contract: <Name>' -ForEach @(
+        @{ Name = 'valid per-ticket'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {ticketKey}' }; Valid = $true; Missing = @() }
+        @{ Name = 'valid per-topic'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $true; Missing = @() }
+        @{ Name = 'missing parentLocator'; Rule = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('parentLocator') }
+        @{ Name = 'missing granularity'; Rule = [pscustomobject]@{ parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('granularity') }
+        @{ Name = 'unknown granularity'; Rule = [pscustomobject]@{ granularity = 'per-day'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('granularity') }
+        @{ Name = 'ticket placeholder missing'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('pageNaming') }
+        @{ Name = 'null rule'; Rule = $null; Valid = $false; Missing = @('granularity', 'parentLocator', 'pageNaming') }
+    ) {
+        $result = Test-MemoryWriteRule -Rule $Rule -Contract $script:Contract.writeRules
+        $result.Valid | Should -Be $Valid
+        @($result.MissingFields) | Should -Be $Missing
+        if ($Valid) {
+            $result.Action | Should -BeExactly 'write-rule-valid'
+        } else {
+            $result.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
+        }
+    }
+
+    # Scenario: A trusted per-ticket rule has no existing ticket page under its configured parent.
+    # Purpose: Create and verify the named page, then bind the index to that exact new locator.
+    It 'UnitT77_creates_a_new_page_under_the_configured_parent_and_indexes_it' {
+        $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC20')[0]
+        @($case.PSObject.Properties.Name) | Should -Contain 'writeRule'
+        @($case.writeRule.PSObject.Properties.Name) | Should -Contain 'parentLocator'
+        $script:Contract.writeRules.indexMaintenanceRequiresConfiguredIndex | Should -BeTrue
+        $configuredIndex = Get-OptionalProperty -InputObject $case -Name 'configuredIndex'
+        $configuredIndexLocator = Get-OptionalProperty -InputObject $configuredIndex -Name 'locator'
+        $configuredIndexLocator | Should -BeExactly 'memory-index'
+        $calls = @($case.fixedToolResponses)
+        $sameKeyIndex = -1
+        $placementIndex = -1
+        $createIndex = -1
+        for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
+            $call = $calls[$indexOfCall]
+            $arguments = Get-OptionalProperty -InputObject $call -Name 'arguments'
+            if ($call.tool -EQ 'records.search' -and (Get-OptionalProperty -InputObject $arguments -Name 'key') -EQ 'project:example.project:write-placement' -and (Get-OptionalProperty -InputObject $arguments -Name 'scope') -EQ 'example.project') {
+                $sameKeyIndex = $indexOfCall
+            }
+            if ($call.tool -EQ 'records.search' -and (Get-OptionalProperty -InputObject $arguments -Name 'parent') -EQ $case.writeRule.parentLocator -and (Get-OptionalProperty -InputObject $arguments -Name 'title') -EQ 'Memory - SYP-507') {
+                $placementIndex = $indexOfCall
+            }
+            if ($call.tool -EQ 'records.create') {
+                $createIndex = $indexOfCall
+            }
+        }
+        ($sameKeyIndex -ge 0) | Should -BeTrue
+        $sameKeyResponse = Get-OptionalProperty -InputObject $calls[$sameKeyIndex] -Name 'response'
+        @((Get-OptionalProperty -InputObject $sameKeyResponse -Name 'matches')).Count | Should -Be 0
+        $sameKeyIndex | Should -BeLessThan $placementIndex
+        $sameKeyIndex | Should -BeLessThan $createIndex
+        $created = @($case.fixedToolResponses | Where-Object tool -EQ 'records.create')[0]
+        @($created.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+        @($created.arguments.PSObject.Properties.Name) | Should -Contain 'title'
+        @($created.response.PSObject.Properties.Name) | Should -Contain 'locator'
+        $created.arguments.parent | Should -BeExactly $case.writeRule.parentLocator
+        $created.arguments.title | Should -BeExactly 'Memory - SYP-507'
+        $readback = @($case.fixedToolResponses | Where-Object tool -EQ 'records.read')[0]
+        @($readback.arguments.PSObject.Properties.Name) | Should -Contain 'locator'
+        @($readback.response.PSObject.Properties.Name) | Should -Contain 'locator'
+        $readback.arguments.locator | Should -BeExactly $created.response.locator
+        $readback.response.locator | Should -BeExactly $created.response.locator
+        foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            @($created.arguments.PSObject.Properties.Name) | Should -Contain $field
+            @($readback.response.PSObject.Properties.Name) | Should -Contain $field
+            $readback.response.$field | Should -BeExactly $created.arguments.$field -Because "AC20 must read back $field before indexing"
+        }
+        $index = @($case.fixedToolResponses | Where-Object tool -EQ 'index.upsert')[0]
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'index') | Should -BeExactly $configuredIndexLocator
+        $indexArgumentFields = @('index', 'Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
+        $indexResponseFields = @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
+        @($index.arguments.PSObject.Properties.Name) | Should -Be $indexArgumentFields
+        $index.arguments.Status | Should -BeExactly $readback.response.status
+        $index.arguments.Locator | Should -BeExactly $created.response.locator
+        $index.arguments.Target | Should -BeExactly $created.response.locator
+        $indexReadback = @($case.fixedToolResponses | Where-Object tool -EQ 'index.read')[0]
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $indexReadback -Name 'arguments') -Name 'index') | Should -BeExactly $configuredIndexLocator
+        @($indexReadback.response.PSObject.Properties.Name) | Should -Be $indexResponseFields
+        foreach ($field in $indexResponseFields) {
+            $indexReadback.response.$field | Should -BeExactly $index.arguments.$field -Because "AC20 index readback must match $field"
+        }
+        $oracle = Get-OptionalProperty -InputObject $case -Name 'oracle'
+        $expectedReadback = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'readback'
+        $expectedReadback | Should -BeTrue
+        foreach ($scenario in @($script:AgentInputs.scenarios)) {
+            $rule = Get-OptionalProperty -InputObject $scenario -Name 'writeRule'
+            $ruleSource = Get-OptionalProperty -InputObject $rule -Name 'source'
+            if ($null -eq $rule -or $ruleSource -in @($script:Contract.writeRules.legacyExemptions)) { continue }
+            $renderedName = Format-MemoryPageName -Rule $rule
+            $calls = @($scenario.fixedToolResponses)
+            for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
+                $call = $calls[$indexOfCall]
+                if ($call.tool -ne 'records.create') { continue }
+                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $ruleSource).Valid | Should -BeTrue -Because $scenario.id
+                @($call.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+                @($call.arguments.PSObject.Properties.Name) | Should -Contain 'title'
+                $call.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $call.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
+                $indexOfCall | Should -BeGreaterThan 0 -Because "$($scenario.id) needs a placement lookup before creation"
+                $placementLookup = $calls[$indexOfCall - 1]
+                $placementLookup.tool | Should -BeExactly 'records.search' -Because $scenario.id
+                @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
+                @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'title'
+                $placementLookup.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $placementLookup.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
+                @((Get-OptionalProperty -InputObject $placementLookup.response -Name 'matches')).Count | Should -Be 0 -Because $scenario.id
+            }
+        }
+    }
+
+    # Scenario: A configured parent is a Handoff location, and a legacy pages target lacks adopter placement.
+    # Purpose: Keep memory writes out of Handoffs and stop legacy pages writes without configuration.
+    It 'UnitT78_keeps_memory_writes_out_of_handoff_locations_and_legacy_pages_without_config' {
+        foreach ($id in @('AC21', 'AC22')) {
+            $case = @($script:Cases.cases | Where-Object id -EQ $id)[0]
+            $case.expected.writeCount | Should -Be 0
+            $case.expected.askUser | Should -BeTrue
+            $scenario = @($script:AgentInputs.scenarios | Where-Object id -EQ $id)[0]
+            @($scenario.fixedToolResponses | Where-Object tool -In @('records.create', 'records.update')).Count | Should -Be 0
+        }
+        $script:Contract.writeRules.handoffBoundary.parentMayBeHandoffLocation | Should -BeFalse
+        $script:Contract.writeRules.handoffBoundary.handoffLocationParentAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $script:Contract.writeRules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $handoffScenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC21')[0]
+        @($handoffScenario.PSObject.Properties.Name) | Should -Contain 'writeRule'
+        @($handoffScenario.writeRule.PSObject.Properties.Name) | Should -Contain 'parentLocator'
+        $handoffLocator = [string]$handoffScenario.writeRule.parentLocator
+        foreach ($call in @($handoffScenario.fixedToolResponses)) {
+            @($call.arguments.PSObject.Properties.Value) | Should -Not -Contain $handoffLocator
+        }
+        @($handoffScenario.fixedToolResponses | Where-Object tool -Like 'records.*').Count | Should -Be 0
+        (Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')) | Should -Match 'index Locator'
+    }
+
+    # Scenario: An installed agent needs operational write-placement guidance without test-only context.
+    # Purpose: Keep the rule discoverable in every installed reference used for target and legacy resolution.
+    It 'UnitT79_documents_write_placement_in_installed_references' {
+        foreach ($relativePath in @('SKILL.md', 'references/memory-operations.md', 'references/index-workflow.md', 'references/legacy-mappings.md')) {
+            $text = Get-Content -Raw (Join-Path $script:Skill $relativePath)
+            $text | Should -Match 'per-ticket'
+            $text | Should -Match '(?i)parent locator'
+            $text | Should -Match '(?i)stop'
+            $text | Should -Match '(?i)ask'
+        }
+    }
+
+    # Scenario: Trusted v3 structured and configured v4 memory mappings predate v5 placement fields.
+    # Purpose: Keep established adopters writable while unconfigured pages targets still stop and ask.
+    It 'UnitT80_lets_trusted_legacy_mappings_create_without_v5_write_fields' {
+        $rules = $script:Contract.writeRules
+        @($rules.legacyExemptions) | Should -Be @('trusted-v3-structured-mapping', 'configured-v4-memory-area')
+        $rules.indexMaintenanceRequiresConfiguredIndex | Should -BeTrue
+        foreach ($source in @($rules.legacyExemptions)) {
+            $result = Test-MemoryWriteRule -Rule $null -Contract $rules -RuleSource $source
+            $result.Valid | Should -BeTrue -Because $source
+            @($result.MissingFields).Count | Should -Be 0
+            $result.Action | Should -BeExactly 'legacy-write-rule-valid'
+        }
+        $pagesWithoutAdopter = Test-MemoryWriteRule -Rule $null -Contract $rules
+        $pagesWithoutAdopter.Valid | Should -BeFalse
+        @($pagesWithoutAdopter.MissingFields) | Should -Be @('granularity', 'parentLocator', 'pageNaming')
+        $pagesWithoutAdopter.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $rules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly $pagesWithoutAdopter.Action
+
+        $operations = Get-Content -Raw (Join-Path $script:Skill 'references/memory-operations.md')
+        $operations | Should -Match 'trusted v3 structured mapping'
+        $operations | Should -Match 'index maintenance applies only when an index is configured'
+
+        (Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')) |
+            Should -Match 'configured v4 `memory` area'
+        (Get-Content -Raw (Join-Path $script:Skill 'references/index-workflow.md')) |
+            Should -Match 'configured v4 `memory` area'
+        (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-mappings.md')) |
+            Should -Match 'v4 adopter''s configured `memory` area'
     }
 }

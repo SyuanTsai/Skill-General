@@ -22,6 +22,14 @@ Skip body creation only when the verified content, source, status, and confidenc
 
 When a user corrects a proposition or authoritative sources conflict, stop using that proposition as current. Record the correction and evidence for just the affected claim. Preserve prior content as source-managed history; this Skill does not implement a history or merge service. Separate “source says X” from “X is confirmed” in both body and response.
 
+### Write placement
+
+For a v5 write rule, creating a new memory body requires `per-ticket` or `per-topic` granularity, a source-returned opaque parent locator, and page naming that uses only `{ticketKey}`, `{topic}`, `{memoryKey}`, or `{scope}` and contains the matching ticket/topic placeholder. Under that parent, look up the ticket/topic page by exact rendered name or key, reuse or create it, save and read back the body, and then index that page's verified locator (and section or block when needed) when an index is configured.
+
+A trusted v3 structured mapping or a configured v4 `memory` area is itself the adopter's write rule; it does not need the v5 granularity, parent locator, or page-naming fields, and index maintenance applies only when an index is configured. Keep writing to that configured destination exactly as before: create a new record in the configured v3 collection or write in the configured v4 area or section. Never create a new page for either legacy rule, and update only a configured index. If a rule is missing or invalid, or a v5 parent is known to be a Handoff location, stop only that write and ask for the missing or corrected fields.
+
+Do not infer a parent locator, page, or naming from index Locator or Target conventions, existing page titles or text, other memories' locations, or one workspace-wide connection. The unique connected target can select the record target but never supplies placement. Existing data stays where it is unless migration is separately authorized.
+
 ## Files
 
 Files carry original material while records carry reusable meaning and evidence. The same connector may serve both purposes, or each may have a different connected target. An already authorized request to save both a file and a record covers those ordinary steps; report their outcomes independently. The source's opaque locator is the reference between them. Record size, hash, version, or modification time only if actually returned. Do not fabricate those fields or build a file registry.
