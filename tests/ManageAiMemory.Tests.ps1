@@ -30,8 +30,16 @@ Describe 'manage-ai-memory provider-neutral contract' {
         function Test-MemoryWriteRule {
             param(
                 [AllowNull()][object]$Rule,
-                [Parameter(Mandatory)][object]$Contract
+                [Parameter(Mandatory)][object]$Contract,
+                [AllowNull()][string]$RuleSource
             )
+            if (-not [string]::IsNullOrWhiteSpace($RuleSource) -and $RuleSource -in @($Contract.legacyExemptions)) {
+                return [pscustomobject]@{
+                    Valid = $true
+                    MissingFields = @()
+                    Action = 'legacy-write-rule-valid'
+                }
+            }
             $missing = [Collections.Generic.List[string]]::new()
             foreach ($field in @($Contract.requiredFields)) {
                 $property = if ($null -eq $Rule) { $null } else { $Rule.PSObject.Properties[$field] }
@@ -60,6 +68,17 @@ Describe 'manage-ai-memory provider-neutral contract' {
                 MissingFields = @($missing)
                 Action = if ($valid) { 'write-rule-valid' } else { [string]$Contract.missingOrInvalidAction }
             }
+        }
+        function Format-MemoryPageName {
+            param(
+                [Parameter(Mandatory)][object]$Rule
+            )
+            $rendered = [string]$Rule.pageNaming
+            foreach ($placeholder in @('ticketKey', 'topic', 'memoryKey', 'scope')) {
+                $value = [string]$Rule.$placeholder
+                $rendered = $rendered.Replace('{' + $placeholder + '}', $value)
+            }
+            return $rendered
         }
     }
 
@@ -332,16 +351,16 @@ Export-ModuleMember -Function @()
         $operations | Should -Match 'already held in a Pending body'
         $operations | Should -Match 'read it back, then mark the Pending body Superseded'
         $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC07')[0]
-        @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.create','records.read','records.update','records.read')
+        @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.search','records.create','records.read','records.update','records.read')
         $pending = $case.fixedToolResponses[1].response
-        $confirmed = $case.fixedToolResponses[3].response
+        $confirmed = $case.fixedToolResponses[4].response
         $pending.content | Should -Be $confirmed.content
         $pending.status | Should -Be 'Pending'
         $confirmed.status | Should -Be 'Active'
         $confirmed.confidence | Should -Be 'Confirmed'
-        $case.fixedToolResponses[4].arguments.locator | Should -Be $pending.locator
-        $case.fixedToolResponses[5].response.status | Should -Be 'Superseded'
-        $case.fixedToolResponses[5].response.source | Should -Be $pending.source
+        $case.fixedToolResponses[5].arguments.locator | Should -Be $pending.locator
+        $case.fixedToolResponses[6].response.status | Should -Be 'Superseded'
+        $case.fixedToolResponses[6].response.source | Should -Be $pending.source
         $case.oracle.expected.unrelatedInferenceUnchanged | Should -BeTrue
     }
 
@@ -520,7 +539,7 @@ Export-ModuleMember -Function @()
 
     # Scenario: Candidate rules include valid granularities and each specified invalid shape.
     # Purpose: Derive write-rule validation and the stop action only from the installed contract.
-    It 'UnitT76_validates_write_rule_inputs_with_the_contract' -ForEach @(
+    It 'UnitT76_validates_write_rule_inputs_with_the_contract: <Name>' -ForEach @(
         @{ Name = 'valid per-ticket'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {ticketKey}' }; Valid = $true; Missing = @() }
         @{ Name = 'valid per-topic'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $true; Missing = @() }
         @{ Name = 'missing parentLocator'; Rule = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('parentLocator') }
@@ -549,14 +568,29 @@ Export-ModuleMember -Function @()
         $readback = @($case.fixedToolResponses | Where-Object tool -EQ 'records.read')[0]
         $readback.arguments.locator | Should -BeExactly $created.response.locator
         $readback.response.locator | Should -BeExactly $created.response.locator
+        foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            $readback.response.$field | Should -BeExactly $created.arguments.$field -Because "AC20 must read back $field before indexing"
+        }
         $index = @($case.fixedToolResponses | Where-Object tool -EQ 'index.upsert')[0]
         $index.arguments.Locator | Should -BeExactly $created.response.locator
         $case.oracle.expected.readback | Should -BeTrue
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
-            foreach ($call in @($scenario.fixedToolResponses | Where-Object tool -EQ 'records.create')) {
-                $rule = $scenario.writeRule
-                if ($null -eq $rule -and $scenario.userInput -match 'explicit write rule') { continue }
-                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules).Valid | Should -BeTrue -Because $scenario.id
+            $rule = $scenario.writeRule
+            if ($null -eq $rule -or $rule.source -in @($script:Contract.writeRules.legacyExemptions)) { continue }
+            $renderedName = Format-MemoryPageName -Rule $rule
+            $calls = @($scenario.fixedToolResponses)
+            for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
+                $call = $calls[$indexOfCall]
+                if ($call.tool -ne 'records.create') { continue }
+                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $rule.source).Valid | Should -BeTrue -Because $scenario.id
+                $call.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $call.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
+                $indexOfCall | Should -BeGreaterThan 0 -Because "$($scenario.id) needs a placement lookup before creation"
+                $placementLookup = $calls[$indexOfCall - 1]
+                $placementLookup.tool | Should -BeExactly 'records.search' -Because $scenario.id
+                $placementLookup.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $placementLookup.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
+                @($placementLookup.response.matches).Count | Should -Be 0 -Because $scenario.id
             }
         }
     }
@@ -574,6 +608,12 @@ Export-ModuleMember -Function @()
         $script:Contract.writeRules.handoffBoundary.parentMayBeHandoffLocation | Should -BeFalse
         $script:Contract.writeRules.handoffBoundary.handoffLocationParentAction | Should -BeExactly 'stop-affected-write-and-ask-user'
         $script:Contract.writeRules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $handoffScenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC21')[0]
+        $handoffLocator = [string]$handoffScenario.writeRule.parentLocator
+        foreach ($call in @($handoffScenario.fixedToolResponses)) {
+            @($call.arguments.PSObject.Properties.Value) | Should -Not -Contain $handoffLocator
+        }
+        @($handoffScenario.fixedToolResponses | Where-Object tool -Like 'records.*').Count | Should -Be 0
         (Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')) | Should -Match 'index Locator'
     }
 
@@ -587,5 +627,24 @@ Export-ModuleMember -Function @()
             $text | Should -Match '(?i)stop'
             $text | Should -Match '(?i)ask'
         }
+    }
+
+    # Scenario: Trusted v3 structured and configured v4 memory mappings predate v5 placement fields.
+    # Purpose: Keep established adopters writable while unconfigured pages targets still stop and ask.
+    It 'UnitT80_lets_trusted_legacy_mappings_create_without_v5_write_fields' {
+        $rules = $script:Contract.writeRules
+        @($rules.legacyExemptions) | Should -Be @('trusted-v3-structured-mapping', 'configured-v4-memory-area')
+        $rules.indexMaintenanceRequiresConfiguredIndex | Should -BeTrue
+        foreach ($source in @($rules.legacyExemptions)) {
+            $result = Test-MemoryWriteRule -Rule $null -Contract $rules -RuleSource $source
+            $result.Valid | Should -BeTrue -Because $source
+            @($result.MissingFields).Count | Should -Be 0
+            $result.Action | Should -BeExactly 'legacy-write-rule-valid'
+        }
+        $pagesWithoutAdopter = Test-MemoryWriteRule -Rule $null -Contract $rules
+        $pagesWithoutAdopter.Valid | Should -BeFalse
+        @($pagesWithoutAdopter.MissingFields) | Should -Be @('granularity', 'parentLocator', 'pageNaming')
+        $pagesWithoutAdopter.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $rules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly $pagesWithoutAdopter.Action
     }
 }

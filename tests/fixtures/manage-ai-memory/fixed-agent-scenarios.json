@@ -10,9 +10,11 @@
       "purpose": "Purpose: Verify AC01 without live memory or file mutation.",
       "userInput": "Remember with Memory Key project:example.project:release-language, Scope example.project, and Source explicit-user-request that project example.project uses Traditional Chinese release notes.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
       },
       "connectedTargets": [
         {
@@ -33,8 +35,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "status": "Active",
             "confidence": "Confirmed"
           },
@@ -188,9 +203,11 @@
       "purpose": "Purpose: Verify AC05 without live memory or file mutation.",
       "userInput": "Store this document and its summary.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "document-summary"
       },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
@@ -207,9 +224,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - document-summary",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
-            "target": "records-main"
+            "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - document-summary"
           },
           "response": {
             "error": "permission-denied"
@@ -231,9 +261,11 @@
       "purpose": "Purpose: Verify AC06 without live memory or file mutation.",
       "userInput": "Capture a candidate memory under Memory Key project:example.project:notes-length and Scope example.project. Use Content exactly 'Project example.project may prefer short release notes.' and Source 'assistant-inference'. The assistant inferred this twice; no user or authoritative source has confirmed it.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "notes-length"
       },
       "connectedTargets": [
         {
@@ -254,8 +286,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - notes-length",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - notes-length",
             "key": "project:example.project:notes-length",
             "scope": "example.project",
             "content": "Project example.project may prefer short release notes.",
@@ -296,9 +341,11 @@
       "purpose": "Purpose: Verify AC07 without live memory or file mutation.",
       "userInput": "I confirm only that the release notes are in Japanese under Memory Key project:example.project:release-language and Scope example.project. Keep the separate inference that all documentation is Japanese unconfirmed.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
       },
       "connectedTargets": [
         {
@@ -340,9 +387,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
             "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language",
             "scope": "example.project",
             "content": "Release notes are in Japanese.",
@@ -553,17 +613,32 @@
       "purpose": "Purpose: Verify AC11 without live memory or file mutation.",
       "userInput": "Remember the new release language.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
       },
       "connectedTargets": [
         { "id": "records-main", "purpose": "records", "connected": true }
       ],
       "fixedToolResponses": [
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language"
           },
           "response": {
@@ -595,9 +670,11 @@
       "purpose": "Purpose: Verify AC12 without live memory or file mutation.",
       "userInput": "Remember with Memory Key project:example.project:release-language, Scope example.project, and Source explicit-user-request that project example.project uses Japanese release notes. Keep the index current if the body save succeeds.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
       },
       "connectedTargets": [
         {
@@ -618,8 +695,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language"
           },
           "response": {
@@ -732,9 +822,11 @@
       "purpose": "Purpose: Verify AC13 without live memory or file mutation.",
       "userInput": "Save this file and remember the decision it contains.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "decision"
       },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
@@ -751,9 +843,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - decision",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
             "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - decision",
             "fileReference": "file://verified/2"
           },
           "response": {
@@ -993,9 +1098,11 @@
       "purpose": "Purpose: Verify creation, readback, and indexing use the exact new page locator.",
       "userInput": "Remember the SYP-507 write-placement decision.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-ticket",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {ticketKey}"
+        "pageNaming": "Memory - {ticketKey}",
+        "ticketKey": "SYP-507"
       },
       "connectedTargets": [
         {
@@ -1021,7 +1128,12 @@
           "arguments": {
             "parent": "parent-memory-pages",
             "title": "Memory - SYP-507",
-            "key": "project:example.project:write-placement"
+            "key": "project:example.project:write-placement",
+            "scope": "example.project",
+            "content": "Write placement uses the configured per-ticket parent and page name.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
           },
           "response": {
             "locator": "record://memory/SYP-507"
@@ -1036,6 +1148,8 @@
             "locator": "record://memory/SYP-507",
             "key": "project:example.project:write-placement",
             "scope": "example.project",
+            "content": "Write placement uses the configured per-ticket parent and page name.",
+            "source": "explicit-user-request",
             "status": "Active",
             "confidence": "Confirmed"
           }
@@ -1069,9 +1183,11 @@
       "purpose": "Purpose: Stop memory-body creation when the configured parent belongs to Handoffs.",
       "userInput": "Remember a decision under the configured parent.",
       "writeRule": {
+        "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "handoff://active",
-        "pageNaming": "Memory - {topic}"
+        "pageNaming": "Memory - {topic}",
+        "topic": "decision"
       },
       "connectedTargets": [
         {
@@ -1082,13 +1198,13 @@
       ],
       "fixedToolResponses": [
         {
-          "tool": "records.search",
+          "tool": "adopter.readBinding",
           "arguments": {
-            "locator": "handoff://active"
+            "purpose": "memory-write-placement"
           },
           "response": {
-            "kind": "handoff-location",
-            "matches": []
+            "configuredParent": "handoff://active",
+            "configuredParentKind": "handoff-location"
           }
         }
       ],

@@ -30,6 +30,8 @@
     "forbiddenInferenceSources": ["index-locator-convention", "existing-page-title-or-text", "other-memory-locations", "unique-workspace-connection"],
     "uniqueConnectedTargetSuppliesPlacement": false,
     "legacyConfiguredAreaIsWriteRule": true,
+    "legacyExemptions": ["trusted-v3-structured-mapping", "configured-v4-memory-area"],
+    "indexMaintenanceRequiresConfiguredIndex": true,
     "pagesFormatWithoutAdopterConfigAction": "stop-affected-write-and-ask-user",
     "handoffBoundary": {
       "parentMayBeHandoffLocation": false,
