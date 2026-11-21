@@ -18,18 +18,51 @@
     "storesProviderOrAccountIdentity": false
   },
   "writeRules": {
-    "appliesTo": "new-memory-body",
+    "appliesTo": "new-memory-body-and-candidate",
     "sources": ["explicit-user-entry", "trusted-adopter-configuration"],
+    "adopterConfigKey": "writeRule",
     "requiredFields": ["granularity", "parentLocator", "pageNaming"],
     "granularityValues": ["per-ticket", "per-topic"],
-    "pageNamingPlaceholders": ["{ticketKey}", "{topic}", "{memoryKey}", "{scope}"],
-    "granularityRequiredPlaceholder": {"per-ticket": "{ticketKey}", "per-topic": "{topic}"},
+    "pageNamingPlaceholders": ["{ticketKey}", "{topic}", "{memoryKey}", "{scope}", "{title}"],
+    "unresolvedPlaceholderAction": "stop-affected-write-and-ask-user",
+    "fallbackForbiddenPlaceholders": ["{ticketKey}"],
+    "granularityRequiredPlaceholder": {"per-ticket": ["{ticketKey}"], "per-topic": ["{topic}", "{title}"]},
+    "granularityRequiredPlaceholderMatch": "any",
+    "fallback": {
+      "primaryGranularity": "per-ticket",
+      "granularity": "per-topic",
+      "requiredFields": ["granularity", "pageNaming"],
+      "optionalFields": ["parentLocator"],
+      "parentLocatorDefault": "primary-rule-parentLocator",
+      "nestedFallbackAllowed": false,
+      "fallbackOnPerTopicAllowed": false,
+      "inventTicketKey": false,
+      "missingTicketKeyWithoutFallbackAction": "stop-affected-write-and-ask-user",
+      "invalidAction": "stop-affected-write-and-ask-user"
+    },
+    "title": {
+      "perTicketSource": "authoritative-tracker-or-user",
+      "perTopicSource": "topic-display-title",
+      "inferFromPageText": false,
+      "unresolvedAction": "stop-affected-write-and-ask-user"
+    },
     "parentLocatorPolicy": "source-returned-opaque-locator-only",
     "missingOrInvalidAction": "stop-affected-write-and-ask-user",
+    "precedence": "v5-write-rule-over-legacy-area-for-new-bodies",
+    "legacyAreaRoleWhenV5Present": "read-and-existing-body-maintenance-only",
+    "candidatePlacement": "same-page-as-body",
+    "candidatePromotion": "update-status-in-place-then-readback-before-index-update",
+    "candidatePromotionReadbackRequires": ["Status: Active", "Confidence: Confirmed", "verified-confirmation-source"],
+    "candidatePromotionReadbackFailureAction": "stop-and-report-leave-index-pending",
+    "legacyInboxRoleWhenV5Present": "read-and-existing-candidate-maintenance-only",
+    "conflictAction": "stop-affected-write-and-ask-user",
+    "writesOnConflict": 0,
+    "invalidV5RuleFallsBackToLegacy": false,
+    "conflictKinds": ["incomplete-or-invalid-v5-rule", "parent-outside-configured-boundary", "parent-is-handoff-location", "explicit-and-trusted-placement-disagree"],
     "writesWhenMissing": 0,
     "forbiddenInferenceSources": ["index-locator-convention", "existing-page-title-or-text", "other-memory-locations", "unique-workspace-connection"],
     "uniqueConnectedTargetSuppliesPlacement": false,
-    "legacyConfiguredAreaIsWriteRule": true,
+    "legacyConfiguredAreaIsWriteRuleWhenV5Absent": true,
     "legacyExemptions": ["trusted-v3-structured-mapping", "configured-v4-memory-area"],
     "indexMaintenanceRequiresConfiguredIndex": true,
     "pagesFormatWithoutAdopterConfigAction": "stop-affected-write-and-ask-user",
@@ -39,6 +72,7 @@
       "handoffRecordsOwner": "manage-task-handoff"
     },
     "newPageIndexPointsToNewPage": true,
+    "existingPageWriteMode": "append-separate-entry-preserve-others",
     "existingDataMigrationNeedsAuthorization": true
   },
   "authority": {
@@ -145,6 +179,9 @@
         "memory",
         "inbox"
       ],
+      "optionalFields": [
+        "writeRule"
+      ],
       "requiredAreas": [
         "index",
         "memory",
@@ -219,7 +256,7 @@
     "indexMissAction": "check-body-destination",
     "unchangedAction": "skip-duplicate",
     "unchangedIdentityRequires": ["content", "source", "status", "confidence"],
-    "pendingPromotionAction": "save-confirmed-body-readback-then-supersede-pending",
+    "legacyPendingPromotionAction": "save-confirmed-body-readback-then-supersede-pending",
     "replacementReadiness": "confirmed-new-body-readback-before-retiring-old",
     "replacementAction": "preserve-old-as-Superseded-after-confirmed-replacement",
     "pendingCandidateAction": {

@@ -17,6 +17,7 @@
         "parentLocator": "parent-memory-pages",
         "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "release-language" },
       "expected": {
         "target": "records-main",
         "sameKeyLookup": true,
@@ -303,6 +304,7 @@
         "parentLocator": "parent-memory-pages",
         "pageNaming": "Memory - {ticketKey}"
       },
+      "memoryContext": { "ticketKey": "SYP-507" },
       "expected": {
         "createdAsOwnPage": true,
         "parentLocator": "parent-memory-pages",
@@ -320,6 +322,7 @@
         "parentLocator": "handoff://active",
         "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "decision" },
       "expected": {
         "writeCount": 0,
         "askUser": true
