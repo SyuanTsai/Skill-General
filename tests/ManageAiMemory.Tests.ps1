@@ -580,6 +580,10 @@ Export-ModuleMember -Function @()
         $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC20')[0]
         @($case.PSObject.Properties.Name) | Should -Contain 'writeRule'
         @($case.writeRule.PSObject.Properties.Name) | Should -Contain 'parentLocator'
+        $script:Contract.writeRules.indexMaintenanceRequiresConfiguredIndex | Should -BeTrue
+        $configuredIndex = Get-OptionalProperty -InputObject $case -Name 'configuredIndex'
+        $configuredIndexLocator = Get-OptionalProperty -InputObject $configuredIndex -Name 'locator'
+        $configuredIndexLocator | Should -BeExactly 'memory-index'
         $calls = @($case.fixedToolResponses)
         $sameKeyIndex = -1
         $placementIndex = -1
@@ -619,14 +623,17 @@ Export-ModuleMember -Function @()
             $readback.response.$field | Should -BeExactly $created.arguments.$field -Because "AC20 must read back $field before indexing"
         }
         $index = @($case.fixedToolResponses | Where-Object tool -EQ 'index.upsert')[0]
-        $indexFields = @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
-        @($index.arguments.PSObject.Properties.Name) | Should -Be $indexFields
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'index') | Should -BeExactly $configuredIndexLocator
+        $indexArgumentFields = @('index', 'Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
+        $indexResponseFields = @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')
+        @($index.arguments.PSObject.Properties.Name) | Should -Be $indexArgumentFields
         $index.arguments.Status | Should -BeExactly $readback.response.status
         $index.arguments.Locator | Should -BeExactly $created.response.locator
         $index.arguments.Target | Should -BeExactly $created.response.locator
         $indexReadback = @($case.fixedToolResponses | Where-Object tool -EQ 'index.read')[0]
-        @($indexReadback.response.PSObject.Properties.Name) | Should -Be $indexFields
-        foreach ($field in $indexFields) {
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $indexReadback -Name 'arguments') -Name 'index') | Should -BeExactly $configuredIndexLocator
+        @($indexReadback.response.PSObject.Properties.Name) | Should -Be $indexResponseFields
+        foreach ($field in $indexResponseFields) {
             $indexReadback.response.$field | Should -BeExactly $index.arguments.$field -Because "AC20 index readback must match $field"
         }
         $oracle = Get-OptionalProperty -InputObject $case -Name 'oracle'

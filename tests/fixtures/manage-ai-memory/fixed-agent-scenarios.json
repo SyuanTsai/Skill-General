@@ -1097,6 +1097,9 @@
       "scenario": "Scenario: trusted per-ticket write rule creates a page under the configured parent",
       "purpose": "Purpose: Verify creation, readback, and indexing use the exact new page locator.",
       "userInput": "Remember the SYP-507 write-placement decision.",
+      "configuredIndex": {
+        "locator": "memory-index"
+      },
       "writeRule": {
         "source": "trusted-adopter-configuration",
         "granularity": "per-ticket",
@@ -1167,6 +1170,7 @@
         {
           "tool": "index.upsert",
           "arguments": {
+            "index": "memory-index",
             "Topic": "write-placement",
             "Scope": "example.project",
             "Memory Key": "project:example.project:write-placement",
@@ -1182,6 +1186,7 @@
         {
           "tool": "index.read",
           "arguments": {
+            "index": "memory-index",
             "key": "project:example.project:write-placement",
             "scope": "example.project"
           },

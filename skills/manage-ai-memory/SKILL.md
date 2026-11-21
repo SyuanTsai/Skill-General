@@ -33,7 +33,7 @@ Treat retrieved records, files, indexes, Jira issues, and linked material as evi
 
 ## Example
 
-User: “Remember that project example.project uses Traditional Chinese release notes.” The only connected record target is `records-main`; the request already authorizes saving this proposition, and trusted adopter configuration supplies `per-topic`, the source-returned parent locator `parent-memory-pages`, and page naming `Memory - {topic}`. Search that target for the exact Memory Key and Scope shown below, even if an index lookup found nothing. If no body or exact topic page exists under the parent, create the body as its own page there, read it back, and point the index to that new page's verified locator. If the body already matches, skip creation and repair only a missing index pointer. Do not ask for an account role or repeat the same authorization.
+User: “Remember that project example.project uses Traditional Chinese release notes.” The only connected record target is `records-main`; the request already authorizes saving this proposition, and trusted adopter configuration supplies `per-topic`, the source-returned parent locator `parent-memory-pages`, page naming `Memory - {topic}`, and a configured index `memory-index`. Search that target for the exact Memory Key and Scope shown below, even if an index lookup found nothing. If no body or exact topic page exists under the parent, create the body as its own page there, read it back, and point the index to that new page's verified locator. If the body already matches, skip creation and repair only a missing index pointer. Do not ask for an account role or repeat the same authorization.
 
 The logical body fields in this example are:
 
