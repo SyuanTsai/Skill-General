@@ -9,6 +9,13 @@
       "scenario": "Scenario: single connected record target without role metadata",
       "purpose": "Purpose: Verify AC01 without live memory or file mutation.",
       "userInput": "Remember with Memory Key project:example.project:release-language, Scope example.project, and Source explicit-user-request that project example.project uses Traditional Chinese release notes.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
+      },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -28,8 +35,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "status": "Active",
             "confidence": "Confirmed"
           },
@@ -182,6 +202,13 @@
       "scenario": "Scenario: record connector refuses write after file succeeds",
       "purpose": "Purpose: Verify AC05 without live memory or file mutation.",
       "userInput": "Store this document and its summary.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "document-summary"
+      },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
         { "id": "records-main", "purpose": "records", "connected": true }
@@ -197,9 +224,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - document-summary",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
-            "target": "records-main"
+            "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - document-summary"
           },
           "response": {
             "error": "permission-denied"
@@ -220,6 +260,13 @@
       "scenario": "Scenario: inference repeated with high confidence",
       "purpose": "Purpose: Verify AC06 without live memory or file mutation.",
       "userInput": "Capture a candidate memory under Memory Key project:example.project:notes-length and Scope example.project. Use Content exactly 'Project example.project may prefer short release notes.' and Source 'assistant-inference'. The assistant inferred this twice; no user or authoritative source has confirmed it.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "notes-length"
+      },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -239,8 +286,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - notes-length",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - notes-length",
             "key": "project:example.project:notes-length",
             "scope": "example.project",
             "content": "Project example.project may prefer short release notes.",
@@ -280,6 +340,13 @@
       "scenario": "Scenario: one proposition explicitly confirmed",
       "purpose": "Purpose: Verify AC07 without live memory or file mutation.",
       "userInput": "I confirm only that the release notes are in Japanese under Memory Key project:example.project:release-language and Scope example.project. Keep the separate inference that all documentation is Japanese unconfirmed.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
+      },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -320,9 +387,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
             "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language",
             "scope": "example.project",
             "content": "Release notes are in Japanese.",
@@ -532,13 +612,33 @@
       "scenario": "Scenario: body write times out with unknown result",
       "purpose": "Purpose: Verify AC11 without live memory or file mutation.",
       "userInput": "Remember the new release language.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
+      },
       "connectedTargets": [
         { "id": "records-main", "purpose": "records", "connected": true }
       ],
       "fixedToolResponses": [
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language"
           },
           "response": {
@@ -569,6 +669,13 @@
       "scenario": "Scenario: body saved and index write fails",
       "purpose": "Purpose: Verify AC12 without live memory or file mutation.",
       "userInput": "Remember with Memory Key project:example.project:release-language, Scope example.project, and Source explicit-user-request that project example.project uses Japanese release notes. Keep the index current if the body save succeeds.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "release-language"
+      },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -588,8 +695,21 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - release-language",
             "key": "project:example.project:release-language"
           },
           "response": {
@@ -701,6 +821,13 @@
       "scenario": "Scenario: user authorizes file and record storage in one request",
       "purpose": "Purpose: Verify AC13 without live memory or file mutation.",
       "userInput": "Save this file and remember the decision it contains.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {topic}",
+        "topic": "decision"
+      },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
         { "id": "records-main", "purpose": "records", "connected": true }
@@ -716,9 +843,22 @@
           }
         },
         {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - decision",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
           "tool": "records.create",
           "arguments": {
             "target": "records-main",
+            "parent": "parent-memory-pages",
+            "title": "Memory - decision",
             "fileReference": "file://verified/2"
           },
           "response": {
@@ -900,6 +1040,215 @@
           "realUserScopeChanged": false,
           "realAdopterChanged": false,
           "label": "candidate validated / not deployed"
+        }
+      }
+    },
+    {
+      "id": "AC19",
+      "scenario": "Scenario: workspace-wide connection has no adopter configuration or write rule and index locators share one existing page",
+      "purpose": "Purpose: Stop the new-body write without inferring placement from the shared index locator.",
+      "userInput": "Remember a new project decision.",
+      "connectedTargets": [
+        {
+          "id": "records-workspace",
+          "purpose": "records",
+          "connected": true,
+          "scope": "workspace-wide"
+        }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "index.read",
+          "arguments": {
+            "target": "records-workspace"
+          },
+          "response": {
+            "rows": [
+              { "key": "project:example.project:first", "locator": "record://shared/1" },
+              { "key": "project:example.project:second", "locator": "record://shared/1" }
+            ]
+          }
+        },
+        {
+          "tool": "records.search",
+          "arguments": {
+            "target": "records-workspace",
+            "key": "project:example.project:new-decision"
+          },
+          "response": {
+            "matches": []
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "writeCount": 0,
+          "appendToExistingPage": false,
+          "askUserForWriteRule": true,
+          "missingFields": ["granularity", "parentLocator", "pageNaming"],
+          "inferredFromIndexLocator": false,
+          "recordsCreateCount": 0,
+          "recordsUpdateCount": 0
+        }
+      }
+    },
+    {
+      "id": "AC20",
+      "scenario": "Scenario: trusted per-ticket write rule creates a page under the configured parent",
+      "purpose": "Purpose: Verify creation, readback, and indexing use the exact new page locator.",
+      "userInput": "Remember the SYP-507 write-placement decision.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-ticket",
+        "parentLocator": "parent-memory-pages",
+        "pageNaming": "Memory - {ticketKey}",
+        "ticketKey": "SYP-507"
+      },
+      "connectedTargets": [
+        {
+          "id": "records-main",
+          "purpose": "records",
+          "connected": true
+        }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - SYP-507",
+            "match": "exact"
+          },
+          "response": {
+            "matches": []
+          }
+        },
+        {
+          "tool": "records.create",
+          "arguments": {
+            "parent": "parent-memory-pages",
+            "title": "Memory - SYP-507",
+            "key": "project:example.project:write-placement",
+            "scope": "example.project",
+            "content": "Write placement uses the configured per-ticket parent and page name.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": {
+            "locator": "record://memory/SYP-507"
+          }
+        },
+        {
+          "tool": "records.read",
+          "arguments": {
+            "locator": "record://memory/SYP-507"
+          },
+          "response": {
+            "locator": "record://memory/SYP-507",
+            "key": "project:example.project:write-placement",
+            "scope": "example.project",
+            "content": "Write placement uses the configured per-ticket parent and page name.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "Memory Key": "project:example.project:write-placement",
+            "Locator": "record://memory/SYP-507",
+            "Target": "record://memory/SYP-507"
+          },
+          "response": {
+            "ok": true,
+            "Locator": "record://memory/SYP-507"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "createdAsOwnPage": true,
+          "parentLocator": "parent-memory-pages",
+          "renderedPageName": "Memory - SYP-507",
+          "readback": true,
+          "indexLocator": "record://memory/SYP-507"
+        }
+      }
+    },
+    {
+      "id": "AC21",
+      "scenario": "Scenario: write rule parent is a Handoff location",
+      "purpose": "Purpose: Stop memory-body creation when the configured parent belongs to Handoffs.",
+      "userInput": "Remember a decision under the configured parent.",
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-topic",
+        "parentLocator": "handoff://active",
+        "pageNaming": "Memory - {topic}",
+        "topic": "decision"
+      },
+      "connectedTargets": [
+        {
+          "id": "records-main",
+          "purpose": "records",
+          "connected": true
+        }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "adopter.readBinding",
+          "arguments": {
+            "purpose": "memory-write-placement"
+          },
+          "response": {
+            "configuredParent": "handoff://active",
+            "configuredParentKind": "handoff-location"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "writeCount": 0,
+          "askUser": true,
+          "recordsCreateCount": 0,
+          "recordsUpdateCount": 0
+        }
+      }
+    },
+    {
+      "id": "AC22",
+      "scenario": "Scenario: legacy pages-format target has no adopter file or v5 write rule",
+      "purpose": "Purpose: Stop the new-body write and ask for placement instead of choosing an existing page.",
+      "userInput": "Remember a decision in the legacy pages target.",
+      "connectedTargets": [
+        {
+          "id": "records-pages",
+          "purpose": "records",
+          "connected": true,
+          "format": "pages"
+        }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": {
+            "target": "records-pages",
+            "format": "pages"
+          },
+          "response": {
+            "adopterConfiguration": null,
+            "matches": []
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "writeCount": 0,
+          "askUser": true,
+          "recordsCreateCount": 0,
+          "recordsUpdateCount": 0
         }
       }
     }
