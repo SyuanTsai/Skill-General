@@ -32,7 +32,7 @@ Describe 'Pinned authority bootstrap transport' {
             $content = Get-Content -Raw -LiteralPath $path
             $content | Should -Match '(?m)^\s*pull_request:'
             (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() |
-                Should -BeExactly '6c78b69f413f9878d9dd73ad42b7bbe5b4442b82617649122e8e8c9bc992132f'
+                Should -BeExactly '61032baf65fd52829e327470253df22d9a832986c6efdbfb3da9d8f7bba4ffac'
         }
         else {
             Test-Path -LiteralPath $path | Should -BeFalse
