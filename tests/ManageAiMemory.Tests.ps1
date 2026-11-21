@@ -646,5 +646,16 @@ Export-ModuleMember -Function @()
         @($pagesWithoutAdopter.MissingFields) | Should -Be @('granularity', 'parentLocator', 'pageNaming')
         $pagesWithoutAdopter.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
         $rules.pagesFormatWithoutAdopterConfigAction | Should -BeExactly $pagesWithoutAdopter.Action
+
+        $operations = Get-Content -Raw (Join-Path $script:Skill 'references/memory-operations.md')
+        $operations | Should -Match 'trusted v3 structured mapping'
+        $operations | Should -Match 'index maintenance applies only when an index is configured'
+
+        (Get-Content -Raw (Join-Path $script:Skill 'SKILL.md')) |
+            Should -Match 'configured v4 `memory` area'
+        (Get-Content -Raw (Join-Path $script:Skill 'references/index-workflow.md')) |
+            Should -Match 'configured v4 `memory` area'
+        (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-mappings.md')) |
+            Should -Match 'v4 adopter''s configured `memory` area'
     }
 }
