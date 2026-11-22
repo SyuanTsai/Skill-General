@@ -50,6 +50,8 @@ Describe 'manage-ai-memory provider-neutral contract' {
                     Action = 'legacy-write-rule-valid'
                 }
             }
+            $adopterRule = Get-OptionalProperty -InputObject $Rule -Name ([string]$Contract.adopterConfigKey)
+            if ($null -ne $adopterRule) { $Rule = $adopterRule }
             $missing = [Collections.Generic.List[string]]::new()
             foreach ($field in @($Contract.requiredFields)) {
                 $property = if ($null -eq $Rule) { $null } else { $Rule.PSObject.Properties[$field] }
@@ -62,13 +64,32 @@ Describe 'manage-ai-memory provider-neutral contract' {
                 if ($granularity -notin @($Contract.granularityValues)) {
                     $missing.Add('granularity')
                 } else {
-                    $requiredPlaceholder = [string]$Contract.granularityRequiredPlaceholder.$granularity
-                    if (-not ([string]$Rule.pageNaming).Contains($requiredPlaceholder)) {
+                    $requiredPlaceholders = @($Contract.granularityRequiredPlaceholder.$granularity)
+                    if (@($requiredPlaceholders | Where-Object { ([string]$Rule.pageNaming).Contains([string]$_) }).Count -eq 0) {
                         $missing.Add('pageNaming')
                     }
                     $usedPlaceholders = @([regex]::Matches([string]$Rule.pageNaming, '\{[^{}]+\}') | ForEach-Object Value)
                     if (@($usedPlaceholders | Where-Object { $_ -notin @($Contract.pageNamingPlaceholders) }).Count -gt 0 -and $missing -notcontains 'pageNaming') {
                         $missing.Add('pageNaming')
+                    }
+                    $fallback = Get-OptionalProperty -InputObject $Rule -Name 'fallback'
+                    if ($null -ne $fallback) {
+                        $fallbackInvalid = $granularity -ne [string]$Contract.fallback.primaryGranularity -or
+                            (Get-OptionalProperty -InputObject $fallback -Name 'fallback') -ne $null -or
+                            [string](Get-OptionalProperty -InputObject $fallback -Name 'granularity') -ne [string]$Contract.fallback.granularity
+                        foreach ($field in @($Contract.fallback.requiredFields)) {
+                            if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -InputObject $fallback -Name $field))) { $fallbackInvalid = $true }
+                        }
+                        $fallbackParentProperty = $fallback.PSObject.Properties['parentLocator']
+                        if ($null -ne $fallbackParentProperty -and [string]::IsNullOrWhiteSpace([string]$fallbackParentProperty.Value)) { $fallbackInvalid = $true }
+                        $fallbackNaming = [string](Get-OptionalProperty -InputObject $fallback -Name 'pageNaming')
+                        $fallbackPlaceholders = @([regex]::Matches($fallbackNaming, '\{[^{}]+\}') | ForEach-Object Value)
+                        if (@($Contract.granularityRequiredPlaceholder.'per-topic' | Where-Object { $fallbackNaming.Contains([string]$_) }).Count -eq 0 -or
+                            @($fallbackPlaceholders | Where-Object { $_ -notin @($Contract.pageNamingPlaceholders) }).Count -gt 0 -or
+                            @($fallbackPlaceholders | Where-Object { $_ -in @($Contract.fallbackForbiddenPlaceholders) }).Count -gt 0) {
+                            $fallbackInvalid = $true
+                        }
+                        if ($fallbackInvalid) { $missing.Add('fallback') }
                     }
                 }
             }
@@ -81,14 +102,68 @@ Describe 'manage-ai-memory provider-neutral contract' {
         }
         function Format-MemoryPageName {
             param(
-                [Parameter(Mandatory)][object]$Rule
+                [Parameter(Mandatory)][object]$Rule,
+                [AllowNull()][object]$Context
             )
-            $rendered = [string](Get-OptionalProperty -InputObject $Rule -Name 'pageNaming')
-            foreach ($placeholder in @('ticketKey', 'topic', 'memoryKey', 'scope')) {
-                $value = [string](Get-OptionalProperty -InputObject $Rule -Name $placeholder)
-                $rendered = $rendered.Replace('{' + $placeholder + '}', $value)
+            $adopterRule = Get-OptionalProperty -InputObject $Rule -Name 'writeRule'
+            if ($null -ne $adopterRule) { $Rule = $adopterRule }
+            $selectedRule = $Rule
+            $ticketKey = Get-OptionalProperty -InputObject $Context -Name 'ticketKey'
+            if ([string](Get-OptionalProperty -InputObject $Rule -Name 'granularity') -eq 'per-ticket' -and
+                [string]::IsNullOrWhiteSpace([string]$ticketKey)) {
+                $fallback = Get-OptionalProperty -InputObject $Rule -Name 'fallback'
+                if ($null -ne $fallback) { $selectedRule = $fallback }
+            }
+            $rendered = [string](Get-OptionalProperty -InputObject $selectedRule -Name 'pageNaming')
+            $usedPlaceholders = @([regex]::Matches($rendered, '\{([^{}]+)\}') | ForEach-Object { $_.Groups[1].Value })
+            foreach ($placeholder in $usedPlaceholders) {
+                $value = Get-OptionalProperty -InputObject $Context -Name ([string]$placeholder)
+                if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                    throw "Unresolved placeholder: {$placeholder}"
+                }
+                if ($placeholder -eq 'title' -and
+                    [string](Get-OptionalProperty -InputObject $selectedRule -Name 'granularity') -eq 'per-ticket' -and
+                    [string](Get-OptionalProperty -InputObject $Context -Name 'titleSource') -notin @('tracker', 'user')) {
+                    throw 'Unresolved ticket title authority'
+                }
+                $rendered = $rendered.Replace('{' + $placeholder + '}', [string]$value)
             }
             return $rendered
+        }
+        function Resolve-MemoryWriteRule {
+            param(
+                [AllowNull()][object]$Rule,
+                [Parameter(Mandatory)][object]$Contract,
+                [AllowNull()][object]$Context
+            )
+            $validation = Test-MemoryWriteRule -Rule $Rule -Contract $Contract
+            if (-not $validation.Valid) { return [pscustomobject]@{ Valid = $false; Action = $validation.Action; Writes = 0; Rule = $null } }
+            $adopterRule = Get-OptionalProperty -InputObject $Rule -Name ([string]$Contract.adopterConfigKey)
+            if ($null -ne $adopterRule) { $Rule = $adopterRule }
+            $selected = $Rule
+            $ticketKey = Get-OptionalProperty -InputObject $Context -Name 'ticketKey'
+            $hasTicketKey = -not [string]::IsNullOrWhiteSpace([string]$ticketKey)
+            if ([string]$Rule.granularity -eq 'per-ticket' -and -not $hasTicketKey) {
+                $selected = Get-OptionalProperty -InputObject $Rule -Name 'fallback'
+                if ($null -eq $selected) { return [pscustomobject]@{ Valid = $false; Action = [string]$Contract.fallback.missingTicketKeyWithoutFallbackAction; Writes = 0; Rule = $null } }
+            }
+            $selectedNaming = [string](Get-OptionalProperty -InputObject $selected -Name 'pageNaming')
+            $selectedPlaceholders = @([regex]::Matches($selectedNaming, '\{([^{}]+)\}') | ForEach-Object { $_.Groups[1].Value })
+            foreach ($placeholder in $selectedPlaceholders) {
+                $value = Get-OptionalProperty -InputObject $Context -Name ([string]$placeholder)
+                if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                    $action = if ($placeholder -eq 'title') { [string]$Contract.title.unresolvedAction } else { [string]$Contract.unresolvedPlaceholderAction }
+                    return [pscustomobject]@{ Valid = $false; Action = $action; Writes = 0; Rule = $null }
+                }
+                if ($placeholder -eq 'title' -and
+                    [string](Get-OptionalProperty -InputObject $selected -Name 'granularity') -eq 'per-ticket' -and
+                    [string](Get-OptionalProperty -InputObject $Context -Name 'titleSource') -notin @('tracker', 'user')) {
+                    return [pscustomobject]@{ Valid = $false; Action = [string]$Contract.title.unresolvedAction; Writes = 0; Rule = $null }
+                }
+            }
+            $parent = Get-OptionalProperty -InputObject $selected -Name 'parentLocator'
+            if ($null -eq $parent) { $parent = Get-OptionalProperty -InputObject $Rule -Name 'parentLocator' }
+            [pscustomobject]@{ Valid = $true; Action = 'write-rule-resolved'; Writes = 1; Rule = $selected; ParentLocator = [string]$parent }
         }
     }
 
@@ -352,15 +427,16 @@ Export-ModuleMember -Function @()
         }
     }
 
-    # Scenario: A user confirms the same words already stored as a Pending inference.
-    # Purpose: Preserve the inference as history and verify a separate confirmed body before retirement.
-    It 'UnitT25_promotes_same_content_only_after_confirmed_readback' {
+    # Scenario: Without a v5 rule, a user confirms the same words already stored as a Pending inference.
+    # Purpose: Preserve the established legacy promotion workflow while v5 candidates promote in place.
+    It 'UnitT25_preserves_legacy_same_content_promotion_after_confirmed_readback' {
         @($script:Contract.workflow.unchangedIdentityRequires) | Should -Be @('content', 'source', 'status', 'confidence')
-        $script:Contract.workflow.pendingPromotionAction | Should -Be 'save-confirmed-body-readback-then-supersede-pending'
+        $script:Contract.workflow.legacyPendingPromotionAction | Should -Be 'save-confirmed-body-readback-then-supersede-pending'
         $operations = Get-Content -Raw (Join-Path $script:Skill 'references/memory-operations.md')
-        $operations | Should -Match 'already held in a Pending body'
-        $operations | Should -Match 'read it back, then mark the Pending body Superseded'
+        $operations | Should -Match 'Without a v5 rule, retain the established legacy candidate workflow'
         $case = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC07')[0]
+        (Get-OptionalProperty -InputObject $case -Name 'writeRule') | Should -BeNullOrEmpty
+        (Get-OptionalProperty -InputObject $case.legacyPlacement -Name 'source') | Should -BeExactly 'configured-v4-memory-area'
         @($case.fixedToolResponses | ForEach-Object tool) | Should -Be @('records.search','records.read','records.search','records.create','records.read','records.update','records.read')
         $pending = $case.fixedToolResponses[1].response
         $confirmed = $case.fixedToolResponses[4].response
@@ -513,11 +589,24 @@ Export-ModuleMember -Function @()
         $script:AgentInputs.fixtureVersion | Should -Be 2
         $script:AgentInputs.fixtureAuthorizesLiveWrites | Should -BeFalse
         $ids = @($script:AgentInputs.scenarios | ForEach-Object id)
-        $ids | Should -Be @((1..22) | ForEach-Object { 'AC{0:d2}' -f $_ })
+        $ids | Should -Be @((1..30) | ForEach-Object { 'AC{0:d2}' -f $_ })
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
             (Get-OptionalProperty -InputObject $scenario -Name 'scenario') | Should -Match '^Scenario: '
             (Get-OptionalProperty -InputObject $scenario -Name 'purpose') | Should -Match '^Purpose: '
             (Get-OptionalProperty -InputObject $scenario -Name 'userInput') | Should -Not -BeNullOrEmpty
+            $writeRule = Get-OptionalProperty -InputObject $scenario -Name 'writeRule'
+            if ($null -eq $writeRule) {
+                $adopterConfiguration = Get-OptionalProperty -InputObject $scenario -Name 'adopterConfiguration'
+                $writeRule = Get-OptionalProperty -InputObject $adopterConfiguration -Name 'writeRule'
+            }
+            if ($null -ne $writeRule) {
+                $allowedRuleFields = @('source', 'granularity', 'parentLocator', 'pageNaming', 'fallback')
+                @($writeRule.PSObject.Properties.Name | Where-Object { $_ -notin $allowedRuleFields }).Count | Should -Be 0 -Because "$($scenario.id) rule contains only placement policy"
+                $fallback = Get-OptionalProperty -InputObject $writeRule -Name 'fallback'
+                if ($null -ne $fallback) {
+                    @($fallback.PSObject.Properties.Name | Where-Object { $_ -notin $allowedRuleFields }).Count | Should -Be 0 -Because "$($scenario.id) fallback contains only placement policy"
+                }
+            }
             $oracle = Get-OptionalProperty -InputObject $scenario -Name 'oracle'
             (Get-OptionalProperty -InputObject $oracle -Name 'expected') | Should -Not -BeNullOrEmpty
             $fixedToolResponses = @(Get-OptionalProperty -InputObject $scenario -Name 'fixedToolResponses')
@@ -556,12 +645,20 @@ Export-ModuleMember -Function @()
     # Scenario: Candidate rules include valid granularities and each specified invalid shape.
     # Purpose: Derive write-rule validation and the stop action only from the installed contract.
     It 'UnitT76_validates_write_rule_inputs_with_the_contract: <Name>' -ForEach @(
-        @{ Name = 'valid per-ticket'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {ticketKey}' }; Valid = $true; Missing = @() }
+        @{ Name = 'valid per-ticket with title'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = '{ticketKey} - {title}' }; Valid = $true; Missing = @() }
         @{ Name = 'valid per-topic'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $true; Missing = @() }
+        @{ Name = 'valid per-topic title only'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = '{title}' }; Valid = $true; Missing = @() }
+        @{ Name = 'valid ticket topic fallback'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = '{ticketKey} - {title}'; fallback = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = '{topic}' } }; Valid = $true; Missing = @() }
+        @{ Name = 'valid adopter writeRule'; Rule = [pscustomobject]@{ schemaVersion = 1; writeRule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = '{topic}' } }; Valid = $true; Missing = @() }
         @{ Name = 'missing parentLocator'; Rule = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('parentLocator') }
         @{ Name = 'missing granularity'; Rule = [pscustomobject]@{ parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('granularity') }
         @{ Name = 'unknown granularity'; Rule = [pscustomobject]@{ granularity = 'per-day'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('granularity') }
         @{ Name = 'ticket placeholder missing'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = 'Memory - {topic}' }; Valid = $false; Missing = @('pageNaming') }
+        @{ Name = 'fallback on per-topic'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = '{topic}'; fallback = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = '{topic}' } }; Valid = $false; Missing = @('fallback') }
+        @{ Name = 'nested fallback'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = '{ticketKey}'; fallback = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = '{topic}'; fallback = [pscustomobject]@{} } }; Valid = $false; Missing = @('fallback') }
+        @{ Name = 'fallback per-ticket'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = '{ticketKey}'; fallback = [pscustomobject]@{ granularity = 'per-ticket'; pageNaming = '{ticketKey}' } }; Valid = $false; Missing = @('fallback') }
+        @{ Name = 'fallback uses ticketKey'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-memory-pages'; pageNaming = '{ticketKey}'; fallback = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = '{topic} - {ticketKey}' } }; Valid = $false; Missing = @('fallback') }
+        @{ Name = 'unknown placeholder'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-memory-pages'; pageNaming = '{topic} - {unknown}' }; Valid = $false; Missing = @('pageNaming') }
         @{ Name = 'null rule'; Rule = $null; Valid = $false; Missing = @('granularity', 'parentLocator', 'pageNaming') }
     ) {
         $result = Test-MemoryWriteRule -Rule $Rule -Contract $script:Contract.writeRules
@@ -572,6 +669,108 @@ Export-ModuleMember -Function @()
         } else {
             $result.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
         }
+    }
+
+    # Scenario: A per-ticket rule selects the ticket branch or its per-topic fallback from memory context.
+    # Purpose: Resolve the permitted fallback without inventing a ticket key.
+    It 'UnitT76a_resolves_ticket_and_topic_fallback_paths: <Name>' -ForEach @(
+        @{ Name = 'ticket uses primary'; Context = [pscustomobject]@{ ticketKey = 'SYP-507'; title = 'Resolved title'; titleSource = 'tracker' }; ExpectedGranularity = 'per-ticket'; ExpectedParent = 'parent-ticket'; ExpectedValid = $true; ExpectedWrites = 1 }
+        @{ Name = 'no ticket uses fallback'; Context = [pscustomobject]@{ topic = 'resolved-topic' }; ExpectedGranularity = 'per-topic'; ExpectedParent = 'parent-topic'; ExpectedValid = $true; ExpectedWrites = 1 }
+    ) {
+        $rule = [pscustomobject]@{
+            granularity = 'per-ticket'; parentLocator = 'parent-ticket'; pageNaming = '{ticketKey} - {title}'
+            fallback = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-topic'; pageNaming = '{topic}' }
+        }
+        $result = Resolve-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -Context $Context
+        $result.Valid | Should -Be $ExpectedValid
+        $result.Writes | Should -Be $ExpectedWrites
+        $result.Rule.granularity | Should -BeExactly $ExpectedGranularity
+        $result.ParentLocator | Should -BeExactly $ExpectedParent
+    }
+
+    # Scenario: A permitted per-topic fallback omits its optional parent locator.
+    # Purpose: Inherit the primary parent exactly as the contract specifies.
+    It 'UnitT76aa_defaults_the_fallback_parent_to_the_primary_parent' {
+        $rule = [pscustomobject]@{
+            granularity = 'per-ticket'; parentLocator = 'parent-shared'; pageNaming = '{ticketKey}'
+            fallback = [pscustomobject]@{ granularity = 'per-topic'; pageNaming = '{topic}' }
+        }
+        $result = Resolve-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -Context ([pscustomobject]@{ topic = 'resolved-topic' })
+        $result.Valid | Should -BeTrue
+        $result.Rule.granularity | Should -BeExactly 'per-topic'
+        $result.ParentLocator | Should -BeExactly 'parent-shared'
+    }
+
+    # Scenario: Required placement context is unavailable for an otherwise valid rule.
+    # Purpose: Stop and ask with zero writes instead of guessing a ticket key or title.
+    It 'UnitT76b_stops_resolution_when_required_context_is_unavailable: <Name>' -ForEach @(
+        @{ Name = 'ticket missing without fallback'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-ticket'; pageNaming = '{ticketKey}' }; Context = $null; ExpectedAction = 'stop-affected-write-and-ask-user' }
+        @{ Name = 'title unresolved'; Rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-ticket'; pageNaming = '{ticketKey} - {title}' }; Context = [pscustomobject]@{ ticketKey = 'SYP-507' }; ExpectedAction = 'stop-affected-write-and-ask-user' }
+        @{ Name = 'topic title unresolved'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-topic'; pageNaming = '{title}' }; Context = $null; ExpectedAction = 'stop-affected-write-and-ask-user' }
+        @{ Name = 'topic unresolved'; Rule = [pscustomobject]@{ granularity = 'per-topic'; parentLocator = 'parent-topic'; pageNaming = '{topic}' }; Context = $null; ExpectedAction = 'stop-affected-write-and-ask-user' }
+    ) {
+        $result = Resolve-MemoryWriteRule -Rule $Rule -Contract $script:Contract.writeRules -Context $Context
+        $result.Valid | Should -BeFalse
+        $result.Writes | Should -Be 0
+        $result.Action | Should -BeExactly $ExpectedAction
+        if ($Name -eq 'topic unresolved') {
+            { Format-MemoryPageName -Rule $Rule -Context $Context } | Should -Throw
+        }
+    }
+
+    # Scenario: A rule attempts to supply an authoritative ticket title or its provenance is untrusted.
+    # Purpose: Resolve dynamic placement only from trusted memory context and stop with zero writes otherwise.
+    It 'UnitT76bb_rejects_untrusted_or_missing_ticket_title_context: <Name>' -ForEach @(
+        @{ Name = 'title missing from context'; RuleTitle = $null; Context = [pscustomobject]@{ ticketKey = 'SYP-507'; titleSource = 'tracker' } }
+        @{ Name = 'title only in rule'; RuleTitle = 'Rule supplied title'; Context = [pscustomobject]@{ ticketKey = 'SYP-507'; titleSource = 'tracker' } }
+        @{ Name = 'ticket title has untrusted source'; RuleTitle = $null; Context = [pscustomobject]@{ ticketKey = 'SYP-507'; title = 'Untrusted title'; titleSource = 'adopter' } }
+    ) {
+        $rule = [pscustomobject]@{ granularity = 'per-ticket'; parentLocator = 'parent-ticket'; pageNaming = '{ticketKey} - {title}' }
+        if ($null -ne $RuleTitle) { $rule | Add-Member -NotePropertyName title -NotePropertyValue $RuleTitle }
+        $result = Resolve-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -Context $Context
+        $result.Valid | Should -BeFalse
+        $result.Writes | Should -Be 0
+        $result.Action | Should -BeExactly 'stop-affected-write-and-ask-user'
+        { Format-MemoryPageName -Rule $rule -Context $Context } | Should -Throw
+    }
+
+    # Scenario: A v4 adopter contains both its legacy memory area and a top-level v5 writeRule.
+    # Purpose: Give the v5 rule exclusive new-body placement authority and define conflicts fail closed.
+    It 'ContractT76c_records_v5_precedence_fallback_title_and_conflicts' {
+        $rules = $script:Contract.writeRules
+        $rules.adopterConfigKey | Should -BeExactly 'writeRule'
+        $rules.precedence | Should -BeExactly 'v5-write-rule-over-legacy-area-for-new-bodies'
+        $rules.legacyAreaRoleWhenV5Present | Should -BeExactly 'read-and-existing-body-maintenance-only'
+        $rules.conflictAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $rules.writesOnConflict | Should -Be 0
+        $rules.invalidV5RuleFallsBackToLegacy | Should -BeFalse
+        @($rules.sources) | Should -Be @('explicit-user-entry', 'trusted-adopter-configuration')
+        @($rules.conflictKinds) | Should -Be @('incomplete-or-invalid-v5-rule', 'parent-outside-configured-boundary', 'parent-is-handoff-location', 'explicit-and-trusted-placement-disagree')
+        @($rules.pageNamingPlaceholders) | Should -Contain '{title}'
+        @($rules.granularityRequiredPlaceholder.'per-topic') | Should -Be @('{topic}', '{title}')
+        $rules.fallback.primaryGranularity | Should -BeExactly 'per-ticket'
+        $rules.fallback.granularity | Should -BeExactly 'per-topic'
+        $rules.fallback.parentLocatorDefault | Should -BeExactly 'primary-rule-parentLocator'
+        $rules.fallback.nestedFallbackAllowed | Should -BeFalse
+        $rules.fallback.inventTicketKey | Should -BeFalse
+        $rules.title.perTicketSource | Should -BeExactly 'authoritative-tracker-or-user'
+        $rules.title.perTopicSource | Should -BeExactly 'topic-display-title'
+        $rules.title.unresolvedAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        $rules.unresolvedPlaceholderAction | Should -BeExactly 'stop-affected-write-and-ask-user'
+        @($rules.fallbackForbiddenPlaceholders) | Should -Be @('{ticketKey}')
+        $rules.existingPageWriteMode | Should -BeExactly 'append-separate-entry-preserve-others'
+        @($script:Contract.legacy.adopterConfig.optionalFields) | Should -Contain 'writeRule'
+    }
+
+    # Scenario: A v5 rule governs inferred candidates as well as confirmed bodies.
+    # Purpose: Keep candidates on the selected ticket or topic page and promote them in place.
+    It 'ContractT76d_records_v5_candidate_placement_and_promotion' {
+        $rules = $script:Contract.writeRules
+        $rules.candidatePlacement | Should -BeExactly 'same-page-as-body'
+        $rules.candidatePromotion | Should -BeExactly 'update-status-in-place-then-readback-before-index-update'
+        @($rules.candidatePromotionReadbackRequires) | Should -Be @('Status: Active', 'Confidence: Confirmed', 'verified-confirmation-source')
+        $rules.candidatePromotionReadbackFailureAction | Should -BeExactly 'stop-and-report-leave-index-pending'
+        $rules.legacyInboxRoleWhenV5Present | Should -BeExactly 'read-and-existing-candidate-maintenance-only'
     }
 
     # Scenario: A trusted per-ticket rule has no existing ticket page under its configured parent.
@@ -640,27 +839,84 @@ Export-ModuleMember -Function @()
         $expectedReadback = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $oracle -Name 'expected') -Name 'readback'
         $expectedReadback | Should -BeTrue
         foreach ($scenario in @($script:AgentInputs.scenarios)) {
+            $calls = @($scenario.fixedToolResponses)
+            $createCalls = @($calls | Where-Object tool -EQ 'records.create')
+            if ($createCalls.Count -eq 0) { continue }
             $rule = Get-OptionalProperty -InputObject $scenario -Name 'writeRule'
+            if ($null -eq $rule) {
+                $adopterConfiguration = Get-OptionalProperty -InputObject $scenario -Name 'adopterConfiguration'
+                $rule = Get-OptionalProperty -InputObject $adopterConfiguration -Name 'writeRule'
+            }
             $ruleSource = Get-OptionalProperty -InputObject $rule -Name 'source'
             if ($null -eq $rule -or $ruleSource -in @($script:Contract.writeRules.legacyExemptions)) { continue }
-            $renderedName = Format-MemoryPageName -Rule $rule
-            $calls = @($scenario.fixedToolResponses)
+            $validation = Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $ruleSource
+            $validation.Valid | Should -BeTrue -Because $scenario.id
+            if (-not $validation.Valid) { continue }
+            $memoryContext = Get-OptionalProperty -InputObject $scenario -Name 'memoryContext'
+            $renderedName = Format-MemoryPageName -Rule $rule -Context $memoryContext
+            $resolvedRule = Resolve-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -Context $memoryContext
             for ($indexOfCall = 0; $indexOfCall -lt $calls.Count; $indexOfCall++) {
                 $call = $calls[$indexOfCall]
                 if ($call.tool -ne 'records.create') { continue }
-                (Test-MemoryWriteRule -Rule $rule -Contract $script:Contract.writeRules -RuleSource $ruleSource).Valid | Should -BeTrue -Because $scenario.id
                 @($call.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
                 @($call.arguments.PSObject.Properties.Name) | Should -Contain 'title'
-                $call.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $call.arguments.parent | Should -BeExactly $resolvedRule.ParentLocator -Because $scenario.id
                 $call.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
                 $indexOfCall | Should -BeGreaterThan 0 -Because "$($scenario.id) needs a placement lookup before creation"
                 $placementLookup = $calls[$indexOfCall - 1]
                 $placementLookup.tool | Should -BeExactly 'records.search' -Because $scenario.id
                 @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'parent'
                 @($placementLookup.arguments.PSObject.Properties.Name) | Should -Contain 'title'
-                $placementLookup.arguments.parent | Should -BeExactly $rule.parentLocator -Because $scenario.id
+                $placementLookup.arguments.parent | Should -BeExactly $resolvedRule.ParentLocator -Because $scenario.id
                 $placementLookup.arguments.title | Should -BeExactly $renderedName -Because $scenario.id
                 @((Get-OptionalProperty -InputObject $placementLookup.response -Name 'matches')).Count | Should -Be 0 -Because $scenario.id
+            }
+        }
+    }
+
+    # Scenario: New bodies exercise precedence, invalid-rule, fallback, and boundary decisions in fixed transcripts.
+    # Purpose: Keep every new placement branch executable and fail closed before writes on conflict.
+    It 'UnitT77a_enforces_v5_precedence_and_conflict_scenarios: <Id>' -ForEach @(
+        @{ Id = 'AC23'; ExpectedWrites = 2; ExpectedAsk = $false }
+        @{ Id = 'AC24'; ExpectedWrites = 0; ExpectedAsk = $true }
+        @{ Id = 'AC25'; ExpectedWrites = 2; ExpectedAsk = $false }
+        @{ Id = 'AC26'; ExpectedWrites = 0; ExpectedAsk = $true }
+    ) {
+        $matchingScenarios = @($script:AgentInputs.scenarios | Where-Object id -EQ $Id)
+        $matchingScenarios.Count | Should -Be 1
+        if ($matchingScenarios.Count -ne 1) { return }
+        $scenario = $matchingScenarios[0]
+        $writeCalls = @($scenario.fixedToolResponses | Where-Object tool -In @('records.create', 'records.update', 'index.upsert'))
+        $writeCalls.Count | Should -Be $ExpectedWrites
+        [bool](Get-OptionalProperty -InputObject $scenario.oracle.expected -Name 'askUser') | Should -Be $ExpectedAsk
+        if ($Id -eq 'AC23') {
+            $legacyLocator = [string]$scenario.adopterConfiguration.memory.locator
+            $rule = $scenario.adopterConfiguration.writeRule
+            $memoryContext = Get-OptionalProperty -InputObject $scenario -Name 'memoryContext'
+            $created = @($scenario.fixedToolResponses | Where-Object tool -EQ 'records.create')[0]
+            $created.arguments.parent | Should -BeExactly $rule.parentLocator
+            $created.arguments.title | Should -BeExactly (Format-MemoryPageName -Rule $rule -Context $memoryContext)
+            @($scenario.fixedToolResponses | Where-Object { @($_.arguments.PSObject.Properties.Value) -contains $legacyLocator }).Count | Should -Be 0
+            $scenario.oracle.expected.legacyMemoryWriteCount | Should -Be 0
+        }
+        if ($Id -eq 'AC25') {
+            $created = @($scenario.fixedToolResponses | Where-Object tool -EQ 'records.create')[0]
+            $created.arguments.parent | Should -BeExactly $scenario.writeRule.fallback.parentLocator
+            $created.arguments.title | Should -BeExactly 'release-language'
+        }
+        if ($ExpectedWrites -gt 0) {
+            $created = @($scenario.fixedToolResponses | Where-Object tool -EQ 'records.create')[0]
+            $readback = @($scenario.fixedToolResponses | Where-Object tool -EQ 'records.read')[0]
+            foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+                $readback.response.$field | Should -BeExactly $created.arguments.$field -Because "$Id must read back $field before indexing"
+            }
+            $index = @($scenario.fixedToolResponses | Where-Object tool -EQ 'index.upsert')[0]
+            $writtenLocator = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $created -Name 'response') -Name 'locator'
+            (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'Locator') | Should -BeExactly $writtenLocator -Because "$Id must index the locator returned by records.create"
+            (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'Target') | Should -BeExactly $writtenLocator -Because "$Id must target the locator returned by records.create"
+            $indexReadback = @($scenario.fixedToolResponses | Where-Object tool -EQ 'index.read')[0]
+            foreach ($field in @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')) {
+                $indexReadback.response.$field | Should -BeExactly $index.arguments.$field -Because "$Id must read back index field $field"
             }
         }
     }
@@ -695,6 +951,11 @@ Export-ModuleMember -Function @()
         foreach ($relativePath in @('SKILL.md', 'references/memory-operations.md', 'references/index-workflow.md', 'references/legacy-mappings.md')) {
             $text = Get-Content -Raw (Join-Path $script:Skill $relativePath)
             $text | Should -Match 'per-ticket'
+            $text | Should -Match '`writeRule`'
+            $text | Should -Match '`\{title\}`'
+            $text | Should -Match '(?i)fallback'
+            $text | Should -Match '(?i)legacy'
+            $text | Should -Match '(?i)new bod'
             $text | Should -Match '(?i)parent locator'
             $text | Should -Match '(?i)stop'
             $text | Should -Match '(?i)ask'
@@ -729,5 +990,184 @@ Export-ModuleMember -Function @()
             Should -Match 'configured v4 `memory` area'
         (Get-Content -Raw (Join-Path $script:Skill 'references/legacy-mappings.md')) |
             Should -Match 'v4 adopter''s configured `memory` area'
+    }
+
+    # Scenario: A v4 adopter has legacy memory and inbox areas plus a v5 rule, and an inference needs placement.
+    # Purpose: Write Pending candidates on the same selected page as bodies without calling legacy locators.
+    It 'UnitT81_places_v5_candidates_on_the_selected_page: <Name>' -ForEach @(
+        @{ Name = 'ticket page'; Id = 'AC27'; ExpectedPage = 'record://workspace/ticket-memory/SYP-507'; ExpectedTitle = 'SYP-507 - Candidate placement' }
+        @{ Name = 'fallback topic page'; Id = 'AC28'; ExpectedPage = 'record://workspace/topic-memory/release-language'; ExpectedTitle = 'release-language' }
+    ) {
+        $scenario = @($script:AgentInputs.scenarios | Where-Object id -EQ $Id)[0]
+        $calls = @($scenario.fixedToolResponses)
+        $legacyLocators = @(
+            [string](Get-OptionalProperty -InputObject $scenario.adopterConfiguration.memory -Name 'locator')
+            [string](Get-OptionalProperty -InputObject $scenario.adopterConfiguration.inbox -Name 'locator')
+        )
+        foreach ($call in $calls) {
+            $arguments = Get-OptionalProperty -InputObject $call -Name 'arguments'
+            foreach ($legacyLocator in $legacyLocators) {
+                @($arguments.PSObject.Properties.Value) | Should -Not -Contain $legacyLocator -Because "$Id must not call a legacy locator"
+            }
+        }
+
+        $placement = @($calls | Where-Object {
+            $_.tool -EQ 'records.search' -and
+            (Get-OptionalProperty -InputObject $_.arguments -Name 'title') -EQ $ExpectedTitle
+        })[0]
+        @((Get-OptionalProperty -InputObject $placement.response -Name 'matches')).Count | Should -Be 1
+        (Get-OptionalProperty -InputObject $placement.response.matches[0] -Name 'locator') | Should -BeExactly $ExpectedPage
+
+        $append = @($calls | Where-Object tool -EQ 'records.update')[0]
+        (Get-OptionalProperty -InputObject $append.arguments -Name 'locator') | Should -BeExactly $ExpectedPage
+        (Get-OptionalProperty -InputObject $append.arguments -Name 'operation') | Should -BeExactly 'append-entry'
+        foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            @($append.arguments.PSObject.Properties.Name) | Should -Contain $field
+        }
+        $append.arguments.status | Should -BeExactly 'Pending'
+        $append.arguments.confidence | Should -BeExactly 'Inferred'
+
+        $readback = @($calls | Where-Object tool -EQ 'records.read')[0]
+        $readback.arguments.locator | Should -BeExactly $append.response.locator
+        foreach ($field in @('key', 'scope', 'content', 'source', 'status', 'confidence')) {
+            $readback.response.$field | Should -BeExactly $append.arguments.$field -Because "$Id must read back $field"
+        }
+
+        $index = @($calls | Where-Object tool -EQ 'index.upsert')[0]
+        $index.arguments.Status | Should -BeExactly 'Pending'
+        $writtenLocator = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $append -Name 'response') -Name 'locator'
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'Locator') | Should -BeExactly $writtenLocator -Because "$Id must index the locator returned by records.update"
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $index -Name 'arguments') -Name 'Target') | Should -BeExactly $writtenLocator -Because "$Id must target the locator returned by records.update"
+        $indexReadback = @($calls | Where-Object tool -EQ 'index.read')[0]
+        $indexReadback.response.Status | Should -BeExactly 'Pending'
+        $indexReadback.response.Locator | Should -BeExactly $index.arguments.Locator
+        $indexReadback.response.Target | Should -BeExactly $index.arguments.Target
+    }
+
+    # Scenario: The user confirms a Pending candidate already stored under a v5-selected ticket page.
+    # Purpose: Update that entry and its index status in place without creating or moving a copy.
+    It 'UnitT82_promotes_a_v5_candidate_in_place_before_updating_its_index' {
+        $matchingScenarios = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC29')
+        $matchingScenarios.Count | Should -Be 1
+        if ($matchingScenarios.Count -ne 1) { return }
+        $scenario = $matchingScenarios[0]
+        $calls = @($scenario.fixedToolResponses)
+        @($calls | Where-Object tool -EQ 'records.create').Count | Should -Be 0
+        $legacyLocators = @(
+            [string](Get-OptionalProperty -InputObject $scenario.adopterConfiguration.memory -Name 'locator')
+            [string](Get-OptionalProperty -InputObject $scenario.adopterConfiguration.inbox -Name 'locator')
+        )
+        foreach ($call in $calls) {
+            $arguments = Get-OptionalProperty -InputObject $call -Name 'arguments'
+            foreach ($legacyLocator in $legacyLocators) {
+                @($arguments.PSObject.Properties.Value) | Should -Not -Contain $legacyLocator
+            }
+        }
+
+        @($calls | ForEach-Object tool) | Should -Be @('records.read', 'records.update', 'records.read', 'index.upsert', 'index.read')
+        $calls.Count | Should -Be 5
+        if ($calls.Count -ne 5) { return }
+        $before = $calls[0]
+        $update = $calls[1]
+        $after = $calls[2]
+        $trustedCandidate = Get-OptionalProperty -InputObject $scenario -Name 'trustedCandidateContext'
+        $trustedCandidate | Should -Not -BeNullOrEmpty
+        $beforeArguments = Get-OptionalProperty -InputObject $before -Name 'arguments'
+        $beforeResponse = Get-OptionalProperty -InputObject $before -Name 'response'
+        (Get-OptionalProperty -InputObject $beforeArguments -Name 'locator') | Should -BeExactly (Get-OptionalProperty -InputObject $trustedCandidate -Name 'locator')
+        (Get-OptionalProperty -InputObject $beforeResponse -Name 'key') | Should -BeExactly (Get-OptionalProperty -InputObject $trustedCandidate -Name 'memoryKey')
+        (Get-OptionalProperty -InputObject $beforeResponse -Name 'scope') | Should -BeExactly (Get-OptionalProperty -InputObject $trustedCandidate -Name 'scope')
+        $update.arguments.locator | Should -BeExactly $before.arguments.locator
+        $after.arguments.locator | Should -BeExactly $before.arguments.locator
+        $before.response.status | Should -BeExactly 'Pending'
+        $before.response.confidence | Should -BeExactly 'Inferred'
+        $update.arguments.status | Should -BeExactly 'Active'
+        $update.arguments.confidence | Should -BeExactly 'Confirmed'
+        $after.response.status | Should -BeExactly 'Active'
+        $after.response.confidence | Should -BeExactly 'Confirmed'
+        $after.response.source | Should -BeExactly $update.arguments.source
+        $expectedPromotionReadback = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $scenario -Name 'oracle') -Name 'expected') -Name 'promotionReadback'
+        $after.response.status | Should -BeExactly (Get-OptionalProperty -InputObject $expectedPromotionReadback -Name 'status')
+        $after.response.confidence | Should -BeExactly (Get-OptionalProperty -InputObject $expectedPromotionReadback -Name 'confidence')
+        $after.response.source | Should -BeExactly (Get-OptionalProperty -InputObject $expectedPromotionReadback -Name 'source')
+
+        $indexWrite = $calls[3]
+        $indexReadback = $calls[4]
+        $indexWrite.arguments.Status | Should -BeExactly 'Active'
+        $indexWrite.arguments.Locator | Should -BeExactly $before.arguments.locator
+        $indexWrite.arguments.Target | Should -BeExactly $before.arguments.locator
+        $indexReadback.response.Status | Should -BeExactly 'Active'
+        $indexReadback.response.Locator | Should -BeExactly $before.arguments.locator
+    }
+
+    # Scenario: A selected ticket page already contains an unrelated entry when a confirmed body is added.
+    # Purpose: Append a separate entry, preserve the existing entry, and index only the new entry locator.
+    It 'UnitT83_appends_to_an_existing_shared_page_without_overwriting_other_entries' {
+        $scenario = @($script:AgentInputs.scenarios | Where-Object id -EQ 'AC30')[0]
+        $calls = @($scenario.fixedToolResponses)
+        @($calls | Where-Object tool -EQ 'records.create').Count | Should -Be 0
+        $append = @($calls | Where-Object tool -EQ 'records.update')[0]
+        $appendIndex = [array]::IndexOf($calls, $append)
+        $sharedPageLocator = 'record://workspace/ticket-memory/SYP-507'
+        $pageReads = @(
+            for ($callIndex = 0; $callIndex -lt $calls.Count; $callIndex++) {
+                $call = $calls[$callIndex]
+                if ((Get-OptionalProperty -InputObject $call -Name 'tool') -EQ 'records.read' -and
+                    (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $call -Name 'arguments') -Name 'locator') -EQ $sharedPageLocator) {
+                    [pscustomobject]@{ Index = $callIndex; Call = $call }
+                }
+            }
+        )
+        $pageReads.Count | Should -BeGreaterOrEqual 2
+        $preWritePageReads = @($pageReads | Where-Object Index -LT $appendIndex)
+        $postWritePageReads = @($pageReads | Where-Object Index -GT $appendIndex)
+        $preWritePageReads.Count | Should -BeGreaterThan 0
+        $postWritePageReads.Count | Should -BeGreaterThan 0
+        $pageBefore = $preWritePageReads[-1]
+        $pageAfter = $postWritePageReads[0]
+        $pageAfter.Index | Should -BeGreaterThan $appendIndex
+        $beforeEntries = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $pageBefore.Call -Name 'response') -Name 'entries'
+        $afterEntries = Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $pageAfter.Call -Name 'response') -Name 'entries'
+        $unrelatedEntryLocator = 'record://workspace/ticket-memory/SYP-507#unrelated'
+        $otherBefore = @($beforeEntries | Where-Object {
+            (Get-OptionalProperty -InputObject $_ -Name 'locator') -EQ $unrelatedEntryLocator
+        })[0]
+        $appendArguments = Get-OptionalProperty -InputObject $append -Name 'arguments'
+        $appendResponse = Get-OptionalProperty -InputObject $append -Name 'response'
+        (Get-OptionalProperty -InputObject $appendArguments -Name 'operation') | Should -BeExactly 'append-entry'
+        (Get-OptionalProperty -InputObject $appendArguments -Name 'locator') | Should -BeExactly $sharedPageLocator
+        $newEntryLocator = Get-OptionalProperty -InputObject $appendResponse -Name 'locator'
+        $newEntryLocator | Should -BeExactly 'record://workspace/ticket-memory/SYP-507#release-language'
+        $entryRead = @($calls | Where-Object {
+            (Get-OptionalProperty -InputObject $_ -Name 'tool') -EQ 'records.read' -and
+            (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $_ -Name 'arguments') -Name 'locator') -EQ $newEntryLocator
+        })[0]
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $entryRead -Name 'response') -Name 'locator') | Should -BeExactly $newEntryLocator
+        $otherLocator = Get-OptionalProperty -InputObject $otherBefore -Name 'locator'
+        $otherAfter = @($afterEntries | Where-Object {
+            (Get-OptionalProperty -InputObject $_ -Name 'locator') -EQ $otherLocator
+        })[0]
+        $otherBefore | Should -Not -BeNullOrEmpty
+        $otherAfter | Should -Not -BeNullOrEmpty
+        $otherAfter | ConvertTo-Json -Compress | Should -BeExactly ($otherBefore | ConvertTo-Json -Compress)
+        @($beforeEntries | Where-Object {
+            (Get-OptionalProperty -InputObject $_ -Name 'locator') -EQ $newEntryLocator
+        }).Count | Should -Be 0
+        @($afterEntries | Where-Object {
+            (Get-OptionalProperty -InputObject $_ -Name 'locator') -EQ $newEntryLocator
+        }).Count | Should -Be 1
+        $index = @($calls | Where-Object tool -EQ 'index.upsert')[0]
+        $indexArguments = Get-OptionalProperty -InputObject $index -Name 'arguments'
+        $configuredIndex = Get-OptionalProperty -InputObject $scenario -Name 'configuredIndex'
+        (Get-OptionalProperty -InputObject $indexArguments -Name 'index') | Should -BeExactly (Get-OptionalProperty -InputObject $configuredIndex -Name 'locator')
+        (Get-OptionalProperty -InputObject $indexArguments -Name 'Locator') | Should -BeExactly $newEntryLocator
+        (Get-OptionalProperty -InputObject $indexArguments -Name 'Target') | Should -BeExactly $newEntryLocator
+        $indexReadback = @($calls | Where-Object tool -EQ 'index.read')[0]
+        $indexReadbackArguments = Get-OptionalProperty -InputObject $indexReadback -Name 'arguments'
+        (Get-OptionalProperty -InputObject $indexReadbackArguments -Name 'index') | Should -BeExactly (Get-OptionalProperty -InputObject $configuredIndex -Name 'locator')
+        foreach ($field in @('Topic', 'Scope', 'Memory Key', 'Locator', 'Target', 'Status')) {
+            (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $indexReadback -Name 'response') -Name $field) | Should -BeExactly (Get-OptionalProperty -InputObject $indexArguments -Name $field)
+        }
+        $script:Contract.writeRules.existingPageWriteMode | Should -BeExactly 'append-separate-entry-preserve-others'
     }
 }

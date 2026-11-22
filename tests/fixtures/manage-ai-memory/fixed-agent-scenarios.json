@@ -13,9 +13,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "release-language"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "release-language" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -206,9 +206,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "document-summary"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "document-summary" },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
         { "id": "records-main", "purpose": "records", "connected": true }
@@ -264,9 +264,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "notes-length"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "notes-length" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -340,13 +340,7 @@
       "scenario": "Scenario: one proposition explicitly confirmed",
       "purpose": "Purpose: Verify AC07 without live memory or file mutation.",
       "userInput": "I confirm only that the release notes are in Japanese under Memory Key project:example.project:release-language and Scope example.project. Keep the separate inference that all documentation is Japanese unconfirmed.",
-      "writeRule": {
-        "source": "trusted-adopter-configuration",
-        "granularity": "per-topic",
-        "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "release-language"
-      },
+      "legacyPlacement": { "source": "configured-v4-memory-area" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -616,9 +610,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "release-language"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "release-language" },
       "connectedTargets": [
         { "id": "records-main", "purpose": "records", "connected": true }
       ],
@@ -673,9 +667,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "release-language"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "release-language" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -825,9 +819,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {topic}",
-        "topic": "decision"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "decision" },
       "connectedTargets": [
         { "id": "files-main", "purpose": "files", "connected": true },
         { "id": "records-main", "purpose": "records", "connected": true }
@@ -1104,9 +1098,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-ticket",
         "parentLocator": "parent-memory-pages",
-        "pageNaming": "Memory - {ticketKey}",
-        "ticketKey": "SYP-507"
+        "pageNaming": "Memory - {ticketKey}"
       },
+      "memoryContext": { "ticketKey": "SYP-507" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -1219,9 +1213,9 @@
         "source": "trusted-adopter-configuration",
         "granularity": "per-topic",
         "parentLocator": "handoff://active",
-        "pageNaming": "Memory - {topic}",
-        "topic": "decision"
+        "pageNaming": "Memory - {topic}"
       },
+      "memoryContext": { "topic": "decision" },
       "connectedTargets": [
         {
           "id": "records-main",
@@ -1283,6 +1277,645 @@
           "recordsCreateCount": 0,
           "recordsUpdateCount": 0
         }
+      }
+    },
+    {
+      "id": "AC23",
+      "scenario": "Scenario: v4 adopter writeRule overrides the legacy memory area for a new body",
+      "purpose": "Purpose: Create and index the new body under the v5 parent without touching legacy placement.",
+      "userInput": "Remember the SYP-507 precedence decision.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace" },
+        "index": { "locator": "record://workspace/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/legacy-memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": {
+          "granularity": "per-ticket",
+          "parentLocator": "record://workspace/ticket-memory",
+          "pageNaming": "{ticketKey} - {title}"
+        }
+      },
+      "memoryContext": { "ticketKey": "SYP-507", "title": "Memory placement precedence", "titleSource": "tracker" },
+      "connectedTargets": [
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": { "key": "project:example.project:placement-precedence", "scope": "example.project" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.search",
+          "arguments": { "parent": "record://workspace/ticket-memory", "title": "SYP-507 - Memory placement precedence", "match": "exact" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.create",
+          "arguments": {
+            "parent": "record://workspace/ticket-memory",
+            "title": "SYP-507 - Memory placement precedence",
+            "key": "project:example.project:placement-precedence",
+            "scope": "example.project",
+            "content": "A valid v5 write rule overrides legacy placement for new bodies.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": { "locator": "record://workspace/ticket-memory/SYP-507" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507" },
+          "response": {
+            "key": "project:example.project:placement-precedence",
+            "scope": "example.project",
+            "content": "A valid v5 write rule overrides legacy placement for new bodies.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "record://workspace/index",
+            "Topic": "placement-precedence",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:placement-precedence",
+            "Locator": "record://workspace/ticket-memory/SYP-507",
+            "Target": "record://workspace/ticket-memory/SYP-507",
+            "Status": "Active"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "record://workspace/index", "key": "project:example.project:placement-precedence", "scope": "example.project" },
+          "response": {
+            "Topic": "placement-precedence",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:placement-precedence",
+            "Locator": "record://workspace/ticket-memory/SYP-507",
+            "Target": "record://workspace/ticket-memory/SYP-507",
+            "Status": "Active"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "writeCount": 2,
+          "legacyMemoryWriteCount": 0,
+          "parentLocator": "record://workspace/ticket-memory",
+          "renderedPageName": "SYP-507 - Memory placement precedence",
+          "indexLocator": "record://workspace/ticket-memory/SYP-507"
+        }
+      }
+    },
+    {
+      "id": "AC24",
+      "scenario": "Scenario: v4 adopter has an incomplete writeRule and a legacy memory area",
+      "purpose": "Purpose: Stop and ask without falling back to the legacy memory area.",
+      "userInput": "Remember a new decision using the adopter configuration.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace" },
+        "index": { "locator": "record://workspace/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/legacy-memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": { "granularity": "per-topic", "pageNaming": "{topic}" }
+      },
+      "connectedTargets": [
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "adopter.readBinding",
+          "arguments": { "purpose": "memory-write-placement" },
+          "response": { "writeRuleStatus": "incomplete", "missingFields": ["parentLocator"] }
+        }
+      ],
+      "oracle": {
+        "expected": { "writeCount": 0, "legacyMemoryWriteCount": 0, "askUser": true }
+      }
+    },
+    {
+      "id": "AC25",
+      "scenario": "Scenario: per-ticket rule uses a per-topic fallback when the memory has no ticket key",
+      "purpose": "Purpose: Create and index the topic page under the fallback parent.",
+      "userInput": "Remember a release-language topic with no work-item key.",
+      "configuredIndex": { "locator": "memory-index" },
+      "writeRule": {
+        "source": "trusted-adopter-configuration",
+        "granularity": "per-ticket",
+        "parentLocator": "parent-ticket-memory",
+        "pageNaming": "{ticketKey} - {title}",
+        "fallback": { "granularity": "per-topic", "parentLocator": "parent-topic-memory", "pageNaming": "{topic}" }
+      },
+      "memoryContext": { "topic": "release-language" },
+      "connectedTargets": [
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": { "key": "project:example.project:release-language", "scope": "example.project" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.search",
+          "arguments": { "parent": "parent-topic-memory", "title": "release-language", "match": "exact" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.create",
+          "arguments": {
+            "parent": "parent-topic-memory",
+            "title": "release-language",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes use Traditional Chinese.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": { "locator": "record://topic/release-language" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://topic/release-language" },
+          "response": {
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "Release notes use Traditional Chinese.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "memory-index",
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language",
+            "Locator": "record://topic/release-language",
+            "Target": "record://topic/release-language",
+            "Status": "Active"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "memory-index", "key": "project:example.project:release-language", "scope": "example.project" },
+          "response": {
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language",
+            "Locator": "record://topic/release-language",
+            "Target": "record://topic/release-language",
+            "Status": "Active"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": { "parentLocator": "parent-topic-memory", "renderedPageName": "release-language", "readback": true, "indexLocator": "record://topic/release-language" }
+      }
+    },
+    {
+      "id": "AC26",
+      "scenario": "Scenario: writeRule parent is outside the configured adopter boundary",
+      "purpose": "Purpose: Stop and ask before any memory or index write.",
+      "userInput": "Remember a decision under the configured write-rule parent.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace/allowed" },
+        "index": { "locator": "record://workspace/allowed/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/allowed/memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/allowed/inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": { "granularity": "per-topic", "parentLocator": "record://other-workspace/memory", "pageNaming": "{topic}" }
+      },
+      "connectedTargets": [
+        { "id": "records-main", "purpose": "records", "connected": true }
+      ],
+      "fixedToolResponses": [
+        {
+          "tool": "adopter.readBinding",
+          "arguments": { "purpose": "memory-write-placement" },
+          "response": { "boundaryMatch": false, "configuredParent": "record://other-workspace/memory" }
+        }
+      ],
+      "oracle": {
+        "expected": { "writeCount": 0, "askUser": true, "recordsCreateCount": 0, "recordsUpdateCount": 0 }
+      }
+    },
+    {
+      "id": "AC27",
+      "scenario": "Scenario: inferred ticket memory uses the v5 ticket page instead of the legacy inbox",
+      "purpose": "Purpose: Append a separate Pending entry to the selected ticket page, verify it, and index it as Pending.",
+      "userInput": "Capture the unconfirmed inference for SYP-507 as a candidate.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace" },
+        "index": { "locator": "record://workspace/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/legacy-memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/legacy-inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": {
+          "granularity": "per-ticket",
+          "parentLocator": "record://workspace/ticket-memory",
+          "pageNaming": "{ticketKey} - {title}",
+          "fallback": { "granularity": "per-topic", "parentLocator": "record://workspace/topic-memory", "pageNaming": "{topic}" }
+        }
+      },
+      "memoryContext": { "ticketKey": "SYP-507", "title": "Candidate placement", "titleSource": "tracker", "topic": "candidate-placement" },
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": { "key": "project:example.project:candidate-placement", "scope": "example.project" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.search",
+          "arguments": { "parent": "record://workspace/ticket-memory", "title": "SYP-507 - Candidate placement", "match": "exact" },
+          "response": { "matches": [{ "locator": "record://workspace/ticket-memory/SYP-507" }] }
+        },
+        {
+          "tool": "records.update",
+          "arguments": {
+            "locator": "record://workspace/ticket-memory/SYP-507",
+            "operation": "append-entry",
+            "key": "project:example.project:candidate-placement",
+            "scope": "example.project",
+            "content": "The project may place inferred candidates with their ticket memories.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          },
+          "response": { "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "key": "project:example.project:candidate-placement",
+            "scope": "example.project",
+            "content": "The project may place inferred candidates with their ticket memories.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "record://workspace/index",
+            "Topic": "candidate-placement",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:candidate-placement",
+            "Locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Target": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Status": "Pending"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "record://workspace/index", "key": "project:example.project:candidate-placement", "scope": "example.project" },
+          "response": {
+            "Topic": "candidate-placement",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:candidate-placement",
+            "Locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Target": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Status": "Pending"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": { "candidatePage": "record://workspace/ticket-memory/SYP-507", "status": "Pending", "confidence": "Inferred", "legacyInboxCallCount": 0 }
+      }
+    },
+    {
+      "id": "AC28",
+      "scenario": "Scenario: inferred memory without a ticket key uses the v5 fallback topic page",
+      "purpose": "Purpose: Append and verify the Pending entry on the fallback topic page without using the legacy inbox.",
+      "userInput": "Capture the unconfirmed release-language inference with no work-item key.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace" },
+        "index": { "locator": "record://workspace/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/legacy-memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/legacy-inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": {
+          "granularity": "per-ticket",
+          "parentLocator": "record://workspace/ticket-memory",
+          "pageNaming": "{ticketKey} - {title}",
+          "fallback": { "granularity": "per-topic", "parentLocator": "record://workspace/topic-memory", "pageNaming": "{topic}" }
+        }
+      },
+      "memoryContext": { "topic": "release-language" },
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": { "key": "project:example.project:release-language-candidate", "scope": "example.project" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.search",
+          "arguments": { "parent": "record://workspace/topic-memory", "title": "release-language", "match": "exact" },
+          "response": { "matches": [{ "locator": "record://workspace/topic-memory/release-language" }] }
+        },
+        {
+          "tool": "records.update",
+          "arguments": {
+            "locator": "record://workspace/topic-memory/release-language",
+            "operation": "append-entry",
+            "key": "project:example.project:release-language-candidate",
+            "scope": "example.project",
+            "content": "Release notes may use Traditional Chinese.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          },
+          "response": { "locator": "record://workspace/topic-memory/release-language#candidate" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/topic-memory/release-language#candidate" },
+          "response": {
+            "locator": "record://workspace/topic-memory/release-language#candidate",
+            "key": "project:example.project:release-language-candidate",
+            "scope": "example.project",
+            "content": "Release notes may use Traditional Chinese.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "record://workspace/index",
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language-candidate",
+            "Locator": "record://workspace/topic-memory/release-language#candidate",
+            "Target": "record://workspace/topic-memory/release-language#candidate",
+            "Status": "Pending"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "record://workspace/index", "key": "project:example.project:release-language-candidate", "scope": "example.project" },
+          "response": {
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language-candidate",
+            "Locator": "record://workspace/topic-memory/release-language#candidate",
+            "Target": "record://workspace/topic-memory/release-language#candidate",
+            "Status": "Pending"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": { "candidatePage": "record://workspace/topic-memory/release-language", "status": "Pending", "confidence": "Inferred", "legacyInboxCallCount": 0 }
+      }
+    },
+    {
+      "id": "AC29",
+      "scenario": "Scenario: user confirms the Pending candidate on its v5-selected ticket page",
+      "purpose": "Purpose: Promote the same verified entry in place, read it back, and only then update its index status.",
+      "userInput": "Confirm the candidate at the supplied verified locator.",
+      "adopterConfiguration": {
+        "schemaVersion": 1,
+        "mode": "pages",
+        "scope": "example.project",
+        "boundary": { "locator": "record://workspace" },
+        "index": { "locator": "record://workspace/index", "section": "Index", "fieldMapping": { "Topic": "Topic", "Scope": "Scope", "Memory Key": "Memory Key", "Locator": "Locator", "Target": "Target", "Status": "Status" } },
+        "memory": { "locator": "record://workspace/legacy-memory", "section": "Memory", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "inbox": { "locator": "record://workspace/legacy-inbox", "section": "Inbox", "fieldMapping": { "Memory Key": "Memory Key", "Scope": "Scope", "Status": "Status", "Confidence": "Confidence", "Source": "Source", "Content": "Content" } },
+        "writeRule": {
+          "granularity": "per-ticket",
+          "parentLocator": "record://workspace/ticket-memory",
+          "pageNaming": "{ticketKey} - {title}",
+          "fallback": { "granularity": "per-topic", "parentLocator": "record://workspace/topic-memory", "pageNaming": "{topic}" }
+        }
+      },
+      "trustedCandidateContext": {
+        "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+        "memoryKey": "project:example.project:candidate-placement",
+        "scope": "example.project"
+      },
+      "fixedToolResponses": [
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "key": "project:example.project:candidate-placement",
+            "scope": "example.project",
+            "content": "The project may place inferred candidates with their ticket memories.",
+            "source": "assistant-inference",
+            "status": "Pending",
+            "confidence": "Inferred"
+          }
+        },
+        {
+          "tool": "records.update",
+          "arguments": {
+            "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "source": "explicit-user-confirmation",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "key": "project:example.project:candidate-placement",
+            "scope": "example.project",
+            "content": "The project may place inferred candidates with their ticket memories.",
+            "source": "explicit-user-confirmation",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "record://workspace/index",
+            "Topic": "candidate-placement",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:candidate-placement",
+            "Locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Target": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Status": "Active"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "record://workspace/index", "key": "project:example.project:candidate-placement", "scope": "example.project" },
+          "response": {
+            "Topic": "candidate-placement",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:candidate-placement",
+            "Locator": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Target": "record://workspace/ticket-memory/SYP-507#candidate-placement",
+            "Status": "Active"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": {
+          "sameEntryPromoted": true,
+          "recordsCreateCount": 0,
+          "legacyLocatorCallCount": 0,
+          "promotionReadback": { "status": "Active", "confidence": "Confirmed", "source": "explicit-user-confirmation" },
+          "indexUpdatedAfterBodyReadback": true
+        }
+      }
+    },
+    {
+      "id": "AC30",
+      "scenario": "Scenario: confirmed memory is added to an existing ticket page that contains another entry",
+      "purpose": "Purpose: Append a separate entry, preserve the unrelated entry unchanged, and index the new entry locator.",
+      "userInput": "Remember that SYP-507 uses Traditional Chinese release notes.",
+      "configuredIndex": { "locator": "memory-index" },
+      "writeRule": {
+        "granularity": "per-ticket",
+        "parentLocator": "record://workspace/ticket-memory",
+        "pageNaming": "{ticketKey}"
+      },
+      "memoryContext": { "ticketKey": "SYP-507" },
+      "fixedToolResponses": [
+        {
+          "tool": "records.search",
+          "arguments": { "key": "project:example.project:release-language", "scope": "example.project" },
+          "response": { "matches": [] }
+        },
+        {
+          "tool": "records.search",
+          "arguments": { "parent": "record://workspace/ticket-memory", "title": "SYP-507", "match": "exact" },
+          "response": { "matches": [{ "locator": "record://workspace/ticket-memory/SYP-507" }] }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507",
+            "entries": [
+              {
+                "locator": "record://workspace/ticket-memory/SYP-507#unrelated",
+                "key": "project:example.project:unrelated",
+                "scope": "example.project",
+                "content": "Preserve this unrelated entry exactly.",
+                "source": "explicit-user-request",
+                "status": "Active",
+                "confidence": "Confirmed"
+              }
+            ]
+          }
+        },
+        {
+          "tool": "records.update",
+          "arguments": {
+            "locator": "record://workspace/ticket-memory/SYP-507",
+            "operation": "append-entry",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "SYP-507 uses Traditional Chinese release notes.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          },
+          "response": { "locator": "record://workspace/ticket-memory/SYP-507#release-language" }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507#release-language" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507#release-language",
+            "key": "project:example.project:release-language",
+            "scope": "example.project",
+            "content": "SYP-507 uses Traditional Chinese release notes.",
+            "source": "explicit-user-request",
+            "status": "Active",
+            "confidence": "Confirmed"
+          }
+        },
+        {
+          "tool": "records.read",
+          "arguments": { "locator": "record://workspace/ticket-memory/SYP-507" },
+          "response": {
+            "locator": "record://workspace/ticket-memory/SYP-507",
+            "entries": [
+              {
+                "locator": "record://workspace/ticket-memory/SYP-507#unrelated",
+                "key": "project:example.project:unrelated",
+                "scope": "example.project",
+                "content": "Preserve this unrelated entry exactly.",
+                "source": "explicit-user-request",
+                "status": "Active",
+                "confidence": "Confirmed"
+              },
+              {
+                "locator": "record://workspace/ticket-memory/SYP-507#release-language",
+                "key": "project:example.project:release-language",
+                "scope": "example.project",
+                "content": "SYP-507 uses Traditional Chinese release notes.",
+                "source": "explicit-user-request",
+                "status": "Active",
+                "confidence": "Confirmed"
+              }
+            ]
+          }
+        },
+        {
+          "tool": "index.upsert",
+          "arguments": {
+            "index": "memory-index",
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language",
+            "Locator": "record://workspace/ticket-memory/SYP-507#release-language",
+            "Target": "record://workspace/ticket-memory/SYP-507#release-language",
+            "Status": "Active"
+          },
+          "response": { "ok": true }
+        },
+        {
+          "tool": "index.read",
+          "arguments": { "index": "memory-index", "key": "project:example.project:release-language", "scope": "example.project" },
+          "response": {
+            "Topic": "release-language",
+            "Scope": "example.project",
+            "Memory Key": "project:example.project:release-language",
+            "Locator": "record://workspace/ticket-memory/SYP-507#release-language",
+            "Target": "record://workspace/ticket-memory/SYP-507#release-language",
+            "Status": "Active"
+          }
+        }
+      ],
+      "oracle": {
+        "expected": { "writeMode": "append-entry", "otherEntryPreserved": true, "indexedEntryLocator": "record://workspace/ticket-memory/SYP-507#release-language" }
       }
     }
   ]
